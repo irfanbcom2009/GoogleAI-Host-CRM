@@ -1,0 +1,418 @@
+{
+  "entities": {
+    "Client": {
+      "title": "Client",
+      "description": "A publishing client of Host A Journal",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "points": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "status"]
+    },
+    "Domain": {
+      "title": "Domain",
+      "description": "A domain managed for a client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "domainName": { "type": "string" },
+        "registrar": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "expiring_soon", "expired"] },
+        "expirationDate": { "type": "string", "format": "date-time" },
+        "registrationDate": { "type": "string", "format": "date-time" },
+        "costPrice": { "type": "number" },
+        "salePrice": { "type": "number" },
+        "eppCode": { "type": "string" },
+        "hostingCredentials": { "type": "object" },
+        "registrarHistory": { "type": "array", "items": { "type": "object" } },
+        "hostingHistory": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["clientId", "domainName", "status", "expirationDate"]
+    },
+    "Journal": {
+      "title": "Journal",
+      "description": "A journal published for a client under a publisher",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "publisherId": { "type": "string" },
+        "title": { "type": "string" },
+        "url": { "type": "string" },
+        "ojsVersion": { "type": "string" },
+        "sslStatus": { "type": "string", "enum": ["Active", "Expired", "Pending", "None"] },
+        "issnPrint": { "type": "string" },
+        "issnOnline": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["complete", "pending_issn"] },
+        "chiefEditorName": { "type": "string" },
+        "contactPersonName": { "type": "string" },
+        "transferHistory": { "type": "array", "items": { "type": "object" } },
+        "category": { "type": "string" },
+        "subCategory": { "type": "string" },
+        "scope": { "type": "string" },
+        "apcAmount": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "salePrice": { "type": "number" },
+        "editorEmail": { "type": "string" },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "email": { "type": "string" },
+            "password": { "type": "string" },
+            "loginLink": { "type": "string" }
+          }
+        },
+        "assignedEmployeeId": { "type": "string" },
+        "assignedEmployeeName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "title", "status"]
+    },
+    "ISSNRequest": {
+      "title": "ISSN Request",
+      "description": "An ISSN request for a journal",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "journalId": { "type": "string" },
+        "type": { "type": "string", "enum": ["Print", "Online"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "issn": { "type": "string" },
+        "invoiceNumber": { "type": "string" }
+      },
+      "required": ["clientId", "journalId", "type", "status"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A task assigned to an employee for a client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "serviceType": { "type": "string", "enum": ["Hosting", "DOI", "ISSN", "OJS", "Editorial", "Indexing", "Plagiarism"] },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "assignedTo": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "review", "completed", "overdue"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "points": { "type": "number" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "isClientVisible": { "type": "boolean" }
+      },
+      "required": ["clientId", "serviceType", "title", "assignedTo", "status", "priority", "points", "dueDate"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A CRM user",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["Admin", "Employee", "Client"] },
+        "points": { "type": "number" }
+      },
+      "required": ["name", "email", "role"]
+    },
+    "Publisher": {
+      "title": "Publisher",
+      "description": "A journal publisher under a client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "secpRegistration": { "type": "string" },
+        "ntn": { "type": "string" },
+        "documents": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "name", "ownerName", "secpRegistration", "ntn"]
+    },
+    "HECEntry": {
+      "title": "HEC Entry",
+      "description": "HEC approval details for a journal",
+      "type": "object",
+      "properties": {
+        "journalId": { "type": "string" },
+        "year": { "type": "number" },
+        "frequency": { "type": "string" },
+        "loginCredentials": { "type": "object" },
+        "appNo": { "type": "string" },
+        "psid": { "type": "string" },
+        "ownerInfo": { "type": "string" },
+        "discipline": { "type": "string" },
+        "subjectArea": { "type": "string" },
+        "subCategory": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "expiring", "missing"] },
+        "expirationDate": { "type": "string", "format": "date-time" }
+      },
+      "required": ["journalId", "year", "status", "expirationDate"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "An invoice for a client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "items": { 
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": { "type": "string" },
+              "quantity": { "type": "number" },
+              "unitPrice": { "type": "number" },
+              "total": { "type": "number" }
+            }
+          }
+        },
+        "subtotal": { "type": "number" },
+        "tax": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["paid", "unpaid", "overdue"] },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "items", "total", "status", "dueDate"]
+    },
+    "Folder": {
+      "title": "Folder",
+      "description": "A folder for organizing client files",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "parentId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "clientId"]
+    },
+    "FileRecord": {
+      "title": "File Record",
+      "description": "A record of a file uploaded for a client",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "url": { "type": "string" },
+        "type": { "type": "string" },
+        "size": { "type": "number" },
+        "folderId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "url", "clientId", "uploadedBy"]
+    },
+    "FileRequest": {
+      "title": "File Request",
+      "description": "A request for a file from a client or employee",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "completed", "cancelled"] },
+        "clientId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "assignedTo": { "type": "string" },
+        "assignedRole": { "type": "string", "enum": ["Client", "Employee"] },
+        "requestedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "clientId", "assignedTo", "assignedRole", "requestedBy"]
+    },
+    "TrashItem": {
+      "title": "Trash Item",
+      "description": "A soft-deleted item",
+      "type": "object",
+      "properties": {
+        "originalCollection": { "type": "string" },
+        "data": { "type": "object" },
+        "deletedAt": { "type": "string", "format": "date-time" },
+        "deletedBy": { "type": "string" }
+      },
+      "required": ["originalCollection", "data", "deletedAt", "deletedBy"]
+    },
+    "IndexingAgency": {
+      "title": "Indexing Agency",
+      "description": "A global indexing agency for journals",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "searchLink": { "type": "string" },
+        "submissionLink": { "type": "string" },
+        "country": { "type": "string" },
+        "responseTime": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "logoUrl", "searchLink", "submissionLink", "country"]
+    },
+    "JournalIndexing": {
+      "title": "Journal Indexing",
+      "description": "The indexing status of a journal in an agency",
+      "type": "object",
+      "properties": {
+        "journalId": { "type": "string" },
+        "agencyId": { "type": "string" },
+        "status": { "type": "string", "enum": ["not_indexed", "applied", "pending", "indexed"] },
+        "journalPageUrl": { "type": "string" },
+        "appliedAt": { "type": "string", "format": "date-time" },
+        "indexedAt": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" }
+      },
+      "required": ["journalId", "agencyId", "status"]
+    },
+    "DOI": {
+      "title": "DOI",
+      "description": "A Digital Object Identifier record for a journal article",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "journalId": { "type": "string" },
+        "url": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "activated"] },
+        "activationDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "journalId", "url", "status"]
+    },
+    "DOIPayment": {
+      "title": "DOI Payment",
+      "description": "A payment record for DOI services",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "amount": { "type": "number" },
+        "screenshotUrl": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "date", "amount"]
+    },
+    "GoogleScholarHistory": {
+      "title": "Google Scholar History",
+      "description": "History of Google Scholar indexing for a journal",
+      "type": "object",
+      "properties": {
+        "journalId": { "type": "string" },
+        "status": { "type": "string", "enum": ["Indexed", "Not Indexed"] },
+        "date": { "type": "string", "format": "date-time" },
+        "lastAction": { "type": "string" },
+        "resultsAdded": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["journalId", "status", "date"]
+    },
+    "DomainTransferRequest": {
+      "title": "Domain Transfer Request",
+      "description": "A request to transfer a domain in or out",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "domainName": { "type": "string" },
+        "type": { "type": "string", "enum": ["Transfer In", "Transfer Out"] },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected", "Completed"] },
+        "eppCode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "domainName", "type", "status"]
+    },
+    "ArticleSubmission": {
+      "title": "Article Submission",
+      "description": "A record of an article submission for a journal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "journalId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "title": { "type": "string" },
+        "authorName": { "type": "string" },
+        "stage": { "type": "string", "enum": ["submission", "review", "copyediting", "publication"] },
+        "apcStatus": { "type": "string", "enum": ["pending", "received"] },
+        "apcAmount": { "type": "number" },
+        "remindersSent": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "journalId", "clientId", "title", "authorName", "stage", "apcStatus"]
+    },
+    "Policy": {
+      "title": "Policy",
+      "description": "A policy or FAQ entry for the CRM",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "category": { "type": "string", "enum": ["General", "Submission", "Financial", "Technical"] },
+        "lastUpdated": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["title", "content", "category", "lastUpdated", "updatedBy"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "A daily expense record for the business",
+      "type": "object",
+      "properties": {
+        "head": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "PKR"] },
+        "taxAmount": { "type": "number" },
+        "attachmentUrl": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["head", "date", "amount", "currency", "taxAmount", "updatedBy"]
+    },
+    "ActivityLog": {
+      "title": "Activity Log",
+      "description": "A log of user actions in the CRM",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/clients": { "schema": "Client", "description": "Collection of clients" },
+    "/domains": { "schema": "Domain", "description": "Collection of domains" },
+    "/journals": { "schema": "Journal", "description": "Collection of journals" },
+    "/issn_requests": { "schema": "ISSNRequest", "description": "Collection of ISSN requests" },
+    "/tasks": { "schema": "Task", "description": "Collection of tasks" },
+    "/users": { "schema": "User", "description": "Collection of users" },
+    "/publishers": { "schema": "Publisher", "description": "Collection of publishers" },
+    "/hec_entries": { "schema": "HECEntry", "description": "Collection of HEC entries" },
+    "/invoices": { "schema": "Invoice", "description": "Collection of invoices" },
+    "/trash": { "schema": "TrashItem", "description": "Collection of soft-deleted items" },
+    "/indexing_agencies": { "schema": "IndexingAgency", "description": "Global list of indexing agencies" },
+    "/journal_indexing": { "schema": "JournalIndexing", "description": "Journal-specific indexing status" },
+    "/doi_records": { "schema": "DOI", "description": "Collection of DOI records" },
+    "/doi_payments": { "schema": "DOIPayment", "description": "Collection of DOI payments" },
+    "/google_scholar_history": { "schema": "GoogleScholarHistory", "description": "Collection of Google Scholar history entries" },
+    "/google_scholar_history": { "schema": "GoogleScholarHistory", "description": "Collection of Google Scholar history entries" },
+    "/domain_transfer_requests": { "schema": "DomainTransferRequest", "description": "Collection of domain transfer requests" },
+    "/article_submissions": { "schema": "ArticleSubmission", "description": "Collection of article submissions for journals" },
+    "/policies": { "schema": "Policy", "description": "Collection of FAQ and policies" },
+    "/expenses": { "schema": "Expense", "description": "Collection of daily expenses" },
+    "/activity_logs": { "schema": "ActivityLog", "description": "Collection of user activity logs" },
+    "/journal_activities": { "schema": "ActivityLog", "description": "Collection of journal-specific activity logs" }
+  }
+}
