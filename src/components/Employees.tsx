@@ -30,6 +30,7 @@ import { Modal } from './Modal';
 import { EmployeeDetail } from './EmployeeDetail';
 import { EmployeeEditForm } from './EmployeeEditForm';
 import { ColumnSelector } from './ColumnSelector';
+import { BulkEmployeeAddModal } from './BulkEmployeeAddModal';
 
 interface EmployeesProps {
   currentUser: UserType;
@@ -44,6 +45,8 @@ const AVAILABLE_COLUMNS = [
   { id: 'modeOfWorking', label: 'Mode' },
   { id: 'department', label: 'Department' },
   { id: 'assignments', label: 'Assignments' },
+  { id: 'assignedTasks', label: 'Assigned Tasks' },
+  { id: 'latestCompletedTask', label: 'Latest Completed Task' },
   { id: 'officialMail', label: 'Official Mail' },
   { id: 'personalEmail', label: 'Personal Email' },
   { id: 'cnic', label: 'CNIC' },
@@ -64,14 +67,39 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
   const [employees, setEmployees] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [employeeToEdit, setEmployeeToEdit] = useState<CRMUser | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<CRMUser | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['employees'] || ['employee', 'role', 'performance', 'points']
+    currentUser.columnPreferences?.['employees'] || ['employee', 'role', 'performance', 'points', 'assignedTasks']
   );
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+  const [allTasks, setAllTasks] = useState<any[]>([]);
+
+  useEffect(() => {
+    const q = query(collection(db, 'tasks'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setAllTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const getEmployeeTaskStats = (employeeId: string) => {
+    const employeeTasks = allTasks.filter(t => t.assignedTo === employeeId);
+    const assignedCount = employeeTasks.filter(t => t.status !== 'completed').length;
+    const completedTasks = employeeTasks
+      .filter(t => t.status === 'completed')
+      .sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());
+    
+    return {
+      assignedCount,
+      latestCompleted: completedTasks[0]?.title || 'None'
+    };
+  };
 
   // Form state
   const [newEmployee, setNewEmployee] = useState({
@@ -176,6 +204,9 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setIsSaving(true);
+    setError(null);
     try {
       await addDoc(collection(db, 'users'), {
         ...newEmployee,
@@ -183,25 +214,14 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       });
       setIsModalOpen(false);
       resetForm();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'users');
-    }
-  };
-
-  const handleEditEmployee = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!employeeToEdit) return;
-    try {
-      const empRef = doc(db, 'users', employeeToEdit.id);
-      await updateDoc(empRef, {
-        ...newEmployee,
-        updatedAt: serverTimestamp()
-      });
-      setIsEditModalOpen(false);
-      setEmployeeToEdit(null);
-      resetForm();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    } catch (err: any) {
+      console.error("Error adding employee:", err);
+      setError(err.message || "Failed to add employee. Please try again.");
+      try {
+        handleFirestoreError(err, OperationType.CREATE, 'users');
+      } catch (e) {}
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -311,6 +331,12 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 500 * 1024) {
+      setError("File is too large. Please upload files smaller than 500KB.");
+      return;
+    }
+
+    setError(null);
     // In a real app, we would upload to Firebase Storage.
     // Here we'll use a FileReader to get a base64 string for demo purposes,
     // but we should be mindful of the 1MB Firestore document limit.
@@ -355,6 +381,13 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           <p className="text-slate-500 mt-1">Monitor employee performance, points, and assigned tasks.</p>
         </div>
         <div className="flex gap-3">
+          <button 
+            onClick={() => setIsBulkModalOpen(true)}
+            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
+          >
+            <Upload size={20} className="text-indigo-600" />
+            Bulk Add
+          </button>
           <ColumnSelector 
             availableColumns={AVAILABLE_COLUMNS}
             selectedColumns={selectedColumns}
@@ -374,7 +407,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
             <Users size={24} />
@@ -386,6 +419,15 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+            <ShieldCheck size={24} />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active Staff</p>
+            <p className="text-2xl font-bold text-slate-900">{employees.filter(e => !e.endingDate).length}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
             <TrendingUp size={24} />
           </div>
           <div>
@@ -445,6 +487,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                   {selectedColumns.includes('modeOfWorking') && <th className="px-6 py-4">Mode</th>}
                   {selectedColumns.includes('department') && <th className="px-6 py-4">Department</th>}
                   {selectedColumns.includes('assignments') && <th className="px-6 py-4">Assignments</th>}
+                  {selectedColumns.includes('assignedTasks') && <th className="px-6 py-4">Assigned Tasks</th>}
+                  {selectedColumns.includes('latestCompletedTask') && <th className="px-6 py-4">Latest Completed</th>}
                   {selectedColumns.includes('officialMail') && <th className="px-6 py-4">Official Mail</th>}
                   {selectedColumns.includes('personalEmail') && <th className="px-6 py-4">Personal Email</th>}
                   {selectedColumns.includes('cnic') && <th className="px-6 py-4">CNIC</th>}
@@ -539,6 +583,18 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                       )}
                       {selectedColumns.includes('assignments') && (
                         <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[150px]">{emp.assignments}</td>
+                      )}
+                      {selectedColumns.includes('assignedTasks') && (
+                        <td className="px-6 py-4">
+                          <span className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold">
+                            {getEmployeeTaskStats(emp.id).assignedCount}
+                          </span>
+                        </td>
+                      )}
+                      {selectedColumns.includes('latestCompletedTask') && (
+                        <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[150px]">
+                          {getEmployeeTaskStats(emp.id).latestCompleted}
+                        </td>
                       )}
                       {selectedColumns.includes('officialMail') && (
                         <td className="px-6 py-4 text-sm text-slate-600">{emp.officialMail}</td>
@@ -667,6 +723,14 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           )}
         </div>
       </div>
+      <BulkEmployeeAddModal 
+        isOpen={isBulkModalOpen}
+        onClose={() => setIsBulkModalOpen(false)}
+        onSuccess={() => {
+          // Success notification or refresh logic if needed
+        }}
+      />
+
       <Modal 
         isOpen={isModalOpen || isEditModalOpen} 
         onClose={() => {
@@ -678,6 +742,12 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         title={isEditModalOpen ? "Edit Employee" : "Add New Employee"}
         maxWidth="4xl"
       >
+        {error && (
+          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-600">
+            <ShieldCheck size={20} className="shrink-0" />
+            <p className="text-sm font-bold">{error}</p>
+          </div>
+        )}
         {isEditModalOpen && employeeToEdit ? (
           <EmployeeEditForm 
             employee={employeeToEdit} 
@@ -1125,9 +1195,20 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           <div className="pt-4">
             <button 
               type="submit"
-              className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              disabled={isSaving}
+              className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Add Employee
+              {isSaving ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Adding...
+                </>
+              ) : (
+                <>
+                  <Plus size={20} />
+                  Add Employee
+                </>
+              )}
             </button>
           </div>
         </form>

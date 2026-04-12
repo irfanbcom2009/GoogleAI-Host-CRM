@@ -21,7 +21,7 @@ import {
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc, Timestamp } from 'firebase/firestore';
 import { Invoice, Client } from '../types';
 
 interface InvoiceDetailProps {
@@ -37,19 +37,36 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoiceId, onBack,
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'invoices', invoiceId), (snapshot) => {
+    let unsubscribeClient: (() => void) | null = null;
+
+    const unsubscribeInvoice = onSnapshot(doc(db, 'invoices', invoiceId), (snapshot) => {
       if (snapshot.exists()) {
-        const data = snapshot.data() as Invoice;
-        setInvoice({ id: snapshot.id, ...data });
+        const data = snapshot.data();
         
-        // Fetch client details
+        // Handle Timestamp conversion for createdAt
+        const createdAt = data.createdAt instanceof Timestamp 
+          ? data.createdAt.toDate().toISOString()
+          : data.createdAt || new Date().toISOString();
+
+        const invoiceData = { 
+          id: snapshot.id, 
+          ...data,
+          createdAt,
+          items: data.items || []
+        } as Invoice;
+        
+        setInvoice(invoiceData);
+        
+        // Fetch client details if clientId exists and hasn't been fetched yet
         if (data.clientId) {
-          onSnapshot(doc(db, 'users', data.clientId), (clientSnap) => {
+          if (unsubscribeClient) unsubscribeClient();
+          unsubscribeClient = onSnapshot(doc(db, 'users', data.clientId), (clientSnap) => {
             if (clientSnap.exists()) {
               setClient({ id: clientSnap.id, ...clientSnap.data() } as Client);
             }
             setLoading(false);
           }, (error) => {
+            console.error('Error fetching client details:', error);
             handleFirestoreError(error, OperationType.GET, `users/${data.clientId}`);
             setLoading(false);
           });
@@ -57,13 +74,19 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoiceId, onBack,
           setLoading(false);
         }
       } else {
+        setInvoice(null);
         setLoading(false);
       }
     }, (error) => {
+      console.error('Error fetching invoice details:', error);
       handleFirestoreError(error, OperationType.GET, `invoices/${invoiceId}`);
+      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeInvoice();
+      if (unsubscribeClient) unsubscribeClient();
+    };
   }, [invoiceId]);
 
   const handleMarkAsPaid = async () => {

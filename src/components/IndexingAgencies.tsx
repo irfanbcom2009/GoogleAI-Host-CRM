@@ -21,14 +21,25 @@ import { collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, update
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
 
+const RESPONSE_TIME_OPTIONS = [
+  '1 Week',
+  '1 Month',
+  '2-6 Month',
+  '1 Year',
+  'Not Known'
+];
+
 export const IndexingAgencies: React.FC = () => {
   const [agencies, setAgencies] = useState<IndexingAgency[]>([]);
   const [indexingCounts, setIndexingCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [countryFilter, setCountryFilter] = useState('');
+  const [responseTimeFilter, setResponseTimeFilter] = useState('');
   const [applyingAgency, setApplyingAgency] = useState<IndexingAgency | null>(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [editingAgency, setEditingAgency] = useState<IndexingAgency | null>(null);
   
   const [newAgency, setNewAgency] = useState({
     name: '',
@@ -70,14 +81,22 @@ export const IndexingAgencies: React.FC = () => {
     };
   }, []);
 
-  const handleCreateAgency = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await addDoc(collection(db, 'indexing_agencies'), {
-        ...newAgency,
-        createdAt: serverTimestamp()
-      });
+      if (editingAgency) {
+        await updateDoc(doc(db, 'indexing_agencies', editingAgency.id), {
+          ...newAgency,
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await addDoc(collection(db, 'indexing_agencies'), {
+          ...newAgency,
+          createdAt: serverTimestamp()
+        });
+      }
       setIsModalOpen(false);
+      setEditingAgency(null);
       setNewAgency({
         name: '',
         logoUrl: '',
@@ -87,7 +106,7 @@ export const IndexingAgencies: React.FC = () => {
         responseTime: ''
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'indexing_agencies');
+      handleFirestoreError(error, editingAgency ? OperationType.UPDATE : OperationType.CREATE, 'indexing_agencies');
     }
   };
 
@@ -100,10 +119,16 @@ export const IndexingAgencies: React.FC = () => {
     }
   };
 
-  const filteredAgencies = agencies.filter(agency => 
-    agency.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    agency.country.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const countries = Array.from(new Set(agencies.map(a => a.country))).sort();
+
+  const filteredAgencies = agencies.filter(agency => {
+    const matchesSearch = agency.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         agency.country.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCountry = !countryFilter || agency.country === countryFilter;
+    const matchesResponse = !responseTimeFilter || agency.responseTime === responseTimeFilter;
+    
+    return matchesSearch && matchesCountry && matchesResponse;
+  });
 
   return (
     <div className="p-8 space-y-6">
@@ -113,7 +138,18 @@ export const IndexingAgencies: React.FC = () => {
           <p className="text-slate-500 mt-1">Manage global indexing agencies available for journals.</p>
         </div>
         <button 
-          onClick={() => setIsModalOpen(true)}
+          onClick={() => {
+            setEditingAgency(null);
+            setNewAgency({
+              name: '',
+              logoUrl: '',
+              searchLink: '',
+              submissionLink: '',
+              country: '',
+              responseTime: ''
+            });
+            setIsModalOpen(true);
+          }}
           className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
         >
           <Plus size={20} />
@@ -121,15 +157,45 @@ export const IndexingAgencies: React.FC = () => {
         </button>
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-        <input 
-          type="text" 
-          placeholder="Search agencies by name or country..." 
-          className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
+      <div className="flex flex-col md:flex-row gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+          <input 
+            type="text" 
+            placeholder="Search agencies by name or country..." 
+            className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-4">
+          <div className="relative min-w-[160px]">
+            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <select
+              className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm appearance-none"
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+            >
+              <option value="">All Countries</option>
+              {countries.map(country => (
+                <option key={country} value={country}>{country}</option>
+              ))}
+            </select>
+          </div>
+          <div className="relative min-w-[180px]">
+            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <select
+              className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm appearance-none"
+              value={responseTimeFilter}
+              onChange={(e) => setResponseTimeFilter(e.target.value)}
+            >
+              <option value="">All Response Times</option>
+              {RESPONSE_TIME_OPTIONS.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -227,7 +293,21 @@ export const IndexingAgencies: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                          <button className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all">
+                          <button 
+                            onClick={() => {
+                              setEditingAgency(agency);
+                              setNewAgency({
+                                name: agency.name,
+                                logoUrl: agency.logoUrl,
+                                searchLink: agency.searchLink,
+                                submissionLink: agency.submissionLink,
+                                country: agency.country,
+                                responseTime: agency.responseTime
+                              });
+                              setIsModalOpen(true);
+                            }}
+                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                          >
                             <Edit size={16} />
                           </button>
                           <button 
@@ -249,10 +329,13 @@ export const IndexingAgencies: React.FC = () => {
 
       <Modal 
         isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        title="Add Indexing Agency"
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingAgency(null);
+        }} 
+        title={editingAgency ? "Edit Indexing Agency" : "Add Indexing Agency"}
       >
-        <form onSubmit={handleCreateAgency} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Agency Name</label>
             <input 
@@ -329,13 +412,17 @@ export const IndexingAgencies: React.FC = () => {
               <label className="text-sm font-bold text-slate-700">Response Time</label>
               <div className="relative">
                 <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input 
-                  type="text" 
-                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  placeholder="e.g. 3-6 months"
+                <select 
+                  required
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all appearance-none"
                   value={newAgency.responseTime}
                   onChange={e => setNewAgency(prev => ({ ...prev, responseTime: e.target.value }))}
-                />
+                >
+                  <option value="">Select Response Time</option>
+                  {RESPONSE_TIME_OPTIONS.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
@@ -345,7 +432,7 @@ export const IndexingAgencies: React.FC = () => {
               type="submit"
               className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
             >
-              Add Agency
+              {editingAgency ? "Save Changes" : "Add Agency"}
             </button>
           </div>
         </form>

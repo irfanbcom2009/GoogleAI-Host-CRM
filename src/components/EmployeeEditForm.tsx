@@ -17,7 +17,9 @@ import {
   X,
   FileText,
   Upload,
-  ShieldCheck
+  ShieldCheck,
+  Check,
+  Loader2
 } from 'lucide-react';
 import { User as CRMUser, UserPermissions } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -30,6 +32,9 @@ interface EmployeeEditFormProps {
 }
 
 export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, onClose }) => {
+  const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     employeeId: employee.employeeId || '',
     name: employee.name || '',
@@ -37,8 +42,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
     department: employee.department || '',
     assignments: employee.assignments || '',
     qualification: employee.qualification || '',
-    joiningDate: employee.joiningDate || '',
-    endingDate: employee.endingDate || '',
+    joiningDate: employee.joiningDate ? (typeof employee.joiningDate === 'string' ? employee.joiningDate.split('T')[0] : '') : '',
+    endingDate: employee.endingDate ? (typeof employee.endingDate === 'string' ? employee.endingDate.split('T')[0] : '') : '',
     experience: employee.experience || '',
     gender: employee.gender || '',
     officialMail: employee.officialMail || '',
@@ -81,6 +86,13 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Check file size (limit to 500KB to stay under Firestore 1MB limit)
+    if (file.size > 500 * 1024) {
+      setError("File is too large. Please upload files smaller than 500KB.");
+      return;
+    }
+
+    setError(null);
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64String = reader.result as string;
@@ -117,20 +129,58 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setError(null);
+
     try {
+      if (!employee.id) {
+        throw new Error("Employee ID is missing. Cannot update record.");
+      }
+
       await updateDoc(doc(db, 'users', employee.id), {
         ...formData,
         updatedAt: serverTimestamp()
       });
-      onClose();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
+      setIsSaved(true);
+      setTimeout(() => {
+        setIsSaved(false);
+        onClose();
+      }, 2000);
+    } catch (err: any) {
+      console.error("Error updating employee:", err);
+      let message = "Failed to save changes. Please try again.";
+      
+      if (err.message && err.message.includes('quota')) {
+        message = "Storage quota exceeded. Please contact support.";
+      } else if (err.code === 'permission-denied') {
+        message = "You don't have permission to update this record.";
+      } else if (err.message && err.message.includes('too large')) {
+        message = "The record is too large to save. Try removing some attachments.";
+      }
+
+      setError(message);
+      
+      try {
+        handleFirestoreError(err, OperationType.UPDATE, 'users');
+      } catch (e) {
+        // handleFirestoreError throws, we catch it here
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {error && (
+          <div className="md:col-span-2 p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-600 animate-in fade-in slide-in-from-top-2">
+            <ShieldCheck size={20} className="shrink-0" />
+            <p className="text-sm font-bold">{error}</p>
+          </div>
+        )}
         {/* Basic Info */}
         <div className="space-y-4">
           <h3 className="text-sm font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-2">
@@ -546,10 +596,32 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
         </button>
         <button 
           type="submit"
-          className="flex-[2] px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2"
+          disabled={isSaved || isSaving}
+          className={cn(
+            "flex-[2] px-6 py-3 rounded-2xl font-black text-lg transition-all shadow-xl flex items-center justify-center gap-2",
+            isSaved 
+              ? "bg-emerald-600 text-white shadow-emerald-200" 
+              : isSaving
+                ? "bg-slate-400 text-white cursor-not-allowed"
+                : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200"
+          )}
         >
-          <Save size={20} />
-          Save Changes
+          {isSaved ? (
+            <>
+              <Check size={20} />
+              Saved Successfully!
+            </>
+          ) : isSaving ? (
+            <>
+              <Loader2 className="animate-spin" size={20} />
+              Saving...
+            </>
+          ) : (
+            <>
+              <Save size={20} />
+              Save Changes
+            </>
+          )}
         </button>
       </div>
     </form>

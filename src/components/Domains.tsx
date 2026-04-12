@@ -15,7 +15,8 @@ import {
   Settings,
   Shield,
   Key,
-  Server
+  Server,
+  GitMerge
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Domain, Client, User } from '../types';
@@ -24,6 +25,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, Timestamp, where, doc, updateDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { BulkAddModal } from './BulkAddModal';
+import { MergeModal } from './MergeModal';
 import { DomainManager } from './DomainManager';
 import { DomainTransferRequests } from './DomainTransferRequests';
 import { ClientDetail } from './ClientDetail';
@@ -52,6 +54,7 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
@@ -156,11 +159,29 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
 
   const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Check for uniqueness
+    const isDuplicate = domains.some(d => d.domainName.toLowerCase() === newDomain.domainName.toLowerCase());
+    if (isDuplicate) {
+      alert('This domain name already exists in the system.');
+      return;
+    }
+
     try {
+      const client = clients.find(c => c.id === newDomain.clientId);
+      const ownershipEntry = {
+        id: crypto.randomUUID(),
+        clientId: newDomain.clientId,
+        clientName: client?.name || 'Unknown',
+        startDate: new Date().toISOString().split('T')[0],
+        notes: 'Initial ownership'
+      };
+
       await addDoc(collection(db, 'domains'), {
         ...newDomain,
         registrationDate: newDomain.registrationDate ? Timestamp.fromDate(new Date(newDomain.registrationDate)) : null,
         expirationDate: Timestamp.fromDate(new Date(newDomain.expirationDate)),
+        ownershipHistory: [ownershipEntry],
         createdAt: new Date().toISOString(),
         createdBy: currentUser.name,
         createdById: currentUser.id,
@@ -245,6 +266,13 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
           </button>
           {isEmployee && (
             <>
+              <button 
+                onClick={() => setIsMergeModalOpen(true)}
+                className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
+              >
+                <GitMerge size={20} className="text-indigo-600" />
+                Merge
+              </button>
               <button 
                 onClick={() => setIsBulkModalOpen(true)}
                 className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
@@ -568,12 +596,19 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
       </Modal>
 
       {isEmployee && (
-        <BulkAddModal 
-          isOpen={isBulkModalOpen} 
-          onClose={() => setIsBulkModalOpen(false)} 
-          type="domains" 
-          clients={clients}
-        />
+        <>
+          <BulkAddModal 
+            isOpen={isBulkModalOpen} 
+            onClose={() => setIsBulkModalOpen(false)} 
+            type="domains" 
+            clients={clients}
+          />
+          <MergeModal 
+            isOpen={isMergeModalOpen}
+            onClose={() => setIsMergeModalOpen(false)}
+            type="domains"
+          />
+        </>
       )}
 
       {viewingClient && (

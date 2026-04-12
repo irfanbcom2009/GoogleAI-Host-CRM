@@ -389,6 +389,47 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "userName", "action", "timestamp"]
+    },
+    "CatalogItem": {
+      "title": "Catalog Item",
+      "description": "A service available in the catalog",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "basePrice": { "type": "number" },
+        "pricingTiers": { "type": "array" },
+        "requirements": { "type": "array" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["name", "category", "basePrice", "isActive"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A service order placed by a client",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "catalogItemId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "cancelled"] },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "partially_paid", "paid"] },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" }
+      },
+      "required": ["clientId", "catalogItemId", "status", "paymentStatus", "totalAmount"]
+    },
+    "PointHistory": {
+      "title": "Point History",
+      "description": "A record of point transactions for users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["earned", "spent", "adjustment"] },
+        "points": { "type": "number" },
+        "reason": { "type": "string" }
+      },
+      "required": ["userId", "type", "points", "reason"]
     }
   },
   "firestore": {
@@ -413,6 +454,9 @@
     "/policies": { "schema": "Policy", "description": "Collection of FAQ and policies" },
     "/expenses": { "schema": "Expense", "description": "Collection of daily expenses" },
     "/activity_logs": { "schema": "ActivityLog", "description": "Collection of user activity logs" },
-    "/journal_activities": { "schema": "ActivityLog", "description": "Collection of journal-specific activity logs" }
+    "/journal_activities": { "schema": "ActivityLog", "description": "Collection of journal-specific activity logs" },
+    "/catalog": { "schema": "CatalogItem", "description": "Collection of catalog services" },
+    "/orders": { "schema": "Order", "description": "Collection of service orders" },
+    "/point_history": { "schema": "PointHistory", "description": "Collection of point history records" }
   }
 }

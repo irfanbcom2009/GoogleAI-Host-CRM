@@ -299,21 +299,6 @@ export const Invoices: React.FC<InvoicesProps> = ({ searchQuery = '', currentUse
     inv.id.includes(searchQuery)
   );
 
-  if (viewingJournalId) {
-    return <JournalDetail journalId={viewingJournalId} onBack={() => setViewingJournalId(null)} currentUser={currentUser} />;
-  }
-
-  if (viewingInvoiceId) {
-    return (
-      <InvoiceDetail 
-        invoiceId={viewingInvoiceId} 
-        onBack={() => setViewingInvoiceId(null)} 
-        onViewJournal={(id) => setViewingJournalId(id)}
-        onViewTask={(id) => setViewingTaskId(id)}
-      />
-    );
-  }
-
   const getStatusBadge = (status: Invoice['status']) => {
     switch (status) {
       case 'paid': return <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-bold uppercase tracking-wider">Paid</span>;
@@ -321,6 +306,73 @@ export const Invoices: React.FC<InvoicesProps> = ({ searchQuery = '', currentUse
       case 'overdue': return <span className="px-2 py-1 bg-rose-100 text-rose-700 rounded-full text-[10px] font-bold uppercase tracking-wider">Overdue</span>;
     }
   };
+
+  if (viewingJournalId) {
+    return <JournalDetail journalId={viewingJournalId} onBack={() => setViewingJournalId(null)} currentUser={currentUser} />;
+  }
+
+  if (viewingInvoiceId) {
+    return (
+      <div className="h-full">
+        <InvoiceDetail 
+          invoiceId={viewingInvoiceId} 
+          onBack={() => setViewingInvoiceId(null)} 
+          onViewJournal={(id) => setViewingJournalId(id)}
+          onViewTask={(id) => setViewingTaskId(id)}
+        />
+        
+        {/* Modals for linked items */}
+        {viewingTaskId && (
+          <Modal 
+            isOpen={!!viewingTaskId} 
+            onClose={() => setViewingTaskId(null)} 
+            title="Task Details"
+          >
+            <div className="space-y-6">
+              {tasks.find(t => t.id === viewingTaskId) ? (
+                <>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">{tasks.find(t => t.id === viewingTaskId)?.title}</h3>
+                      <p className="text-sm text-slate-500 mt-1">Service: {tasks.find(t => t.id === viewingTaskId)?.serviceType}</p>
+                    </div>
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold uppercase",
+                      tasks.find(t => t.id === viewingTaskId)?.status === 'completed' ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                    )}>
+                      {tasks.find(t => t.id === viewingTaskId)?.status}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">
+                      {tasks.find(t => t.id === viewingTaskId)?.description}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 bg-white border border-slate-100 rounded-xl">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Due Date</p>
+                      <p className="text-sm font-bold text-slate-700 mt-1">
+                        {tasks.find(t => t.id === viewingTaskId)?.dueDate ? new Date(tasks.find(t => t.id === viewingTaskId)!.dueDate).toLocaleDateString() : 'No date'}
+                      </p>
+                    </div>
+                    <div className="p-4 bg-white border border-slate-100 rounded-xl">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Assigned To</p>
+                      <p className="text-sm font-bold text-slate-700 mt-1">{tasks.find(t => t.id === viewingTaskId)?.assignedToName || 'Unassigned'}</p>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-10 text-slate-400">
+                  <Loader2 className="animate-spin mx-auto mb-2" size={24} />
+                  <p>Loading task details...</p>
+                </div>
+              )}
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="p-8 space-y-6">

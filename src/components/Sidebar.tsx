@@ -23,7 +23,9 @@ import {
   ChevronRight,
   HelpCircle,
   MessageSquare,
-  TrendingDown
+  TrendingDown,
+  Layout,
+  ShoppingCart
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { UserRole, UserPermissions } from '../types';
@@ -34,6 +36,7 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   userRole?: UserRole;
   userPermissions?: UserPermissions;
+  userDepartment?: string;
   onLogout?: () => void;
   isImpersonating?: boolean;
   onStopImpersonating?: () => void;
@@ -44,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab, 
   userRole = 'Employee', 
   userPermissions,
+  userDepartment,
   onLogout,
   isImpersonating,
   onStopImpersonating
@@ -83,8 +87,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'operations',
       label: 'Operations Hub',
       items: [
-        { id: 'services-catalog', label: 'Pricing & Services', icon: DollarSign, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-        { id: 'tasks', label: 'Services & Tasks', icon: Briefcase, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+        { id: 'catalog', label: 'Service Catalog', icon: Layout, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+        { id: 'orders', label: 'Service Orders', icon: ShoppingCart, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+        { id: 'tasks', label: 'Tasks & Workflow', icon: Briefcase, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
         { id: 'points', label: 'Points & Rewards', icon: Trophy, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
       ]
     },
@@ -98,10 +103,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'finance',
-      label: 'Finance',
+      label: 'Financials',
       items: [
+        { id: 'finance-dashboard', label: 'Finance Hub', icon: DollarSign, roles: ['Admin', 'Manager', 'Employee'], department: 'Finance' },
         { id: 'invoices', label: 'Invoices', icon: CreditCard, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'invoices' },
         { id: 'expenses', label: 'Expenses', icon: TrendingDown, roles: ['Admin', 'Manager', 'Employee'], permission: 'expenses' },
+      ]
+    },
+    {
+      id: 'admin',
+      label: 'Administration',
+      items: [
+        { id: 'catalog-manager', label: 'Catalog Settings', icon: Settings, roles: ['Admin', 'Manager'] },
+        { id: 'employees', label: 'Employee Directory', icon: Users, roles: ['Admin', 'Manager'] },
+        { id: 'trash', label: 'Trash Bin', icon: Trash2, roles: ['Admin', 'Manager'], permission: 'trash' },
       ]
     },
     {
@@ -112,7 +127,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'policies', label: 'Policies', icon: BookOpen, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
         { id: 'faq', label: 'FAQ', icon: HelpCircle, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
         { id: 'notifications', label: 'Notifications', icon: Bell, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'notifications' },
-        { id: 'trash', label: 'Trash', icon: Trash2, roles: ['Admin'], permission: 'trash' },
       ]
     }
   ];
@@ -135,7 +149,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             
             // If item has a permission requirement, check it
             if (item.permission && userPermissions) {
-              return userPermissions[item.permission as keyof UserPermissions] !== false;
+              if (userPermissions[item.permission as keyof UserPermissions] === false) return false;
+            }
+
+            // If item has a department requirement, check it
+            if ((item as any).department && userRole !== 'Admin') {
+              if (userDepartment !== (item as any).department) return false;
             }
             
             return true;

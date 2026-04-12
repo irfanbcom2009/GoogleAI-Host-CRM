@@ -26,9 +26,71 @@ export interface JournalIndexing {
   notes?: string;
 }
 export type ISSNStatus = 'pending' | 'approved' | 'rejected';
-export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed' | 'overdue';
+export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed' | 'overdue' | 'cancelled';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type ServiceType = 'Hosting' | 'DOI' | 'ISSN' | 'OJS' | 'Editorial' | 'Indexing' | 'Plagiarism' | 'Domain';
+export type ServiceType = 'Hosting' | 'DOI' | 'ISSN' | 'OJS' | 'Editorial' | 'Indexing' | 'Plagiarism' | 'Domain' | 'Catalog Service';
+
+export interface PricingTier {
+  priority: 'Standard' | 'Rush' | 'Express';
+  price: number;
+  estimatedDays: number;
+}
+
+export interface CatalogRequirement {
+  id: string;
+  label: string;
+  type: 'text' | 'textarea' | 'select' | 'file' | 'date' | 'number';
+  required: boolean;
+  options?: string[]; // For select type
+  placeholder?: string;
+  value?: any; // To store the filled value
+}
+
+export interface CatalogItem extends AuditFields {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  basePrice: number;
+  pricingTiers: PricingTier[];
+  requirements: CatalogRequirement[];
+  isActive: boolean;
+  icon?: string;
+}
+
+export interface Order extends AuditFields {
+  id: string;
+  orderNumber: string;
+  clientId: string;
+  clientName: string;
+  catalogItemId: string;
+  catalogItemName: string;
+  requirementsData: { [requirementId: string]: any };
+  deliverablesData: { [key: string]: any };
+  status: 'pending' | 'processing' | 'completed' | 'cancelled';
+  paymentStatus: 'unpaid' | 'partially_paid' | 'paid';
+  priority: 'Standard' | 'Rush' | 'Express';
+  totalAmount: number;
+  paidAmount: number;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  completedAt?: string;
+  notes?: string;
+}
+
+export interface PointHistory {
+  id: string;
+  userId: string; // Can be client or employee
+  userName: string;
+  type: 'earned' | 'spent' | 'adjustment';
+  points: number;
+  reason: string;
+  orderId?: string;
+  taskId?: string;
+  createdAt: string;
+  createdById: string;
+  createdBy: string;
+}
 
 export interface AuditFields {
   createdBy?: string;
@@ -58,14 +120,26 @@ export interface Client {
   id: string;
   salutation?: string;
   name: string;
+  careOf?: string;
   email: string;
   phone: string;
   address: string;
+  country?: string;
+  endingDate?: string;
   status: ClientStatus;
   points: number;
   subscriptions: Subscription[];
   createdAt: any;
   portalEnabled?: boolean;
+}
+
+export interface OwnershipHistory {
+  id: string;
+  clientId: string;
+  clientName: string;
+  startDate: string;
+  endDate?: string;
+  notes?: string;
 }
 
 export interface RegistrarHistory {
@@ -78,8 +152,10 @@ export interface RegistrarHistory {
 export interface HostingMigrationLog {
   id: string;
   date: string;
-  fromServer: string;
-  toServer: string;
+  fromServer?: string;
+  toServer?: string;
+  fromNS?: string[];
+  toNS?: string[];
   notes?: string;
 }
 
@@ -133,6 +209,7 @@ export interface Domain extends AuditFields {
   };
   registrarHistory?: RegistrarHistory[];
   hostingHistory?: HostingMigrationLog[];
+  ownershipHistory?: OwnershipHistory[];
   renewalHistory?: DomainRenewal[];
 }
 
@@ -160,6 +237,16 @@ export interface Journal extends AuditFields {
   scope?: string;
   apcAmount?: number;
   editorEmail?: string;
+  
+  // Enhanced metadata fields
+  databaseType?: 'HEC' | 'ISSN' | 'DOAJ';
+  hecMainCategory?: string;
+  hecSubCategory?: string;
+  hecThirdCategory?: string;
+  subjectCategory?: string;
+  publisherCountry?: string;
+  languages?: string;
+  license?: 'CC BY' | 'CC BY-SA' | 'CC BY-ND' | 'CC BY-NC' | 'CC BY-NC-SA' | 'CC BY-NC-ND' | 'CC0' | 'Public Domain' | 'Publisher’s Own License';
   
   // Credentials
   credentials?: {

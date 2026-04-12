@@ -15,7 +15,8 @@ import {
   FileSpreadsheet,
   MessageSquare,
   Edit,
-  Trash2
+  Trash2,
+  GitMerge
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Client, ServiceType, User as UserType, Subscription } from '../types';
@@ -29,6 +30,7 @@ import { GoogleSheetImport } from './GoogleSheetImport';
 import { ColumnSelector } from './ColumnSelector';
 import { ConfirmModal } from './ConfirmModal';
 import { BulkAddModal } from './BulkAddModal';
+import { MergeModal } from './MergeModal';
 import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ClientDetail } from './ClientDetail';
 import { moveToTrash } from '../lib/firebase';
@@ -47,6 +49,9 @@ const AVAILABLE_COLUMNS = [
   { id: 'subscriptions', label: 'Subscriptions' },
   { id: 'points', label: 'Points' },
   { id: 'status', label: 'Status' },
+  { id: 'endingDate', label: 'Ending Date' },
+  { id: 'country', label: 'Country' },
+  { id: 'address', label: 'Address' },
 ];
 
 export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setActiveTab, onImpersonate, onOpenChat }) => {
@@ -56,6 +61,7 @@ export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setA
   const [letterFilter, setLetterFilter] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isImporterOpen, setIsImporterOpen] = useState(false);
   const [isGoogleImportOpen, setIsGoogleImportOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -71,9 +77,11 @@ export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setA
   const [newClient, setNewClient] = useState({
     salutation: '',
     name: '',
+    careOf: '',
     email: '',
     phone: '',
     address: '',
+    endingDate: '',
     status: 'active' as const,
     subscriptions: [] as Subscription[]
   });
@@ -84,6 +92,16 @@ const WORK_MODES = ['Office', 'Remotely', 'Hybrid'];
 const GENDERS = ['Male', 'Female', 'Other'];
   const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
+  const handleToggleStatus = async (client: Client) => {
+    const newStatus = client.status === 'active' ? 'inactive' : 'active';
+    try {
+      await updateDoc(doc(db, 'users', client.id), {
+        status: newStatus
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'clients');
+    }
+  };
   const handleNameChange = (name: string) => {
     let detectedSalutation = newClient.salutation;
     let cleanedName = name;
@@ -169,8 +187,10 @@ const GENDERS = ['Male', 'Female', 'Other'];
     }
 
     try {
+      const finalStatus = newClient.endingDate ? 'inactive' : newClient.status;
       const docRef = await addDoc(collection(db, 'users'), {
         ...newClient,
+        status: finalStatus,
         role: 'Client',
         points: 0,
         createdAt: serverTimestamp()
@@ -180,9 +200,11 @@ const GENDERS = ['Male', 'Female', 'Other'];
       setNewClient({
         salutation: '',
         name: '',
+        careOf: '',
         email: '',
         phone: '',
         address: '',
+        endingDate: '',
         status: 'active',
         subscriptions: []
       });
@@ -329,6 +351,13 @@ const GENDERS = ['Male', 'Female', 'Other'];
         {!isClient && (
           <div className="flex gap-3">
             <button 
+              onClick={() => setIsMergeModalOpen(true)}
+              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
+            >
+              <GitMerge size={20} className="text-indigo-600" />
+              Merge
+            </button>
+            <button 
               onClick={() => setIsBulkModalOpen(true)}
               className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
             >
@@ -423,6 +452,9 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   {selectedColumns.includes('subscriptions') && <th className="px-6 py-4">Subscriptions</th>}
                   {selectedColumns.includes('points') && <th className="px-6 py-4">Points</th>}
                   {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
+                  {selectedColumns.includes('endingDate') && <th className="px-6 py-4">Ending Date</th>}
+                  {selectedColumns.includes('country') && <th className="px-6 py-4">Country</th>}
+                  {selectedColumns.includes('address') && <th className="px-6 py-4">Address</th>}
                   {!isClient && <th className="px-6 py-4 text-right">Actions</th>}
                 </tr>
               </thead>
@@ -454,6 +486,11 @@ const GENDERS = ['Male', 'Female', 'Other'];
                               >
                                 {client.salutation && <span className="mr-1 text-slate-500">{client.salutation}</span>}
                                 {client.name}
+                                {client.careOf && (
+                                  <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200 uppercase tracking-tighter">
+                                    C/O {client.careOf}
+                                  </span>
+                                )}
                               </button>
                               <p className="text-xs text-slate-500 flex items-center gap-1">
                                 <MapPin size={12} /> {client.address}
@@ -491,14 +528,29 @@ const GENDERS = ['Male', 'Female', 'Other'];
                       )}
                       {selectedColumns.includes('status') && (
                         <td className="px-6 py-4">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border",
-                            client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
-                          )}>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleStatus(client);
+                            }}
+                            className={cn(
+                              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-all hover:scale-105",
+                              client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
+                            )}
+                          >
                             {client.status === 'active' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                             {client.status.toUpperCase()}
-                          </span>
+                          </button>
                         </td>
+                      )}
+                      {selectedColumns.includes('endingDate') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{client.endingDate || 'N/A'}</td>
+                      )}
+                      {selectedColumns.includes('country') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{client.country || 'N/A'}</td>
+                      )}
+                      {selectedColumns.includes('address') && (
+                        <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[150px]">{client.address}</td>
                       )}
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -608,6 +660,12 @@ const GENDERS = ['Male', 'Female', 'Other'];
             type="clients" 
           />
 
+          <MergeModal 
+            isOpen={isMergeModalOpen}
+            onClose={() => setIsMergeModalOpen(false)}
+            type="clients"
+          />
+
           <Modal 
             isOpen={isModalOpen} 
             onClose={() => setIsModalOpen(false)} 
@@ -640,6 +698,16 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   />
                 </div>
               </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">C/O (Care of) / Referred by</label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  placeholder="e.g. Dr. Smith / Referral Name"
+                  value={newClient.careOf}
+                  onChange={e => setNewClient(prev => ({ ...prev, careOf: e.target.value }))}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">Email Address</label>
@@ -663,15 +731,26 @@ const GENDERS = ['Male', 'Female', 'Other'];
                 />
               </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Address</label>
-              <input 
-                type="text" 
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                placeholder="123 Academic Way, Boston, MA"
-                value={newClient.address}
-                onChange={e => setNewClient(prev => ({ ...prev, address: e.target.value }))}
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Address</label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  placeholder="123 Academic Way, Boston, MA"
+                  value={newClient.address}
+                  onChange={e => setNewClient(prev => ({ ...prev, address: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Ending Date</label>
+                <input 
+                  type="date" 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newClient.endingDate}
+                  onChange={e => setNewClient(prev => ({ ...prev, endingDate: e.target.value }))}
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">Subscriptions</label>

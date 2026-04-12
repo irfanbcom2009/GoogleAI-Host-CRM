@@ -37,6 +37,7 @@ import { geminiService } from '../services/geminiService';
 import { Sparkles, Monitor } from 'lucide-react';
 
 import { ClientEditForm } from './ClientEditForm';
+import { InvoiceDetail } from './InvoiceDetail';
 
 interface ClientDetailProps {
   client: Client;
@@ -109,6 +110,9 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
   });
   const [employees, setEmployees] = useState<UserType[]>([]);
   const [selectedJournalId, setSelectedJournalId] = useState<{ id: string, editMode?: boolean } | null>(null);
+  const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
+  const [viewingJournalId, setViewingJournalId] = useState<string | null>(null);
+  const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
 
   const [newJournal, setNewJournal] = useState({
     title: '',
@@ -291,6 +295,17 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
     );
   }
 
+  if (viewingInvoiceId) {
+    return (
+      <InvoiceDetail 
+        invoiceId={viewingInvoiceId} 
+        onBack={() => setViewingInvoiceId(null)} 
+        onViewJournal={(id) => setViewingJournalId(id)}
+        onViewTask={(id) => setViewingTaskId(id)}
+      />
+    );
+  }
+
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
       {/* Header */}
@@ -333,21 +348,28 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                   {client.name.charAt(0)}
                 </div>
               </div>
-              <div className="pb-2">
-                <div className="flex items-center gap-3">
-                  <h1 className="text-3xl font-black text-slate-900 tracking-tight">
+              <div className="pb-2 min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
                     {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
                     {client.name}
                   </h1>
-                  <span className={cn(
-                    "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider",
-                    client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
-                  )}>
-                    {client.status}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {client.careOf && (
+                      <span className="text-xs font-bold px-2 py-1 bg-slate-100 text-slate-500 rounded-lg border border-slate-200 uppercase tracking-tight whitespace-nowrap">
+                        C/O {client.careOf}
+                      </span>
+                    )}
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider whitespace-nowrap",
+                      client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
+                    )}>
+                      {client.status}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-slate-500 font-medium flex items-center gap-2 mt-1">
-                  <Mail size={16} /> {client.email}
+                <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
+                  <Mail size={16} className="flex-shrink-0" /> {client.email}
                 </p>
               </div>
             </div>
@@ -385,14 +407,20 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                   <div className="p-2 bg-slate-50 rounded-lg"><Phone size={18} /></div>
                   <span className="font-medium">{client.phone || 'No phone provided'}</span>
                 </div>
-                <div className="flex items-center gap-3 text-slate-600">
-                  <div className="p-2 bg-slate-50 rounded-lg"><MapPin size={18} /></div>
-                  <span className="font-medium">{client.address || 'No address provided'}</span>
+                <div className="flex items-start gap-3 text-slate-600 min-w-0">
+                  <div className="p-2 bg-slate-50 rounded-lg flex-shrink-0"><MapPin size={18} /></div>
+                  <span className="font-medium break-words flex-1">{client.address || 'No address provided'}</span>
                 </div>
                 <div className="flex items-center gap-3 text-slate-600">
                   <div className="p-2 bg-slate-50 rounded-lg"><Calendar size={18} /></div>
                   <span className="font-medium">Joined {client.createdAt ? (typeof client.createdAt === 'string' ? new Date(client.createdAt).toLocaleDateString() : new Date(client.createdAt.seconds * 1000).toLocaleDateString()) : 'Recently'}</span>
                 </div>
+                {client.endingDate && (
+                  <div className="flex items-center gap-3 text-rose-600">
+                    <div className="p-2 bg-rose-50 rounded-lg"><XCircle size={18} /></div>
+                    <span className="font-bold">Ended {new Date(client.endingDate).toLocaleDateString()}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -485,10 +513,10 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                 {onImpersonate && currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
                   <button 
                     onClick={() => onImpersonate({ id: client.id, role: 'Client', name: client.name, email: client.email })}
-                    className="w-full flex items-center justify-center gap-2 p-2.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100 font-bold text-[10px] hover:bg-indigo-100 transition-all"
+                    className="w-full flex items-center justify-center gap-2 p-2.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100 font-bold text-[10px] hover:bg-indigo-100 transition-all min-w-0"
                   >
-                    <Monitor size={14} />
-                    Login to Portal As {client.name.split(' ')[0]}
+                    <Monitor size={14} className="flex-shrink-0" />
+                    <span className="truncate">Login to Portal As {client.name.split(' ')[0]}</span>
                   </button>
                 )}
               </div>
@@ -646,7 +674,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
               )}
 
               {activeTab === 'publishers' && (
-                <Publishers searchQuery="" currentUser={currentUser!} />
+                <Publishers searchQuery="" currentUser={currentUser!} clientId={client.id} />
               )}
 
               {activeTab === 'domains' && (
@@ -777,6 +805,13 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                             )}>
                               {invoice.status}
                             </span>
+                            <button 
+                              onClick={() => setViewingInvoiceId(invoice.id)}
+                              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                              title="View Details"
+                            >
+                              <FileText size={18} />
+                            </button>
                           </div>
                         </div>
                       ))}

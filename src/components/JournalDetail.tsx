@@ -66,6 +66,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   const [aiHealth, setAiHealth] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
 
   const handleGetAiHealth = async () => {
     if (!journal) return;
@@ -135,14 +136,14 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     );
 
     const unsubEmployees = onSnapshot(
-      query(collection(db, 'users'), where('role', 'in', ['Admin', 'Manager', 'Employee'])),
+      query(collection(db, 'users'), where('role', 'in', ['Admin', 'Manager', 'Employee']), where('status', '==', 'active')),
       (snapshot) => {
         setEmployees(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserType)));
       }
     );
 
     const unsubClients = onSnapshot(
-      collection(db, 'clients'),
+      query(collection(db, 'users'), where('role', '==', 'Client'), where('status', '==', 'active')),
       (snapshot) => {
         setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client)));
       }
@@ -170,7 +171,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     if (!journal?.clientId) return;
 
     const unsubDomains = onSnapshot(
-      query(collection(db, 'domains'), where('clientId', '==', journal.clientId)),
+      query(collection(db, 'domains'), where('clientId', '==', journal.clientId), where('status', '==', 'active')),
       (snapshot) => {
         setDomains(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       }
@@ -188,6 +189,46 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       unsubPublishers();
     };
   }, [journal?.clientId]);
+
+  useEffect(() => {
+    if (!journalId || !isEditing) return;
+
+    // Fetch latest ISSN Request for this journal to auto-fill metadata
+    const unsubIssn = onSnapshot(
+      query(collection(db, 'issn_requests'), where('journalId', '==', journalId), orderBy('createdAt', 'desc'), limit(1)),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const issnData = snapshot.docs[0].data();
+          setEditData(prev => ({
+            ...prev,
+            issnPrint: prev.issnPrint || issnData.printIssn || '',
+            issnOnline: prev.issnOnline || issnData.onlineIssn || '',
+            languages: prev.languages || issnData.language || '',
+            publisherCountry: prev.publisherCountry || issnData.country || ''
+          }));
+        }
+      }
+    );
+
+    // Fetch latest Invoice for this journal to auto-fill invoice number
+    const unsubInvoice = onSnapshot(
+      query(collection(db, 'invoices'), where('journalId', '==', journalId), orderBy('createdAt', 'desc'), limit(1)),
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const invoiceData = snapshot.docs[0].data();
+          setEditData(prev => ({
+            ...prev,
+            invoiceNumber: prev.invoiceNumber || invoiceData.invoiceNumber || ''
+          }));
+        }
+      }
+    );
+
+    return () => {
+      unsubIssn();
+      unsubInvoice();
+    };
+  }, [journalId, isEditing]);
 
   const logActivity = async (action: string) => {
     if (!currentUser) return;
@@ -234,7 +275,11 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
         ...editData,
         updatedAt: serverTimestamp()
       });
-      setIsEditing(false);
+      setIsSaved(true);
+      setTimeout(() => {
+        setIsSaved(false);
+        setIsEditing(false);
+      }, 2000);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'journals');
     }
@@ -290,10 +335,25 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               </button>
               <button 
                 onClick={handleSave}
-                className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2"
+                disabled={isSaved}
+                className={cn(
+                  "px-5 py-2.5 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2",
+                  isSaved 
+                    ? "bg-emerald-600 text-white shadow-emerald-200" 
+                    : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200"
+                )}
               >
-                <Save size={18} />
-                Save Changes
+                {isSaved ? (
+                  <>
+                    <Check size={18} />
+                    Saved!
+                  </>
+                ) : (
+                  <>
+                    <Save size={18} />
+                    Save Changes
+                  </>
+                )}
               </button>
             </>
           ) : (
@@ -328,9 +388,112 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                         onChange={(e) => setEditData({ ...editData, title: e.target.value })}
                         placeholder="Journal Title"
                       />
+                      
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Category</span>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Database Type</span>
+                          <select 
+                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={editData.databaseType || 'HEC'}
+                            onChange={(e) => setEditData({ ...editData, databaseType: e.target.value as any })}
+                          >
+                            <option value="HEC">HEC Journals</option>
+                            <option value="ISSN">ISSN Journals</option>
+                            <option value="DOAJ">DOAJ Journals</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">License</span>
+                          <select 
+                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={editData.license || 'CC BY'}
+                            onChange={(e) => setEditData({ ...editData, license: e.target.value as any })}
+                          >
+                            <option value="CC BY">CC BY</option>
+                            <option value="CC BY-SA">CC BY-SA</option>
+                            <option value="CC BY-ND">CC BY-ND</option>
+                            <option value="CC BY-NC">CC BY-NC</option>
+                            <option value="CC BY-NC-SA">CC BY-NC-SA</option>
+                            <option value="CC BY-NC-ND">CC BY-NC-ND</option>
+                            <option value="CC0">CC0</option>
+                            <option value="Public Domain">Public Domain</option>
+                            <option value="Publisher’s Own License">Publisher’s Own License</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {editData.databaseType === 'HEC' ? (
+                        <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Main Category</span>
+                            <input 
+                              type="text"
+                              className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.hecMainCategory || ''}
+                              onChange={(e) => setEditData({ ...editData, hecMainCategory: e.target.value })}
+                              placeholder="Main"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Sub Category</span>
+                            <input 
+                              type="text"
+                              className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.hecSubCategory || ''}
+                              onChange={(e) => setEditData({ ...editData, hecSubCategory: e.target.value })}
+                              placeholder="Sub"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Third Category</span>
+                            <input 
+                              type="text"
+                              className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.hecThirdCategory || ''}
+                              onChange={(e) => setEditData({ ...editData, hecThirdCategory: e.target.value })}
+                              placeholder="Third"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Subject Category</span>
+                          <input 
+                            type="text"
+                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={editData.subjectCategory || ''}
+                            onChange={(e) => setEditData({ ...editData, subjectCategory: e.target.value })}
+                            placeholder="Subject Category"
+                          />
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Publisher's Country</span>
+                          <input 
+                            type="text"
+                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={editData.publisherCountry || ''}
+                            onChange={(e) => setEditData({ ...editData, publisherCountry: e.target.value })}
+                            placeholder="Country"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Languages</span>
+                          <input 
+                            type="text"
+                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={editData.languages || ''}
+                            onChange={(e) => setEditData({ ...editData, languages: e.target.value })}
+                            placeholder="Languages"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Legacy Category</span>
                           <select 
                             className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
                             value={editData.category || ''}
@@ -343,7 +506,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                           </select>
                         </div>
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Sub-Category</span>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Legacy Sub-Category</span>
                           <select 
                             className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
                             value={editData.subCategory || ''}
@@ -361,10 +524,31 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                   ) : (
                     <div>
                       <h1 className="text-2xl font-black text-slate-900">{journal.title}</h1>
-                      <p className="text-slate-500 font-medium">
-                        {journal.category || 'No Category'} 
-                        {journal.subCategory && ` • ${journal.subCategory}`}
-                      </p>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold uppercase">
+                          {journal.databaseType || 'HEC'}
+                        </span>
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold uppercase">
+                          {journal.license || 'CC BY'}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-sm">
+                        {journal.databaseType === 'HEC' ? (
+                          <p className="text-slate-500 font-medium">
+                            {journal.hecMainCategory || 'No Main Category'} 
+                            {journal.hecSubCategory && ` • ${journal.hecSubCategory}`}
+                            {journal.hecThirdCategory && ` • ${journal.hecThirdCategory}`}
+                          </p>
+                        ) : (
+                          <p className="text-slate-500 font-medium">
+                            Subject: {journal.subjectCategory || 'Not set'}
+                          </p>
+                        )}
+                        <p className="text-slate-400 text-xs mt-1">
+                          {journal.publisherCountry && `Country: ${journal.publisherCountry}`}
+                          {journal.languages && ` • Languages: ${journal.languages}`}
+                        </p>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1000,6 +1184,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
         <JournalIndexingManager 
           journal={journal} 
           onClose={() => setIsIndexingModalOpen(false)} 
+          currentUser={currentUser}
         />
       </Modal>
 

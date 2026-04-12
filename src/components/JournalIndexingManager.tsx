@@ -17,7 +17,7 @@ import {
   Check
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Journal, IndexingAgency, JournalIndexing, IndexingStatus } from '../types';
+import { Journal, IndexingAgency, JournalIndexing, IndexingStatus, User as UserType } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, where, updateDoc, doc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
 import { cn, sanitizeUrl } from '../lib/utils';
@@ -26,9 +26,10 @@ import { Modal } from './Modal';
 interface JournalIndexingManagerProps {
   journal: Journal;
   onClose: () => void;
+  currentUser: UserType | null;
 }
 
-export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ journal, onClose }) => {
+export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ journal, onClose, currentUser }) => {
   const [agencies, setAgencies] = useState<IndexingAgency[]>([]);
   const [journalIndexing, setJournalIndexing] = useState<JournalIndexing[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +66,20 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
     };
   }, [journal.id]);
 
+  const logIndexingChange = async (agencyName: string, status: string) => {
+    try {
+      await addDoc(collection(db, 'google_scholar_history'), {
+        journalId: journal.id,
+        status: `Indexing: ${agencyName} -> ${status}`,
+        tagOptimization: `Automatic log from Indexing Manager`,
+        employeeName: currentUser?.name || 'System',
+        timestamp: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error logging indexing change:', error);
+    }
+  };
+
   // Command Logic
   const handleApplyCommand = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +100,7 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
           appliedAt: applyDate
         });
       }
+      await logIndexingChange(selectedAgency.name, 'Pending');
       setIsApplyModalOpen(false);
       setSelectedAgency(null);
     } catch (error) {
@@ -113,6 +129,7 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
           indexedAt: serverTimestamp()
         });
       }
+      await logIndexingChange(selectedAgency.name, 'Indexed');
       setIsLinkModalOpen(false);
       setLiveLink('');
       setSelectedAgency(null);
@@ -124,11 +141,14 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
   const handleRemoveLinkCommand = async (indexingId: string) => {
     if (!confirm('Remove indexing link and move to Not Indexed?')) return;
     try {
+      const indexing = journalIndexing.find(i => i.id === indexingId);
+      const agency = agencies.find(a => a.id === indexing?.agencyId);
       await updateDoc(doc(db, 'journal_indexing', indexingId), {
         status: 'not_indexed',
         journalPageUrl: null,
         indexedAt: null
       });
+      if (agency) await logIndexingChange(agency.name, 'Not Indexed');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'journal_indexing');
     }
@@ -144,6 +164,7 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
         journalPageUrl: sanitizedUrl,
         indexedAt: serverTimestamp()
       });
+      await logIndexingChange(selectedAgency.name, 'Indexed (Approved)');
       setIsApproveModalOpen(false);
       setLiveLink('');
       setSelectedIndexing(null);

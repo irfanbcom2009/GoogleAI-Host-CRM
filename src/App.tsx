@@ -28,6 +28,9 @@ import { FAQ } from './components/FAQ';
 import { ClientDashboard } from './components/ClientDashboard';
 import { ChatBoard } from './components/ChatBoard';
 import { Services } from './components/Services';
+import { CatalogManager } from './components/CatalogManager';
+import { OrderManagement } from './components/OrderManagement';
+import { FinanceDashboard } from './components/FinanceDashboard';
 import { LandingPage } from './components/LandingPage';
 import { GlobalAddButton } from './components/GlobalAddButton';
 import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck } from 'lucide-react';
@@ -281,7 +284,10 @@ export default function App() {
       case 'files': return <FileManager searchQuery={searchQuery} />;
       case 'file-requests': return <FileRequests searchQuery={searchQuery} />;
       case 'tasks': return <Tasks searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'services-catalog': return <Services currentUser={currentUser} />;
+      case 'catalog': return <Services currentUser={currentUser} />;
+      case 'catalog-manager': return <CatalogManager currentUser={currentUser} />;
+      case 'orders': return <OrderManagement currentUser={currentUser} />;
+      case 'finance-dashboard': return <FinanceDashboard currentUser={currentUser} />;
       case 'points': return <Points />;
       case 'policies': return <Policies currentUser={currentUser} />;
       case 'employees': return (
@@ -309,6 +315,7 @@ export default function App() {
         setActiveTab={setActiveTab} 
         userRole={currentUser.role} 
         userPermissions={currentUser.permissions}
+        userDepartment={currentUser.department}
         onLogout={handleLogout}
         isImpersonating={!!impersonatedUser}
         onStopImpersonating={() => setImpersonatedUser(null)}

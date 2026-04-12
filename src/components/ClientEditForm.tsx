@@ -6,7 +6,10 @@ import {
   MapPin, 
   Save,
   X,
-  Shield
+  Shield,
+  Calendar,
+  Check,
+  Loader2
 } from 'lucide-react';
 import { Client, ServiceType, Subscription, Domain } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -22,13 +25,18 @@ interface ClientEditFormProps {
 const SALUTATIONS = ['Mr.', 'Miss', 'Mrs.', 'Dr.', 'Prof.', 'Dr. Prof.'];
 
 export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose }) => {
+  const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     salutation: client.salutation || '',
     name: client.name,
+    careOf: client.careOf || '',
     email: client.email,
     phone: client.phone,
     address: client.address,
     status: client.status,
+    endingDate: client.endingDate || '',
     subscriptions: client.subscriptions || []
   });
 
@@ -62,6 +70,9 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setIsSaving(true);
+    setError(null);
     try {
       const updatedSubscriptions = formData.subscriptions.map(sub => {
         const service = typeof sub === 'string' ? sub : sub.service;
@@ -79,14 +90,27 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
         };
       });
 
+      const finalStatus = formData.endingDate ? 'inactive' : formData.status;
+
       await updateDoc(doc(db, 'users', client.id), {
         ...formData,
+        status: finalStatus,
         subscriptions: updatedSubscriptions,
         updatedAt: serverTimestamp()
       });
-      onClose();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'clients');
+      setIsSaved(true);
+      setTimeout(() => {
+        setIsSaved(false);
+        onClose();
+      }, 1500);
+    } catch (err: any) {
+      console.error("Error updating client:", err);
+      setError(err.message || "Failed to save changes. Please try again.");
+      try {
+        handleFirestoreError(err, OperationType.UPDATE, 'clients');
+      } catch (e) {}
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -125,6 +149,12 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-600 animate-in fade-in slide-in-from-top-2">
+          <Shield size={20} className="shrink-0" />
+          <p className="text-sm font-bold">{error}</p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <label className="text-sm font-bold text-slate-700">Salutation</label>
@@ -149,6 +179,16 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           />
         </div>
+      </div>
+      <div className="space-y-2">
+        <label className="text-sm font-bold text-slate-700">C/O (Care of) / Referred by</label>
+        <input 
+          type="text"
+          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+          value={formData.careOf}
+          onChange={(e) => setFormData({ ...formData, careOf: e.target.value })}
+          placeholder="e.g. Dr. Smith / Referral Name"
+        />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
@@ -259,6 +299,37 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
           })}
         </div>
       </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-4 border-t border-slate-100">
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+            <Shield size={18} className="text-indigo-600" />
+            Status
+          </label>
+          <select
+            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            value={formData.status}
+            onChange={e => setFormData({ ...formData, status: e.target.value as any })}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+            <Calendar size={18} className="text-indigo-600" />
+            Ending Date
+          </label>
+          <input
+            type="date"
+            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            value={formData.endingDate}
+            onChange={e => setFormData({ ...formData, endingDate: e.target.value })}
+          />
+          {formData.endingDate && (
+            <p className="text-[10px] text-amber-600 font-bold italic">Setting an ending date will mark the client as Inactive.</p>
+          )}
+        </div>
+      </div>
       <div className="flex gap-3 pt-6 border-t border-slate-100">
         <button 
           type="button"
@@ -270,10 +341,32 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
         </button>
         <button 
           type="submit"
-          className="flex-[2] px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2"
+          disabled={isSaved || isSaving}
+          className={cn(
+            "flex-[2] px-6 py-3 rounded-2xl font-black text-lg transition-all shadow-xl flex items-center justify-center gap-2",
+            isSaved 
+              ? "bg-emerald-600 text-white shadow-emerald-200" 
+              : isSaving
+                ? "bg-slate-400 text-white cursor-not-allowed"
+                : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200"
+          )}
         >
-          <Save size={20} />
-          Save Changes
+          {isSaved ? (
+            <>
+              <Check size={20} />
+              Saved Successfully!
+            </>
+          ) : isSaving ? (
+            <>
+              <Loader2 className="animate-spin" size={20} />
+              Saving...
+            </>
+          ) : (
+            <>
+              <Save size={20} />
+              Save Changes
+            </>
+          )}
         </button>
       </div>
     </form>

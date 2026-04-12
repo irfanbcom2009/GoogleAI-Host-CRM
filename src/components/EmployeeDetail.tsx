@@ -24,7 +24,9 @@ import {
   Layers,
   Edit,
   Monitor,
-  Lock
+  Lock,
+  Loader2,
+  ShieldCheck
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { User as CRMUser, Task, UserRole } from '../types';
@@ -46,6 +48,23 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
   const [loading, setLoading] = useState(true);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdatingPortal, setIsUpdatingPortal] = useState(false);
+  const [isRehiring, setIsRehiring] = useState(false);
+
+  const handleRehire = async () => {
+    if (!window.confirm('Are you sure you want to rehire this employee? This will clear the ending date and set a new joining date to today.')) return;
+    setIsRehiring(true);
+    try {
+      await updateDoc(doc(db, 'users', employee.id), {
+        endingDate: '',
+        joiningDate: new Date().toISOString().split('T')[0],
+        remarks: (employee.remarks || '') + `\n[Rehired on ${new Date().toLocaleDateString()}]`
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    } finally {
+      setIsRehiring(false);
+    }
+  };
 
   const handleTogglePortal = async () => {
     setIsUpdatingPortal(true);
@@ -143,8 +162,8 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
             </div>
             
             <div>
-              <h1 className="text-2xl font-black text-slate-900">{employee.name}</h1>
-              <p className="text-slate-500 flex items-center justify-center gap-1 mt-1">
+              <h1 className="text-2xl font-black text-slate-900 break-words">{employee.name}</h1>
+              <p className="text-slate-500 flex items-center justify-center gap-1 mt-1 break-all">
                 <Mail size={14} />
                 {employee.email}
               </p>
@@ -228,6 +247,17 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                 >
                   <Monitor size={16} />
                   Login to Portal As {employee.name.split(' ')[0]}
+                </button>
+              )}
+
+              {employee.endingDate && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
+                <button 
+                  onClick={handleRehire}
+                  disabled={isRehiring}
+                  className="w-full flex items-center justify-center gap-2 p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 font-bold text-xs hover:bg-emerald-100 transition-all"
+                >
+                  {isRehiring ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+                  Rehire Employee
                 </button>
               )}
             </div>

@@ -27,6 +27,7 @@ import { ColumnSelector } from './ColumnSelector';
 interface PublishersProps {
   searchQuery?: string;
   currentUser: User;
+  clientId?: string;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -37,7 +38,7 @@ const AVAILABLE_COLUMNS = [
   { id: 'documents', label: 'Documents' },
 ];
 
-export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', currentUser }) => {
+export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', currentUser, clientId }) => {
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +48,9 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser.columnPreferences?.['publishers'] || ['name', 'owner', 'secp', 'ntn', 'documents']
   );
+
+  const isClient = currentUser.role === 'Client';
+  const effectiveClientId = isClient ? currentUser.id : clientId;
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -113,8 +117,11 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
       handleFirestoreError(error, OperationType.LIST, 'publishers');
     });
 
-    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
-      setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client)));
+    const unsubClients = onSnapshot(collection(db, 'users'), (snapshot) => {
+      setClients(snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as any))
+        .filter(c => c.role === 'Client' || c.role === undefined)
+      );
     });
 
     return () => {
@@ -168,11 +175,15 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
     }
   };
 
-  const filteredPublishers = publishers.filter(pub => 
-    pub.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    pub.ownerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    pub.ntn.includes(searchQuery)
-  );
+  const filteredPublishers = publishers.filter(pub => {
+    const matchesSearch = pub.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      pub.ownerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      pub.ntn.includes(searchQuery);
+    
+    const matchesClient = !effectiveClientId || pub.clientId === effectiveClientId;
+    
+    return matchesSearch && matchesClient;
+  });
 
   if (selectedPublisherId) {
     return <PublisherDetail publisherId={selectedPublisherId} onBack={() => setSelectedPublisherId(null)} />;
@@ -362,21 +373,29 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
               </div>
               
               <form onSubmit={handleCreatePublisher} className="p-8 space-y-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Client</label>
-                  <select 
-                    required
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newPublisher.clientId}
-                    onChange={e => setNewPublisher(prev => ({ ...prev, clientId: e.target.value }))}
-                  >
-                    <option value="">Select a client</option>
-                    {clients.map(client => (
-                      <option key={client.id} value={client.id}>{client.name}</option>
-                    ))}
-                  </select>
-                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-700">Client / Owner</label>
+                    <select 
+                      required
+                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                      value={newPublisher.clientId}
+                      onChange={e => {
+                        const selectedClient = clients.find(c => c.id === e.target.value);
+                        setNewPublisher(prev => ({ 
+                          ...prev, 
+                          clientId: e.target.value,
+                          ownerName: selectedClient ? selectedClient.name : ''
+                        }));
+                      }}
+                      disabled={!!effectiveClientId && !currentUser.role.includes('Admin')}
+                    >
+                      <option value="">Select a client</option>
+                      {clients.map(client => (
+                        <option key={client.id} value={client.id}>{client.name}</option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Publisher Name</label>
                     <input 
@@ -388,15 +407,16 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                       onChange={e => setNewPublisher(prev => ({ ...prev, name: e.target.value }))}
                     />
                   </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700">Owner Name</label>
+                    <label className="text-sm font-bold text-slate-700">Owner Name (Auto-filled)</label>
                     <input 
-                      required
+                      readOnly
                       type="text" 
-                      placeholder="Full name of the owner"
-                      className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                      placeholder="Select a client above"
+                      className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl outline-none transition-all text-slate-500"
                       value={newPublisher.ownerName}
-                      onChange={e => setNewPublisher(prev => ({ ...prev, ownerName: e.target.value }))}
                     />
                   </div>
                   <div className="space-y-2">
