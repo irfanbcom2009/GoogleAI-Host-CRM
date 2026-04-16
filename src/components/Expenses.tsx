@@ -18,7 +18,8 @@ import {
   X,
   PieChart as PieChartIcon,
   BarChart3,
-  TrendingDown
+  TrendingDown,
+  Settings2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Expense, User as UserType, GlobalSettings, OfficeSubscription } from '../types';
@@ -29,6 +30,7 @@ import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
 import { Shield } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { ConfigModal } from './ConfigModal';
 
 interface ExpensesProps {
   currentUser: UserType;
@@ -49,6 +51,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [headFilter, setHeadFilter] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'summary' | 'subscriptions'>('list');
@@ -77,18 +80,16 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
 
   useEffect(() => {
     const fetchSettings = async () => {
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        if (settingsDoc.exists()) {
-          const data = settingsDoc.data() as GlobalSettings;
-          setExpenseHeads(data.expenseHeads || []);
-          setOfficeSubscriptions(data.officeSubscriptions || []);
+      const unsubscribeSettings = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as GlobalSettings;
+          setExpenseHeads(Array.isArray(data.expenseHeads) ? data.expenseHeads : []);
+          setOfficeSubscriptions(Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []);
         }
-      } catch (error) {
-        console.error('Error fetching settings:', error);
-      }
+      });
+      return unsubscribeSettings;
     };
-    fetchSettings();
+    const unsubSettings = fetchSettings();
 
     const q = query(collection(db, 'expenses'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -300,13 +301,22 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
             onChange={handleColumnChange}
           />
           {isAdmin && (
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-            >
-              <Plus size={20} />
-              Add Expense
-            </button>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setIsConfigModalOpen(true)}
+                className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                title="Configure Expense Heads"
+              >
+                <Settings2 size={20} />
+              </button>
+              <button 
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              >
+                <Plus size={20} />
+                Add Expense
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -474,7 +484,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
               {loading ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
                   <Loader2 className="animate-spin" size={32} />
@@ -482,8 +492,8 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                 </div>
               ) : (
                 <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+                  <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                    <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                       {selectedColumns.includes('head') && <th className="px-6 py-4">Expense Head</th>}
                       {selectedColumns.includes('date') && <th className="px-6 py-4">Date</th>}
                       {selectedColumns.includes('amount') && <th className="px-6 py-4">Amount</th>}
@@ -804,6 +814,17 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
           </div>
         </form>
       </Modal>
+
+      {isConfigModalOpen && (
+        <ConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          title="Configure Expense Heads"
+          fieldName="expenseHeads"
+          type="string-list"
+          initialItems={expenseHeads}
+        />
+      )}
     </div>
   );
 };

@@ -19,19 +19,24 @@ import {
   Upload,
   ShieldCheck,
   Check,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
-import { User as CRMUser, UserPermissions } from '../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { User as CRMUser, UserPermissions, ModulePermissions } from '../types';
+import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { cn } from '../lib/utils';
+import { HelpIcon } from './HelpIcon';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface EmployeeEditFormProps {
   employee: CRMUser;
+  currentUser: CRMUser;
   onClose: () => void;
 }
 
-export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, onClose }) => {
+export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, currentUser, onClose }) => {
+  const { check } = usePermissions(currentUser);
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,25 +59,33 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
     homePhone: employee.homePhone || '',
     address: employee.address || '',
     remarks: employee.remarks || '',
+    portalEnabled: employee.portalEnabled ?? false,
+    photoURL: employee.photoURL || '',
     pcAllotted: employee.pcAllotted || '',
     pcUsername: employee.pcUsername || '',
     pcPassword: employee.pcPassword || '',
     role: employee.role || 'Employee',
     modeOfWorking: employee.modeOfWorking || 'On-site',
+    employmentHistory: employee.employmentHistory || [],
     permissions: employee.permissions || {
-      approvalRequests: true,
-      journals: true,
-      indexingAgencies: true,
-      publishers: true,
-      hecApplications: true,
-      issnRequests: true,
-      doiManagement: true,
-      dataTools: true,
-      invoices: true,
-      expenses: true,
-      resources: true,
-      notifications: true,
-      trash: true
+      clients: { view: false, add: false, edit: false, delete: false },
+      journals: { view: false, add: false, edit: false, delete: false },
+      domains: { view: false, add: false, edit: false, delete: false },
+      issnRequests: { view: false, add: false, edit: false, delete: false },
+      tasks: { view: false, add: false, edit: false, delete: false },
+      invoices: { view: false, add: false, edit: false, delete: false },
+      expenses: { view: false, add: false, edit: false, delete: false },
+      publishers: { view: false, add: false, edit: false, delete: false },
+      hecApplications: { view: false, add: false, edit: false, delete: false },
+      indexingAgencies: { view: false, add: false, edit: false, delete: false },
+      doiManagement: { view: false, add: false, edit: false, delete: false },
+      dataTools: { view: false, add: false, edit: false, delete: false },
+      resources: { view: false, add: false, edit: false, delete: false },
+      notifications: { view: false, add: false, edit: false, delete: false },
+      trash: { view: false, add: false, edit: false, delete: false },
+      approvalRequests: { view: false, add: false, edit: false, delete: false },
+      settings: { view: false, add: false, edit: false, delete: false },
+      employees: { view: false, add: false, edit: false, delete: false }
     } as UserPermissions,
     attachments: employee.attachments || {
       cv: '',
@@ -117,14 +130,70 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
     reader.readAsDataURL(file);
   };
 
-  const handlePermissionToggle = (key: keyof UserPermissions) => {
+  const handlePermissionToggle = (module: keyof UserPermissions, action: keyof ModulePermissions) => {
     setFormData(prev => ({
       ...prev,
       permissions: {
         ...prev.permissions,
-        [key]: !prev.permissions[key]
+        [module]: {
+          ...prev.permissions[module],
+          [action]: !prev.permissions[module][action]
+        }
       }
     }));
+  };
+
+  const handleModuleToggle = (module: keyof UserPermissions, enabled: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        [module]: enabled ? { view: true, add: true, edit: true, delete: true, upload: true, download: true, approve: true } : { view: false, add: false, edit: false, delete: false, upload: false, download: false, approve: false }
+      }
+    }));
+  };
+
+  const handleRehire = () => {
+    if (!formData.endingDate) return;
+    
+    const newHistory = [
+      ...formData.employmentHistory,
+      {
+        joiningDate: formData.joiningDate,
+        endingDate: formData.endingDate,
+        remarks: formData.remarks
+      }
+    ];
+
+    setFormData(prev => ({
+      ...prev,
+      joiningDate: new Date().toISOString().split('T')[0],
+      endingDate: '',
+      remarks: `Rehired on ${new Date().toLocaleDateString()}`,
+      employmentHistory: newHistory
+    }));
+  };
+
+  const generateEmployeeId = async (joiningDate: string) => {
+    if (!joiningDate) return;
+    
+    const dateStr = joiningDate.replace(/-/g, ''); // YYYYMMDD
+    const prefix = `EMP-${dateStr}-`;
+    
+    try {
+      const q = query(
+        collection(db, 'users'), 
+        where('employeeId', '>=', prefix),
+        where('employeeId', '<=', prefix + '\uf8ff')
+      );
+      const snapshot = await getDocs(q);
+      const count = snapshot.size + 1;
+      const newId = `${prefix}${count.toString().padStart(3, '0')}`;
+      
+      setFormData(prev => ({ ...prev, employeeId: newId }));
+    } catch (error) {
+      console.error("Error generating Employee ID:", error);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -134,7 +203,38 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
     setIsSaving(true);
     setError(null);
 
+    // Restriction: Only admin can add/edit employees with gmail address
+    const isSystemAdmin = currentUser.role === 'Admin' || currentUser.email === 'irfanbcom2009@gmail.com';
+    
+    if (formData.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
+      setError("Only administrators can manage records with @gmail.com addresses.");
+      setIsSaving(false);
+      return;
+    }
+
     try {
+      // Check for unique Employee ID if changed
+      if (formData.employeeId !== employee.employeeId) {
+        const idQuery = query(collection(db, 'users'), where('employeeId', '==', formData.employeeId));
+        const idSnapshot = await getDocs(idQuery);
+        if (!idSnapshot.empty) {
+          setError("Employee ID already exists. Please use a unique ID.");
+          setIsSaving(false);
+          return;
+        }
+      }
+
+      // Check for unique CNIC if changed
+      if (formData.cnic && formData.cnic !== employee.cnic) {
+        const cnicQuery = query(collection(db, 'users'), where('cnic', '==', formData.cnic));
+        const cnicSnapshot = await getDocs(cnicQuery);
+        if (!cnicSnapshot.empty) {
+          setError("CNIC already exists in the directory.");
+          setIsSaving(false);
+          return;
+        }
+      }
+
       if (!employee.id) {
         throw new Error("Employee ID is missing. Cannot update record.");
       }
@@ -147,7 +247,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
       setTimeout(() => {
         setIsSaved(false);
         onClose();
-      }, 2000);
+      }, 500);
     } catch (err: any) {
       console.error("Error updating employee:", err);
       let message = "Failed to save changes. Please try again.";
@@ -190,13 +290,36 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
           <div className="grid grid-cols-1 gap-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Employee ID</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center">
+                    Employee ID
+                    <HelpIcon policyTitle="Employee ID Policy" />
+                  </label>
+                  <button 
+                    type="button"
+                    onClick={() => generateEmployeeId(formData.joiningDate)}
+                    className="text-[8px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider flex items-center gap-1"
+                  >
+                    <RefreshCw size={8} />
+                    Regenerate
+                  </button>
+                </div>
                 <input 
                   required
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                   value={formData.employeeId}
                   onChange={e => setFormData(prev => ({ ...prev, employeeId: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Profile Photo URL</label>
+                <input 
+                  type="text"
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={formData.photoURL}
+                  onChange={e => setFormData(prev => ({ ...prev, photoURL: e.target.value }))}
+                  placeholder="https://example.com/photo.jpg"
                 />
               </div>
               <div className="space-y-1">
@@ -275,6 +398,34 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
               />
             </div>
             <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Portal Access</label>
+              <div className="flex items-center gap-3 h-[42px]">
+                <button
+                  type="button"
+                  disabled={!check('employees', 'edit')}
+                  onClick={() => setFormData(prev => ({ ...prev, portalEnabled: !prev.portalEnabled }))}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                    formData.portalEnabled ? "bg-indigo-600" : "bg-slate-200",
+                    !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                      formData.portalEnabled ? "translate-x-6" : "translate-x-1"
+                    )}
+                  />
+                </button>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  {formData.portalEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+                {!check('employees', 'edit') && (
+                  <span className="text-[10px] text-rose-500 font-bold uppercase tracking-tight">Admin Only</span>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Qualification</label>
               <input 
                 type="text"
@@ -313,12 +464,25 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
             </div>
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ending Date</label>
-              <input 
-                type="date"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.endingDate}
-                onChange={e => setFormData(prev => ({ ...prev, endingDate: e.target.value }))}
-              />
+              <div className="flex gap-2">
+                <input 
+                  type="date"
+                  className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={formData.endingDate}
+                  onChange={e => setFormData(prev => ({ ...prev, endingDate: e.target.value }))}
+                />
+                {formData.endingDate && (
+                  <button
+                    type="button"
+                    onClick={handleRehire}
+                    className="px-3 py-2 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-emerald-100 transition-all flex items-center gap-1"
+                    title="Rehire Employee"
+                  >
+                    <RefreshCw size={14} />
+                    Rehire
+                  </button>
+                )}
+              </div>
             </div>
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gender</label>
@@ -458,35 +622,119 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, on
           </div>
         </div>
 
+        {/* Employment History Section */}
+        {formData.employmentHistory.length > 0 && (
+          <div className="space-y-4 md:col-span-2 pt-6 border-t border-slate-100">
+            <h3 className="text-sm font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-2">
+              <Clock size={16} />
+              Employment History
+            </h3>
+            <div className="space-y-2">
+              {formData.employmentHistory.map((period, idx) => (
+                <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                  <div className="flex items-center gap-4">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Joined</span>
+                      <span className="font-bold text-slate-700">{period.joiningDate}</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Left</span>
+                      <span className="font-bold text-slate-700">{period.endingDate || 'Present'}</span>
+                    </div>
+                  </div>
+                  {period.remarks && (
+                    <div className="flex-1 ml-8 text-slate-500 italic truncate max-w-md">
+                      {period.remarks}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Permissions Section */}
         <div className="space-y-4 md:col-span-2 pt-6 border-t border-slate-100">
-          <h3 className="text-sm font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-2">
-            <ShieldCheck size={16} />
-            Feature Permissions
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 bg-slate-50 p-6 rounded-2xl border border-slate-200">
-            {Object.entries(formData.permissions).map(([key, value]) => (
-              <label key={key} className="flex items-center gap-3 cursor-pointer group">
-                <div className="relative flex items-center">
-                  <input 
-                    type="checkbox"
-                    className="sr-only"
-                    checked={value}
-                    onChange={() => handlePermissionToggle(key as keyof UserPermissions)}
-                  />
-                  <div className={cn(
-                    "w-10 h-6 rounded-full transition-all duration-200",
-                    value ? "bg-indigo-600" : "bg-slate-300"
-                  )} />
-                  <div className={cn(
-                    "absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-all duration-200",
-                    value ? "translate-x-4" : "translate-x-0"
-                  )} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-2">
+              <ShieldCheck size={16} />
+              Module Permissions
+            </h3>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const allFull = Object.keys(formData.permissions).reduce((acc, key) => ({
+                    ...acc,
+                    [key]: { view: true, add: true, edit: true, delete: true, upload: true, download: true, approve: true }
+                  }), {} as UserPermissions);
+                  setFormData(prev => ({ ...prev, permissions: allFull }));
+                }}
+                className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+              >
+                Grant All
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const allNone = Object.keys(formData.permissions).reduce((acc, key) => ({
+                    ...acc,
+                    [key]: { view: false, add: false, edit: false, delete: false, upload: false, download: false, approve: false }
+                  }), {} as UserPermissions);
+                  setFormData(prev => ({ ...prev, permissions: allNone }));
+                }}
+                className="text-[10px] font-bold text-rose-600 hover:text-rose-700 uppercase tracking-wider"
+              >
+                Revoke All
+              </button>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(formData.permissions).map(([module, actions]) => (
+              <div key={module} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                    {module.replace(/([A-Z])/g, ' $1').trim()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const isAllEnabled = Object.values(actions).every(v => v === true);
+                      handleModuleToggle(module as keyof UserPermissions, !isAllEnabled);
+                    }}
+                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-tight"
+                  >
+                    Toggle All
+                  </button>
                 </div>
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider group-hover:text-indigo-600 transition-colors">
-                  {key.replace(/([A-Z])/g, ' $1').trim()}
-                </span>
-              </label>
+                <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                  {Object.entries(actions).map(([action, value]) => (
+                    <label key={action} className="flex items-center gap-2 cursor-pointer group">
+                      <div className="relative flex items-center">
+                        <input 
+                          type="checkbox"
+                          className="sr-only"
+                          checked={value as boolean}
+                          onChange={() => handlePermissionToggle(module as keyof UserPermissions, action as keyof ModulePermissions)}
+                        />
+                        <div className={cn(
+                          "w-8 h-4 rounded-full transition-all duration-200",
+                          value ? "bg-indigo-600" : "bg-slate-300"
+                        )} />
+                        <div className={cn(
+                          "absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full transition-all duration-200",
+                          value ? "translate-x-4" : "translate-x-0"
+                        )} />
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight group-hover:text-indigo-600 transition-colors">
+                        {action}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </div>

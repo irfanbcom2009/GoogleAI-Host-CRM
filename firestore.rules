@@ -44,7 +44,7 @@
 //   - title: string (required)
 //   - category: string
 //   - subCategory: string
-//   - scope: string
+//   - scope: list of strings
 //   - apcAmount: number
 //   - editorEmail: string
 //   - credentials: map { email, password, loginLink }
@@ -91,6 +91,7 @@
 //   - email: string (required, email format)
 //   - role: string (Admin, Manager, Employee, Client)
 //   - points: number
+//   - photoURL: string
 //
 // Collection: google_scholar_history
 // Document ID: auto-generated
@@ -164,20 +165,69 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isSelfUpdateSafe() {
+      let affectedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return !affectedKeys.hasAny(['role', 'permissions', 'points', 'portalEnabled', 'email']);
+    }
+
+    function isValidUser(data) {
+      return (data.name is string && data.name.size() < 100) &&
+             (data.email is string && isValidEmail(data.email)) &&
+             (data.role in ['Admin', 'Manager', 'Employee', 'Client']) &&
+             (!('points' in data) || data.points is number) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 1000));
+    }
+
+    function isValidJournal(data) {
+      return data.title is string && data.title.size() < 200 &&
+             data.clientId is string &&
+             (!('category' in data) || (data.category is string && data.category.size() < 100)) &&
+             (!('status' in data) || data.status in ['complete', 'pending_issn']);
+    }
+
+    function isValidDomain(data) {
+      return data.domainName is string && data.domainName.size() < 255 &&
+             data.clientId is string &&
+             (!('status' in data) || data.status in ['active', 'expiring_soon', 'expired']);
+    }
+
+    function getUserData() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data : { role: 'Guest', permissions: {} };
+    }
+
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin' ||
-          (request.auth.token.email == "irfanbcom2009@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        request.auth.token.email == "irfanbcom2009@gmail.com" ||
+        getUserData().role == 'Admin'
+      );
     }
 
     function isManager() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Manager' || isAdmin());
+      return isAuthenticated() && (
+        isAdmin() ||
+        getUserData().role == 'Manager'
+      );
     }
 
     function isEmployee() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Employee' || isManager());
+      return isAuthenticated() && (
+        isManager() ||
+        getUserData().role == 'Employee'
+      );
+    }
+
+    function hasPermission(module, action) {
+      return isAuthenticated() && (
+        isAdmin() || 
+        (getUserData().permissions != null && 
+         getUserData().permissions[module] != null && 
+         getUserData().permissions[module][action] == true)
+      );
+    }
+
+    function isClient() {
+      return isAuthenticated() && getUserData().role == 'Client';
     }
 
     function hasRequiredFields(fields) {
@@ -193,98 +243,133 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow update: if isAuthenticated() && (isAdmin() || (isEmployee() && resource.data.role == 'Client') || (isOwner(userId) && request.resource.data.role == resource.data.role));
-      allow delete: if isAdmin() || (isEmployee() && resource.data.role == 'Client');
+      allow read: if isAuthenticated() || (resource.data.role in ['Employee', 'Manager', 'Admin']);
+      allow create: if hasPermission('employees', 'add') && isValidUser(request.resource.data);
+      allow update: if isAdmin() || 
+                    (hasPermission('employees', 'edit') && isValidUser(request.resource.data)) || 
+                    (isOwner(userId) && isSelfUpdateSafe() && isValidUser(request.resource.data));
+      allow delete: if hasPermission('employees', 'delete');
     }
 
     match /clients/{clientId} {
-      allow read: if isAuthenticated() && (isEmployee() || resource.data.email == request.auth.token.email);
-      allow write: if isEmployee();
+      allow read: if hasPermission('clients', 'view') || isOwner(clientId);
+      allow create: if hasPermission('clients', 'add');
+      allow update: if hasPermission('clients', 'edit') || isOwner(clientId);
+      allow delete: if hasPermission('clients', 'delete');
     }
 
     match /domains/{domainId} {
       allow read: if true;
-      allow write: if isEmployee();
+      allow create: if hasPermission('domains', 'add') && isValidDomain(request.resource.data);
+      allow update: if hasPermission('domains', 'edit') && isValidDomain(request.resource.data);
+      allow delete: if hasPermission('domains', 'delete');
     }
 
     match /domain_transfer_requests/{requestId} {
-      allow read: if isAuthenticated() && (isEmployee() || resource.data.clientId == request.auth.uid);
-      allow create: if isAuthenticated() && (isEmployee() || request.resource.data.clientId == request.auth.uid);
-      allow update, delete: if isEmployee();
+      allow read: if hasPermission('domains', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('domains', 'add') || (isAuthenticated() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('domains', 'edit');
+      allow delete: if hasPermission('domains', 'delete');
     }
 
     match /journals/{journalId} {
       allow read: if true;
-      allow write: if isEmployee();
+      allow create: if hasPermission('journals', 'add') && isValidJournal(request.resource.data);
+      allow update: if hasPermission('journals', 'edit') && isValidJournal(request.resource.data);
+      allow delete: if hasPermission('journals', 'delete');
     }
 
     match /article_submissions/{submissionId} {
-      allow read: if isAdmin() || isManager() || 
-                    (isEmployee() && get(/databases/$(database)/documents/journals/$(resource.data.journalId)).data.assignedEmployeeId == request.auth.uid) || 
+      allow read: if hasPermission('journals', 'view') || 
+                    (isEmployee() && getUserData().permissions.journals.view == true && get(/databases/$(database)/documents/journals/$(resource.data.journalId)).data.assignedEmployeeId == request.auth.uid) || 
                     resource.data.clientId == request.auth.uid;
-      allow write: if isEmployee();
+      allow create: if hasPermission('journals', 'add') || (isClient() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('journals', 'edit') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow delete: if hasPermission('journals', 'delete');
     }
 
     match /issn_requests/{requestId} {
       allow read: if true;
-      allow write: if isEmployee();
+      allow create: if hasPermission('issnRequests', 'add') || (isClient() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('issnRequests', 'edit');
+      allow delete: if hasPermission('issnRequests', 'delete');
     }
 
     match /tasks/{taskId} {
-      allow read: if isEmployee() || (isAuthenticated() && resource.data.clientId == request.auth.uid && resource.data.isClientVisible == true);
-      allow write: if isEmployee();
+      allow read: if hasPermission('tasks', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid && resource.data.isClientVisible == true) || (isEmployee() && resource.data.assignedTo == request.auth.uid);
+      allow create: if hasPermission('tasks', 'add');
+      allow update: if hasPermission('tasks', 'edit') || (isEmployee() && resource.data.assignedTo == request.auth.uid);
+      allow delete: if hasPermission('tasks', 'delete');
     }
 
     match /publishers/{publisherId} {
-      allow read: if isEmployee();
-      allow write: if isEmployee();
+      allow read: if isAuthenticated();
+      allow create: if hasPermission('publishers', 'add') || (isClient() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('publishers', 'edit') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow delete: if hasPermission('publishers', 'delete');
     }
 
     match /hec_entries/{entryId} {
-      allow read: if isEmployee();
-      allow write: if isEmployee();
+      allow read: if hasPermission('hecApplications', 'view');
+      allow create: if hasPermission('hecApplications', 'add');
+      allow update: if hasPermission('hecApplications', 'edit');
+      allow delete: if hasPermission('hecApplications', 'delete');
     }
 
     match /invoices/{invoiceId} {
-      allow read: if isEmployee() || (isAuthenticated() && resource.data.clientId == request.auth.uid);
-      allow write: if isEmployee();
+      allow read: if hasPermission('invoices', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('invoices', 'add');
+      allow update: if hasPermission('invoices', 'edit');
+      allow delete: if hasPermission('invoices', 'delete');
     }
 
     match /trash/{itemId} {
-      allow read: if isAdmin();
-      allow write: if isEmployee();
+      allow read: if hasPermission('trash', 'view');
+      allow create: if hasPermission('trash', 'add');
+      allow update: if hasPermission('trash', 'edit');
+      allow delete: if hasPermission('trash', 'delete');
     }
 
     match /notifications/{notifId} {
-      allow read: if isAuthenticated();
-      allow write: if isEmployee();
+      allow read: if isAuthenticated() && (isEmployee() || resource.data.userId == request.auth.uid);
+      allow create: if hasPermission('notifications', 'add');
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow delete: if hasPermission('notifications', 'delete');
     }
 
     match /folders/{folderId} {
-      allow read: if isAuthenticated();
-      allow write: if isEmployee();
+      allow read: if hasPermission('resources', 'view') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('resources', 'add') || (isClient() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('resources', 'edit') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow delete: if hasPermission('resources', 'delete') || (isClient() && resource.data.clientId == request.auth.uid);
     }
 
     match /files/{fileId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if hasPermission('resources', 'view') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('resources', 'upload') || (isClient() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('resources', 'edit') || (isClient() && resource.data.clientId == request.auth.uid);
+      allow delete: if hasPermission('resources', 'delete') || (isClient() && resource.data.clientId == request.auth.uid);
     }
 
     match /file_requests/{requestId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if hasPermission('resources', 'delete');
     }
 
     match /indexing_agencies/{agencyId} {
-      allow read: if isAuthenticated();
-      allow write: if isEmployee();
+      allow read: if true;
+      allow create: if hasPermission('indexingAgencies', 'add');
+      allow update: if hasPermission('indexingAgencies', 'edit');
+      allow delete: if hasPermission('indexingAgencies', 'delete');
     }
 
     match /journal_indexing/{indexingId} {
-      allow read: if isAuthenticated();
-      allow write: if isEmployee();
+      allow read: if hasPermission('indexingAgencies', 'view');
+      allow create: if hasPermission('indexingAgencies', 'add');
+      allow update: if hasPermission('indexingAgencies', 'edit');
+      allow delete: if hasPermission('indexingAgencies', 'delete');
     }
 
     match /chats/{clientId} {
@@ -299,50 +384,108 @@ service cloud.firestore {
     }
 
     match /expenses/{expenseId} {
-      allow read: if isEmployee();
-      allow write: if isEmployee();
+      allow read: if hasPermission('expenses', 'view');
+      allow create: if hasPermission('expenses', 'add');
+      allow update: if hasPermission('expenses', 'edit');
+      allow delete: if hasPermission('expenses', 'delete');
     }
 
     match /settings/{settingId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if true;
+      allow write: if hasPermission('settings', 'edit');
     }
 
     match /doi_records/{doiId} {
-      allow read: if isAuthenticated() && (isEmployee() || resource.data.clientId == request.auth.uid);
-      allow create: if isAuthenticated() && (isEmployee() || request.resource.data.clientId == request.auth.uid);
-      allow update, delete: if isEmployee();
+      allow read: if hasPermission('doiManagement', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('doiManagement', 'add') || (isAuthenticated() && request.resource.data.clientId == request.auth.uid);
+      allow update: if hasPermission('doiManagement', 'edit');
+      allow delete: if hasPermission('doiManagement', 'delete');
     }
 
     match /doi_payments/{paymentId} {
-      allow read: if isAuthenticated() && (isEmployee() || resource.data.clientId == request.auth.uid);
-      allow write: if isEmployee();
+      allow read: if hasPermission('doiManagement', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('doiManagement', 'add');
+      allow update: if hasPermission('doiManagement', 'edit');
+      allow delete: if hasPermission('doiManagement', 'delete');
     }
 
     match /google_scholar_history/{historyId} {
-      allow read: if isAuthenticated();
-      allow write: if isEmployee();
+      allow read: if hasPermission('journals', 'view');
+      allow create: if hasPermission('journals', 'add');
+      allow update: if hasPermission('journals', 'edit');
+      allow delete: if hasPermission('journals', 'delete');
+    }
+
+    match /catalog/{itemId} {
+      allow read: if true;
+      allow write: if hasPermission('settings', 'edit');
+    }
+
+    match /orders/{orderId} {
+      allow read: if hasPermission('clients', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update: if hasPermission('clients', 'edit');
+      allow delete: if hasPermission('clients', 'delete');
+    }
+
+    match /point_history/{historyId} {
+      allow read: if hasPermission('employees', 'view') || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if hasPermission('employees', 'edit');
+      allow update: if hasPermission('employees', 'edit');
+      allow delete: if hasPermission('employees', 'delete');
+    }
+
+    match /profile_update_requests/{requestId} {
+      allow read: if hasPermission('approvalRequests', 'view') || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if hasPermission('approvalRequests', 'approve');
+      allow delete: if hasPermission('approvalRequests', 'delete');
     }
 
     match /public_orders/{orderId} {
-      allow read: if isEmployee();
+      allow read: if hasPermission('clients', 'view');
       allow create: if true;
-      allow update, delete: if isEmployee();
+      allow update, delete: if hasPermission('clients', 'edit');
     }
 
     match /activity_logs/{logId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if hasPermission('settings', 'view') || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated();
     }
 
     match /journal_activities/{activityId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if hasPermission('journals', 'view');
+      allow create: if isAuthenticated();
     }
 
     match /policies/{policyId} {
       allow read: if true;
-      allow write: if isManager();
+      allow write: if hasPermission('settings', 'edit');
+    }
+
+    match /hec_categories/{categoryId} {
+      allow read: if true;
+      allow write: if hasPermission('hecApplications', 'edit');
+    }
+
+    match /registration_requests/{requestId} {
+      allow read: if hasPermission('approvalRequests', 'view');
+      allow create: if true;
+      allow update: if hasPermission('approvalRequests', 'approve');
+      allow delete: if hasPermission('approvalRequests', 'delete');
+    }
+
+    match /access_logs/{logId} {
+      allow read: if hasPermission('settings', 'view');
+      allow create: if true;
+      allow update, delete: if hasPermission('settings', 'delete');
+    }
+
+    match /payments/{paymentId} {
+      allow read: if hasPermission('invoices', 'view') || (isAuthenticated() && resource.data.clientId == request.auth.uid);
+      allow create: if hasPermission('invoices', 'edit');
+      allow update: if hasPermission('invoices', 'edit');
+      allow delete: if hasPermission('invoices', 'delete');
     }
 
     // Default deny

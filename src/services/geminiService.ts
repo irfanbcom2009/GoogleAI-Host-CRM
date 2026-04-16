@@ -4,11 +4,12 @@ import { GoogleGenAI } from "@google/genai";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export const geminiService = {
-  async suggestJournalCategory(title: string, scope?: string) {
+  async suggestJournalCategory(title: string, scope?: string | string[]) {
     try {
+      const scopeStr = Array.isArray(scope) ? scope.join(', ') : (scope || 'N/A');
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Based on the journal title "${title}" and scope "${scope || 'N/A'}", suggest a primary category and a sub-category. 
+        contents: `Based on the journal title "${title}" and scope "${scopeStr}", suggest a primary category and a sub-category. 
         Return only a JSON object with "category" and "subCategory" fields.`,
       });
       
@@ -115,6 +116,19 @@ export const geminiService = {
     } catch (error) {
       console.error("AI Journal Health Error:", error);
       return null;
+    }
+  },
+
+  async generateText(prompt: string) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+      });
+      return (response.text || "").trim();
+    } catch (error) {
+      console.error("AI Text Generation Error:", error);
+      throw error;
     }
   }
 };

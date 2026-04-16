@@ -15,11 +15,12 @@ import {
   BookOpen
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { IndexingAgency } from '../types';
+import { IndexingAgency, User } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, query, orderBy } from 'firebase/firestore';
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
+import { usePermissions } from '../hooks/usePermissions';
 
 const RESPONSE_TIME_OPTIONS = [
   '1 Week',
@@ -29,7 +30,12 @@ const RESPONSE_TIME_OPTIONS = [
   'Not Known'
 ];
 
-export const IndexingAgencies: React.FC = () => {
+interface IndexingAgenciesProps {
+  currentUser: User;
+}
+
+export const IndexingAgencies: React.FC<IndexingAgenciesProps> = ({ currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [agencies, setAgencies] = useState<IndexingAgency[]>([]);
   const [indexingCounts, setIndexingCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -134,27 +140,86 @@ export const IndexingAgencies: React.FC = () => {
     <div className="p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Indexing Agencies</h2>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
+            Indexing Agencies
+            <span className="text-sm font-bold px-3 py-1 bg-indigo-100 text-indigo-600 rounded-full">
+              {agencies.length}
+            </span>
+          </h2>
           <p className="text-slate-500 mt-1">Manage global indexing agencies available for journals.</p>
         </div>
-        <button 
-          onClick={() => {
-            setEditingAgency(null);
-            setNewAgency({
-              name: '',
-              logoUrl: '',
-              searchLink: '',
-              submissionLink: '',
-              country: '',
-              responseTime: ''
-            });
-            setIsModalOpen(true);
-          }}
-          className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+          {check('indexingAgencies', 'add') && (
+            <button 
+              onClick={() => {
+                setEditingAgency(null);
+                setNewAgency({
+                  name: '',
+                  logoUrl: '',
+                  searchLink: '',
+                  submissionLink: '',
+                  country: '',
+                  responseTime: ''
+                });
+                setIsModalOpen(true);
+              }}
+              className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            >
+              <Plus size={20} />
+              Add Agency
+            </button>
+          )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"
         >
-          <Plus size={20} />
-          Add Agency
-        </button>
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-indigo-600 text-white rounded-xl">
+              <Building2 size={24} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-500">Total Agencies</p>
+              <h3 className="text-2xl font-bold text-slate-900">{agencies.length}</h3>
+            </div>
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"
+        >
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-emerald-600 text-white rounded-xl">
+              <BookOpen size={24} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-500">Total Indexed Journals</p>
+              <h3 className="text-2xl font-bold text-slate-900">
+                {Object.values(indexingCounts).reduce((a, b) => a + b, 0)}
+              </h3>
+            </div>
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm"
+        >
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-amber-600 text-white rounded-xl">
+              <Globe size={24} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-500">Countries Covered</p>
+              <h3 className="text-2xl font-bold text-slate-900">{countries.length}</h3>
+            </div>
+          </div>
+        </motion.div>
       </div>
 
       <div className="flex flex-col md:flex-row gap-4">
@@ -199,7 +264,7 @@ export const IndexingAgencies: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -212,9 +277,10 @@ export const IndexingAgencies: React.FC = () => {
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
-                  <th className="px-6 py-4">Agency</th>
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
+                  <th className="px-6 py-4 w-12 text-center">#</th>
+                  <th className="px-6 py-4">Agency ({filteredAgencies.length})</th>
                   <th className="px-6 py-4">Indexed Journals</th>
                   <th className="px-6 py-4">Country</th>
                   <th className="px-6 py-4">Response Time</th>
@@ -225,7 +291,7 @@ export const IndexingAgencies: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <AnimatePresence mode="popLayout">
-                  {filteredAgencies.map((agency) => (
+                  {filteredAgencies.map((agency, index) => (
                     <motion.tr 
                       layout
                       key={agency.id}
@@ -234,6 +300,9 @@ export const IndexingAgencies: React.FC = () => {
                       exit={{ opacity: 0 }}
                       className="hover:bg-slate-50/50 transition-all group"
                     >
+                      <td className="px-6 py-4 text-center text-xs font-bold text-slate-400">
+                        {index + 1}
+                      </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden shrink-0">
@@ -293,29 +362,33 @@ export const IndexingAgencies: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                          <button 
-                            onClick={() => {
-                              setEditingAgency(agency);
-                              setNewAgency({
-                                name: agency.name,
-                                logoUrl: agency.logoUrl,
-                                searchLink: agency.searchLink,
-                                submissionLink: agency.submissionLink,
-                                country: agency.country,
-                                responseTime: agency.responseTime
-                              });
-                              setIsModalOpen(true);
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                          >
-                            <Edit size={16} />
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteAgency(agency.id)}
-                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {check('indexingAgencies', 'edit') && (
+                            <button 
+                              onClick={() => {
+                                setEditingAgency(agency);
+                                setNewAgency({
+                                  name: agency.name,
+                                  logoUrl: agency.logoUrl,
+                                  searchLink: agency.searchLink,
+                                  submissionLink: agency.submissionLink,
+                                  country: agency.country,
+                                  responseTime: agency.responseTime
+                                });
+                                setIsModalOpen(true);
+                              }}
+                              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                            >
+                              <Edit size={16} />
+                            </button>
+                          )}
+                          {check('indexingAgencies', 'delete') && (
+                            <button 
+                              onClick={() => handleDeleteAgency(agency.id)}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>

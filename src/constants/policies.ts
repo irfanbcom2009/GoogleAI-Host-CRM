@@ -129,5 +129,32 @@ export const HANDBOOK_CONTENT: HandbookSection[] = [
     title: '14. Remote Work Policy',
     icon: Globe,
     content: 'Remote employees must maintain a stable internet connection and be available on official communication channels (Slack/WhatsApp) during their shift. Time tracking via the CRM is mandatory.'
+  },
+  {
+    id: 'system-logic',
+    title: '15. System Logic & Access Control',
+    icon: ShieldCheck,
+    subsections: [
+      {
+        title: '15.1 Employee Hiring & Rehiring',
+        content: '• Hiring: New employees are registered with a unique ID (EMP-YYYYMMDD-XXX).\n• Rehiring: Previous records are NEVER deleted. On rehire, the previous joining/ending dates are moved to Employment History, and a new Joining Date is set. This ensures a complete audit trail of employment cycles.'
+      },
+      {
+        title: '15.2 Portal Access Rules',
+        content: '• Access is restricted to authorized Google accounts only.\n• Self-registration is disabled. Users must be added by an Admin.\n• Portal Access Toggle: Admins can enable/disable access. Disabled users are immediately logged out and cannot re-login.'
+      },
+      {
+        title: '15.3 Domain Management Logic',
+        content: '• Client View: Clients only see domains assigned to them.\n• Assignment: Domains can only be assigned to one client at a time.\n• Transfers: When a domain is transferred, the system records the previous owner, new owner, and transfer date in the Ownership History log.'
+      },
+      {
+        title: '15.4 Role-Based Permissions',
+        content: '• Admin: Full access, including managing employees, portal access, and system settings.\n• Manager: Can manage clients, domains, and journals, but cannot delete verified records or manage other admins.\n• Employee: Can view and edit assigned records based on specific feature permissions.\n• Client: View-only access to their own journals, domains, and invoices.'
+      },
+      {
+        title: '15.5 Audit & Activity Logs',
+        content: 'The system maintains detailed logs for:\n• Employee status and role changes.\n• Domain ownership transfers.\n• Portal access modifications.\n• Unauthorized login attempts.'
+      }
+    ]
   }
 ];

@@ -29,7 +29,7 @@ import {
 interface MergeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  type: 'clients' | 'journals' | 'domains';
+  type: 'clients' | 'journals' | 'domains' | 'employees';
   initialSourceItem?: any;
   onSuccess?: () => void;
 }
@@ -62,10 +62,10 @@ export const MergeModal: React.FC<MergeModalProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const collectionName = type === 'clients' ? 'users' : type;
+      const collectionName = (type === 'clients' || type === 'employees') ? 'users' : type;
       const q = query(
         collection(db, collectionName),
-        where(type === 'clients' ? 'role' : 'status', '!=', 'deleted') // Basic filter
+        where(type === 'clients' ? 'role' : (type === 'employees' ? 'role' : 'status'), '!=', 'deleted') // Basic filter
       );
       
       const snapshot = await getDocs(q);
@@ -73,10 +73,11 @@ export const MergeModal: React.FC<MergeModalProps> = ({
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter((item: any) => {
           if (type === 'clients' && item.role !== 'Client') return false;
+          if (type === 'employees' && !['Employee', 'Manager'].includes(item.role)) return false;
           if (sourceItem && item.id === sourceItem.id) return false;
           
           const searchLower = searchQuery.toLowerCase();
-          if (type === 'clients') {
+          if (type === 'clients' || type === 'employees') {
             return item.name?.toLowerCase().includes(searchLower) || item.email?.toLowerCase().includes(searchLower);
           } else if (type === 'journals') {
             return item.title?.toLowerCase().includes(searchLower) || item.issnPrint?.includes(searchQuery);
@@ -138,6 +139,28 @@ export const MergeModal: React.FC<MergeModalProps> = ({
         // Delete Source Client
         batch.delete(doc(db, 'users', sourceItem.id));
       } 
+      else if (type === 'employees') {
+        // Transfer Tasks
+        const tasksQ = query(collection(db, 'tasks'), where('assignedTo', '==', sourceItem.id));
+        const tasksSnap = await getDocs(tasksQ);
+        tasksSnap.forEach(d => {
+          batch.update(d.ref, { assignedTo: targetItem.id });
+        });
+
+        // Transfer Journal Assignments
+        const journalsQ = query(collection(db, 'journals'), where('assignedEmployeeId', '==', sourceItem.id));
+        const journalsSnap = await getDocs(journalsQ);
+        journalsSnap.forEach(d => {
+          batch.update(d.ref, { assignedEmployeeId: targetItem.id });
+        });
+
+        // Merge Points
+        const totalPoints = (targetItem.points || 0) + (sourceItem.points || 0);
+        batch.update(doc(db, 'users', targetItem.id), { points: totalPoints });
+
+        // Delete Source Employee
+        batch.delete(doc(db, 'users', sourceItem.id));
+      }
       else if (type === 'journals') {
         // Transfer Tasks
         const tasksQ = query(collection(db, 'tasks'), where('journalId', '==', sourceItem.id));
@@ -187,9 +210,9 @@ export const MergeModal: React.FC<MergeModalProps> = ({
   };
 
   const renderItemCard = (item: any, isTarget: boolean = false) => {
-    const Icon = type === 'clients' ? User : type === 'journals' ? BookOpen : Globe;
-    const name = type === 'clients' ? item.name : type === 'journals' ? item.title : item.domainName;
-    const sub = type === 'clients' ? item.email : type === 'journals' ? item.issnPrint : item.registrar;
+    const Icon = (type === 'clients' || type === 'employees') ? User : type === 'journals' ? BookOpen : Globe;
+    const name = (type === 'clients' || type === 'employees') ? item.name : type === 'journals' ? item.title : item.domainName;
+    const sub = (type === 'clients' || type === 'employees') ? item.email : type === 'journals' ? item.issnPrint : item.registrar;
 
     return (
       <div className={cn(

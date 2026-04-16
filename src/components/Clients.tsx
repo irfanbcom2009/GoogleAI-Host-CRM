@@ -12,28 +12,24 @@ import {
   Loader2,
   LogIn,
   FileSearch,
-  FileSpreadsheet,
   MessageSquare,
   Edit,
-  Trash2,
-  GitMerge
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Client, ServiceType, User as UserType, Subscription } from '../types';
+import { Client, ServiceType, User as UserType, Subscription, Domain, Journal } from '../types';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, logActivity } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, where, writeBatch } from 'firebase/firestore';
 import { Modal } from './Modal';
-import { Importer } from './Importer';
-import { GoogleSheetImport } from './GoogleSheetImport';
 import { ColumnSelector } from './ColumnSelector';
 import { ConfirmModal } from './ConfirmModal';
-import { BulkAddModal } from './BulkAddModal';
-import { MergeModal } from './MergeModal';
+import { HelpIcon } from './HelpIcon';
 import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ClientDetail } from './ClientDetail';
 import { moveToTrash } from '../lib/firebase';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface ClientsProps {
   searchQuery: string;
@@ -55,23 +51,22 @@ const AVAILABLE_COLUMNS = [
 ];
 
 export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setActiveTab, onImpersonate, onOpenChat }) => {
+  const { check, isClient: isClientRole } = usePermissions(currentUser);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
   const [letterFilter, setLetterFilter] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
-  const [isImporterOpen, setIsImporterOpen] = useState(false);
-  const [isGoogleImportOpen, setIsGoogleImportOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
-  const [isDeletingAll, setIsDeletingAll] = useState(false);
-  const [isDeleteAllConfirmOpen, setIsDeleteAllConfirmOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser?.columnPreferences?.['clients'] || ['info', 'contact', 'subscriptions', 'points', 'status']
   );
+  const [subscriptionFilter, setSubscriptionFilter] = useState<'all' | 'subscribed' | 'external' | 'missing'>('all');
+  const [allDomains, setAllDomains] = useState<Domain[]>([]);
+  const [allJournals, setAllJournals] = useState<Journal[]>([]);
   
   // Form state
   const [newClient, setNewClient] = useState({
@@ -83,6 +78,7 @@ export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setA
     address: '',
     endingDate: '',
     status: 'active' as const,
+    portalEnabled: false,
     subscriptions: [] as Subscription[]
   });
 
@@ -98,6 +94,9 @@ const GENDERS = ['Male', 'Female', 'Other'];
       await updateDoc(doc(db, 'users', client.id), {
         status: newStatus
       });
+      if (currentUser) {
+        logActivity(currentUser.id, currentUser.name, 'CLIENT_STATUS_TOGGLE', `Changed status of ${client.name} to ${newStatus}`);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'clients');
     }
@@ -145,16 +144,29 @@ const GENDERS = ['Male', 'Female', 'Other'];
       setLoading(false);
 
       // Update selected client if it exists to keep detail view in sync
-      if (selectedClient) {
-        const updated = clientData.find(c => c.id === selectedClient.id);
-        if (updated) setSelectedClient(updated);
-      }
+      setSelectedClient(prev => {
+        if (!prev) return null;
+        const updated = clientData.find(c => c.id === prev.id);
+        return updated || null;
+      });
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'clients');
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    const unsubDomains = onSnapshot(collection(db, 'domains'), (snapshot) => {
+      setAllDomains(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain)));
+    });
+
+    const unsubJournals = onSnapshot(collection(db, 'journals'), (snapshot) => {
+      setAllJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal)));
+    });
+
+    return () => {
+      unsubscribe();
+      unsubDomains();
+      unsubJournals();
+    };
   }, [currentUser]);
 
   const handleColumnChange = async (columns: string[]) => {
@@ -175,7 +187,24 @@ const GENDERS = ['Male', 'Female', 'Other'];
                          (client.email?.toLowerCase() || '').includes(searchQuery.toLowerCase());
     const matchesStatus = filterStatus === 'all' || client.status === filterStatus;
     const matchesLetter = !letterFilter || (client.name?.toUpperCase() || '').startsWith(letterFilter);
-    return matchesSearch && matchesStatus && matchesLetter;
+    
+    const clientDomains = allDomains.filter(d => d.clientId === client.id);
+    const clientJournals = allJournals.filter(j => j.clientId === client.id);
+    
+    const hasSubscribedFromUs = clientDomains.some(d => d.isDomainSubscribedFromUs || d.isHostingSubscribedFromUs) ||
+                                clientJournals.some(j => j.isOjsSubscribedFromUs || j.isIssnSubscribedFromUs || j.isHecSubscribedFromUs || j.isDoiSubscribedFromUs);
+                                
+    const hasExternal = clientDomains.some(d => (d.domainName && !d.isDomainSubscribedFromUs) || (d.hostingProvider && !d.isHostingSubscribedFromUs)) ||
+                        clientJournals.some(j => (j.url && !j.isOjsSubscribedFromUs) || ((j.issnOnline || j.issnPrint) && !j.isIssnSubscribedFromUs));
+    
+    const hasNoServices = clientDomains.length === 0 && clientJournals.length === 0;
+
+    const matchesSubscription = subscriptionFilter === 'all' ||
+                                (subscriptionFilter === 'subscribed' && hasSubscribedFromUs) ||
+                                (subscriptionFilter === 'external' && hasExternal) ||
+                                (subscriptionFilter === 'missing' && hasNoServices);
+
+    return matchesSearch && matchesStatus && matchesLetter && matchesSubscription;
   });
 
   const handleAddClient = async (e: React.FormEvent) => {
@@ -186,6 +215,12 @@ const GENDERS = ['Male', 'Female', 'Other'];
       return;
     }
 
+    // Restriction: Only admin can add clients with gmail address
+    if (newClient.email.toLowerCase().endsWith('@gmail.com') && currentUser?.role !== 'Admin') {
+      setError("Only administrators can add clients with @gmail.com addresses.");
+      return;
+    }
+
     try {
       const finalStatus = newClient.endingDate ? 'inactive' : newClient.status;
       const docRef = await addDoc(collection(db, 'users'), {
@@ -193,8 +228,12 @@ const GENDERS = ['Male', 'Female', 'Other'];
         status: finalStatus,
         role: 'Client',
         points: 0,
+        portalEnabled: newClient.portalEnabled ?? false,
         createdAt: serverTimestamp()
       });
+      if (currentUser) {
+        logActivity(currentUser.id, currentUser.name, 'CLIENT_ADD', `Added new client: ${newClient.name}`);
+      }
       console.log('Client added successfully with ID:', docRef.id);
       setIsModalOpen(false);
       setNewClient({
@@ -206,6 +245,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
         address: '',
         endingDate: '',
         status: 'active',
+        portalEnabled: false,
         subscriptions: []
       });
     } catch (error) {
@@ -224,22 +264,11 @@ const GENDERS = ['Male', 'Female', 'Other'];
   const handleDeleteClient = async (client: Client) => {
     try {
       await moveToTrash('users', client.id, client, currentUser?.name || 'Unknown');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'clients');
-    }
-  };
-
-  const handleDeleteAllClients = async () => {
-    setIsDeleteAllConfirmOpen(false);
-    setIsDeletingAll(true);
-    try {
-      for (const client of clients) {
-        await moveToTrash('users', client.id, client, currentUser?.name || 'Unknown');
+      if (currentUser) {
+        logActivity(currentUser.id, currentUser.name, 'CLIENT_DELETE', `Moved client ${client.name} to trash`);
       }
     } catch (error) {
-      console.error('Error deleting all clients:', error);
-    } finally {
-      setIsDeletingAll(false);
+      handleFirestoreError(error, OperationType.DELETE, 'clients');
     }
   };
 
@@ -316,61 +345,25 @@ const GENDERS = ['Male', 'Female', 'Other'];
               onChange={handleColumnChange}
             />
             <button 
-              onClick={() => setIsGoogleImportOpen(true)}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              <FileSpreadsheet size={18} className="text-indigo-600" />
-              Google Sheets
-            </button>
-            <button 
-              onClick={() => setIsImporterOpen(true)}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              <Download size={18} className="text-emerald-600" />
-              Import Excel
-            </button>
-            <button 
               onClick={exportToExcel}
               className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
             >
               <Download size={18} />
               Export Excel
             </button>
-            {currentUser?.role === 'Admin' && (
-              <button 
-                onClick={() => setIsDeleteAllConfirmOpen(true)}
-                disabled={isDeletingAll || clients.length === 0}
-                className="flex items-center gap-2 bg-rose-50 text-rose-600 border border-rose-100 px-5 py-2.5 rounded-xl font-semibold hover:bg-rose-100 transition-all shadow-sm disabled:opacity-50"
-              >
-                <Trash2 size={18} />
-                {isDeletingAll ? 'Deleting...' : 'Delete All'}
-              </button>
-            )}
           </div>
         )}
         {!isClient && (
           <div className="flex gap-3">
-            <button 
-              onClick={() => setIsMergeModalOpen(true)}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              <GitMerge size={20} className="text-indigo-600" />
-              Merge
-            </button>
-            <button 
-              onClick={() => setIsBulkModalOpen(true)}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              <Plus size={20} className="text-indigo-600" />
-              Bulk Add
-            </button>
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-            >
-              <Plus size={20} />
-              Add Client
-            </button>
+            {check('clients', 'add') && (
+              <button 
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              >
+                <Plus size={20} />
+                Add Client
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -378,24 +371,46 @@ const GENDERS = ['Male', 'Female', 'Other'];
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         {!isClient && (
           <div className="p-6 border-b border-slate-100 flex flex-col gap-6 bg-slate-50/30">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="flex bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
-                  {(['all', 'active', 'inactive'] as const).map((status) => (
-                    <button 
-                      key={status}
-                      onClick={() => setFilterStatus(status)}
-                      className={cn(
-                        "px-4 py-1.5 rounded-md text-sm font-medium transition-all capitalize", 
-                        filterStatus === status ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-900"
-                      )}
-                    >
-                      {status}
-                    </button>
-                  ))}
+            <div className="flex flex-wrap items-center justify-between gap-6">
+              <div className="flex flex-wrap items-center gap-6">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Account Status</label>
+                  <div className="flex bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
+                    {(['all', 'active', 'inactive'] as const).map((status) => (
+                      <button 
+                        key={status}
+                        onClick={() => setFilterStatus(status)}
+                        className={cn(
+                          "px-4 py-1.5 rounded-md text-sm font-medium transition-all capitalize", 
+                          filterStatus === status ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        )}
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Subscription Type</label>
+                  <div className="flex bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
+                    {(['all', 'subscribed', 'external', 'missing'] as const).map((sub) => (
+                      <button 
+                        key={sub}
+                        onClick={() => setSubscriptionFilter(sub)}
+                        className={cn(
+                          "px-4 py-1.5 rounded-md text-sm font-medium transition-all capitalize", 
+                          subscriptionFilter === sub ? "bg-indigo-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-900"
+                        )}
+                      >
+                        {sub === 'subscribed' ? 'Subscribed (Us)' : sub === 'external' ? 'External' : sub === 'missing' ? 'No Services' : 'All'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex items-center gap-2 self-end">
                 <ColumnSelector 
                   availableColumns={AVAILABLE_COLUMNS} 
                   selectedColumns={selectedColumns} 
@@ -437,7 +452,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -445,8 +460,8 @@ const GENDERS = ['Male', 'Female', 'Other'];
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('info') && <th className="px-6 py-4">Client Info</th>}
                   {selectedColumns.includes('contact') && <th className="px-6 py-4">Contact</th>}
                   {selectedColumns.includes('subscriptions') && <th className="px-6 py-4">Subscriptions</th>}
@@ -473,8 +488,12 @@ const GENDERS = ['Male', 'Female', 'Other'];
                       {selectedColumns.includes('info') && (
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
-                              {client.name.charAt(0)}
+                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold overflow-hidden">
+                              {client.photoURL ? (
+                                <img src={client.photoURL} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                client.name.charAt(0)
+                              )}
                             </div>
                             <div>
                               <button 
@@ -566,27 +585,31 @@ const GENDERS = ['Male', 'Female', 'Other'];
                           </button>
                           {!isClient && (
                             <>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedClient(client);
-                                  setIsEditMode(true);
-                                }}
-                                className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
-                                title="Edit Client"
-                              >
-                                <Edit size={16} />
-                              </button>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setClientToDelete(client);
-                                }}
-                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                title="Delete Client"
-                              >
-                                <Trash2 size={16} />
-                              </button>
+                              {check('clients', 'edit') && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedClient(client);
+                                    setIsEditMode(true);
+                                  }}
+                                  className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
+                                  title="Edit Client"
+                                >
+                                  <Edit size={16} />
+                                </button>
+                              )}
+                              {check('clients', 'delete') && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setClientToDelete(client);
+                                  }}
+                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                  title="Delete Client"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
                             </>
                           )}
                           <button 
@@ -642,36 +665,18 @@ const GENDERS = ['Male', 'Female', 'Other'];
     </div>
   )}
 
-      {!isClient && (
-        <>
-          <ConfirmModal 
-        isOpen={isDeleteAllConfirmOpen}
-        onClose={() => setIsDeleteAllConfirmOpen(false)}
-        onConfirm={handleDeleteAllClients}
-        title="Delete All Clients"
-        message={`Are you sure you want to delete ALL ${clients.length} clients? This will move them to trash.`}
-        confirmText="Delete All"
-        variant="danger"
-      />
-
-      <BulkAddModal 
-            isOpen={isBulkModalOpen} 
-            onClose={() => setIsBulkModalOpen(false)} 
-            type="clients" 
-          />
-
-          <MergeModal 
-            isOpen={isMergeModalOpen}
-            onClose={() => setIsMergeModalOpen(false)}
-            type="clients"
-          />
-
-          <Modal 
-            isOpen={isModalOpen} 
-            onClose={() => setIsModalOpen(false)} 
-            title="Add New Client"
-          >
+      <Modal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        title="Add New Client"
+      >
             <form onSubmit={handleAddClient} className="space-y-4">
+              {error && (
+                <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-600 animate-in fade-in slide-in-from-top-2">
+                  <XCircle size={20} className="shrink-0" />
+                  <p className="text-sm font-bold">{error}</p>
+                </div>
+              )}
               <div className="grid grid-cols-4 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">Salutation</label>
@@ -687,7 +692,10 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   </select>
                 </div>
                 <div className="col-span-3 space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Full Name</label>
+                  <label className="text-sm font-bold text-slate-700 flex items-center">
+                    Full Name
+                    <HelpIcon policyTitle="Client Registration Policy" />
+                  </label>
                   <input 
                     required
                     type="text" 
@@ -710,7 +718,10 @@ const GENDERS = ['Male', 'Female', 'Other'];
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">Email Address</label>
+                  <label className="text-sm font-bold text-slate-700 flex items-center">
+                    Email Address
+                    <HelpIcon policyTitle="Client Communication Policy" />
+                  </label>
                   <input 
                     required
                     type="email" 
@@ -785,26 +796,6 @@ const GENDERS = ['Male', 'Female', 'Other'];
             </div>
           </form>
         </Modal>
-
-        <Modal
-          isOpen={isGoogleImportOpen}
-          onClose={() => setIsGoogleImportOpen(false)}
-          title="Import Clients from Google Sheets"
-        >
-          <GoogleSheetImport 
-            collectionName="clients" 
-            onClose={() => setIsGoogleImportOpen(false)}
-            onSuccess={() => setIsGoogleImportOpen(false)}
-          />
-        </Modal>
-
-        <Importer 
-          isOpen={isImporterOpen} 
-          onClose={() => setIsImporterOpen(false)} 
-          type="clients" 
-        />
-      </>
-    )}
   </>
 );
 };

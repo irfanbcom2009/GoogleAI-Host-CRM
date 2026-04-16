@@ -28,7 +28,26 @@ export interface JournalIndexing {
 export type ISSNStatus = 'pending' | 'approved' | 'rejected';
 export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed' | 'overdue' | 'cancelled';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type ServiceType = 'Hosting' | 'DOI' | 'ISSN' | 'OJS' | 'Editorial' | 'Indexing' | 'Plagiarism' | 'Domain' | 'Catalog Service';
+export type ServiceType = 
+  | 'Hosting' 
+  | 'DOI' 
+  | 'ISSN' 
+  | 'OJS' 
+  | 'Editorial' 
+  | 'Indexing' 
+  | 'Plagiarism' 
+  | 'Domain' 
+  | 'Catalog Service'
+  | 'Marketing'
+  | 'Call for Papers'
+  | 'Editorial Setup'
+  | 'Reviewer Recruitment'
+  | 'HEC Indexing'
+  | 'DOAJ Indexing'
+  | 'Scopus Indexing'
+  | 'Journal Evaluation'
+  | 'Impact Factor'
+  | 'Site Score';
 
 export interface PricingTier {
   priority: 'Standard' | 'Rush' | 'Express';
@@ -92,6 +111,23 @@ export interface PointHistory {
   createdBy: string;
 }
 
+export interface ProfileUpdateRequest extends AuditFields {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  changes: {
+    [field: string]: {
+      oldValue: any;
+      newValue: any;
+    }
+  };
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: any;
+  rejectionReason?: string;
+}
+
 export interface AuditFields {
   createdBy?: string;
   createdById?: string;
@@ -113,6 +149,7 @@ export interface Subscription {
   domainId?: string;
   domainName?: string;
   invoiceNumber?: string;
+  invoiceId?: string;
   subscriptionType?: 'one-time' | 'annual' | 'monthly';
 }
 
@@ -128,6 +165,7 @@ export interface Client {
   endingDate?: string;
   status: ClientStatus;
   points: number;
+  photoURL?: string;
   subscriptions: Subscription[];
   createdAt: any;
   portalEnabled?: boolean;
@@ -196,6 +234,7 @@ export interface Domain extends AuditFields {
   clientName?: string;
   domainName: string;
   registrar: string;
+  hostingProvider?: string;
   status: DomainStatus;
   expirationDate: string;
   registrationDate?: string;
@@ -211,6 +250,9 @@ export interface Domain extends AuditFields {
   hostingHistory?: HostingMigrationLog[];
   ownershipHistory?: OwnershipHistory[];
   renewalHistory?: DomainRenewal[];
+  isSubscribed?: boolean; // Legacy
+  isDomainSubscribedFromUs?: boolean;
+  isHostingSubscribedFromUs?: boolean;
 }
 
 export interface Journal extends AuditFields {
@@ -234,19 +276,20 @@ export interface Journal extends AuditFields {
   // New metadata fields
   category?: string;
   subCategory?: string;
-  scope?: string;
+  scope?: string[];
   apcAmount?: number;
   editorEmail?: string;
   
   // Enhanced metadata fields
-  databaseType?: 'HEC' | 'ISSN' | 'DOAJ';
-  hecMainCategory?: string;
-  hecSubCategory?: string;
-  hecThirdCategory?: string;
   subjectCategory?: string;
   publisherCountry?: string;
   languages?: string;
   license?: 'CC BY' | 'CC BY-SA' | 'CC BY-ND' | 'CC BY-NC' | 'CC BY-NC-SA' | 'CC BY-NC-ND' | 'CC0' | 'Public Domain' | 'Publisher’s Own License';
+  
+  // HEC Managed Categories
+  hecMainCategoryId?: string;
+  hecSubCategoryId?: string;
+  hecSubjectCategoryId?: string;
   
   // Credentials
   credentials?: {
@@ -258,6 +301,11 @@ export interface Journal extends AuditFields {
   // Assignment
   assignedEmployeeId?: string;
   assignedEmployeeName?: string;
+  isSubscribed?: boolean; // Legacy
+  isOjsSubscribedFromUs?: boolean;
+  isIssnSubscribedFromUs?: boolean;
+  isHecSubscribedFromUs?: boolean;
+  isDoiSubscribedFromUs?: boolean;
 }
 
 export interface GoogleScholarHistory {
@@ -318,6 +366,7 @@ export interface Task {
   description?: string;
   assignedTo: string; // User ID (Employee)
   assignedToName?: string;
+  department?: 'Technical' | 'Accounts' | 'Editorial' | 'General';
   status: TaskStatus;
   priority: TaskPriority;
   points: number;
@@ -352,33 +401,79 @@ export interface GlobalSettings {
   frequencies: string[];
   departments: string[];
   modes: string[];
+  journalScopes?: string[];
   officeSubscriptions?: OfficeSubscription[];
   updatedAt: any;
 }
 
+export interface RegistrationRequest extends AuditFields {
+  id: string;
+  name: string;
+  email: string;
+  organization: string;
+  contactNumber: string;
+  requiredServices: ServiceType[];
+  notes?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
+}
+
+export interface AccessLog {
+  id: string;
+  email: string;
+  timestamp: string;
+  ipAddress?: string;
+  userAgent?: string;
+  status: 'unauthorized' | 'authorized';
+}
+
+export interface ModulePermissions {
+  view: boolean;
+  add: boolean;
+  edit: boolean;
+  delete: boolean;
+  upload?: boolean;
+  download?: boolean;
+  approve?: boolean;
+}
+
 export interface UserPermissions {
-  approvalRequests: boolean;
-  journals: boolean;
-  indexingAgencies: boolean;
-  publishers: boolean;
-  hecApplications: boolean;
-  issnRequests: boolean;
-  doiManagement: boolean;
-  dataTools: boolean;
-  invoices: boolean;
-  expenses: boolean;
-  resources: boolean;
-  notifications: boolean;
-  trash: boolean;
+  clients: ModulePermissions;
+  journals: ModulePermissions;
+  domains: ModulePermissions;
+  issnRequests: ModulePermissions;
+  tasks: ModulePermissions;
+  invoices: ModulePermissions;
+  expenses: ModulePermissions;
+  publishers: ModulePermissions;
+  hecApplications: ModulePermissions;
+  indexingAgencies: ModulePermissions;
+  doiManagement: ModulePermissions;
+  dataTools: ModulePermissions;
+  resources: ModulePermissions;
+  notifications: ModulePermissions;
+  trash: ModulePermissions;
+  approvalRequests: ModulePermissions;
+  settings: ModulePermissions;
+  employees: ModulePermissions;
+  doajApplications: ModulePermissions;
+}
+
+export interface EmploymentPeriod {
+  joiningDate: string;
+  endingDate?: string;
+  remarks?: string;
 }
 
 export interface User {
   id: string;
+  uid?: string;
   salutation?: string;
   name: string;
   email: string;
   role: UserRole;
   points: number;
+  photoURL?: string;
   phone?: string;
   address?: string;
   status?: ClientStatus;
@@ -407,6 +502,7 @@ export interface User {
   remarks?: string;
   endingDate?: string;
   experience?: string;
+  employmentHistory?: EmploymentPeriod[];
   officialMailPassword?: string;
   pcAllotted?: string;
   pcUsername?: string;
@@ -441,6 +537,24 @@ export interface Publisher {
   createdAt: string;
 }
 
+export interface DOAJApplication extends AuditFields {
+  id: string;
+  invoiceNo: string;
+  clientId: string;
+  clientName?: string;
+  journalName: string;
+  journalLink: string;
+  submissionDate: string;
+  doajLoginEmail: string;
+  doajPassword?: string;
+  editorEmailLogin: string;
+  editorPassword?: string;
+  status: 'Pending' | 'Submitted' | 'Under Review' | 'Accepted' | 'Rejected';
+  objectionReason?: string;
+  objectionDate?: string;
+  remarks?: string;
+}
+
 export interface HECEntry extends AuditFields {
   id: string;
   journalId: string;
@@ -461,31 +575,65 @@ export interface HECEntry extends AuditFields {
   expirationDate: string;
 }
 
+export type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'unpaid' | 'partially_paid' | 'paid' | 'overdue' | 'void';
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  clientId: string;
+  amount: number;
+  date: string;
+  method: 'Bank Transfer' | 'Cash' | 'Online' | 'Cheque' | 'Adjustment';
+  reference: string;
+  notes?: string;
+  recordedBy: string;
+  recordedById: string;
+}
+
 export interface InvoiceItem {
+  id: string;
   description: string;
   quantity: number;
-  unitPrice: number;
+  rate: number;
+  taxRate: number; // percentage
+  discountRate: number; // percentage
+  taxAmount: number;
+  discountAmount: number;
   total: number;
+  serviceType?: ServiceType;
+  journalId?: string;
+  domainId?: string;
+}
+
+export interface RecurringDetails {
+  interval: 'monthly' | 'quarterly' | 'annually';
+  startDate: string;
+  endDate?: string;
+  nextGenerationDate: string;
+  isActive: boolean;
 }
 
 export interface Invoice extends AuditFields {
   id: string;
+  invoiceNumber: string;
   clientId: string;
   clientName?: string;
+  issueDate: string;
+  dueDate: string;
   items: InvoiceItem[];
   subtotal: number;
-  tax: number;
+  taxTotal: number;
+  discountTotal: number;
   total: number;
-  status: 'paid' | 'unpaid' | 'overdue';
-  dueDate: string;
-  invoiceNumber?: string;
-  journalId?: string;
-  journalTitle?: string;
-  taskId?: string;
-  taskTitle?: string;
-  date?: string;
-  amount?: number;
+  balance: number;
+  status: InvoiceStatus;
+  billingType: 'one-time' | 'recurring';
+  recurringDetails?: RecurringDetails;
   notes?: string;
+  terms?: string;
+  linkedExpenses?: string[]; // IDs of expenses linked to this invoice
+  journalId?: string; // If the whole invoice is for one journal
+  journalTitle?: string;
 }
 
 export interface Folder {
@@ -602,6 +750,16 @@ export interface DOIPayment {
   createdAt: string;
 }
 
+export type HECCategoryType = 'main' | 'sub' | 'subject';
+
+export interface HECCategory extends AuditFields {
+  id: string;
+  name: string;
+  type: HECCategoryType;
+  parentId: string | null;
+  isActive: boolean;
+}
+
 export interface Stat {
   label: string;
   value: string | number;
@@ -633,12 +791,13 @@ export interface ChatMessage {
   senderRole: UserRole;
   text: string;
   createdAt: string;
-  type: 'text' | 'order';
+  type: 'text' | 'order' | 'file';
   orderData?: {
     serviceType: ServiceType;
     amount: number;
     description: string;
   };
+  fileData?: string;
 }
 
 export interface ChatSession {

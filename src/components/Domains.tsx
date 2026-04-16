@@ -16,25 +16,25 @@ import {
   Shield,
   Key,
   Server,
-  GitMerge
+  GitMerge,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Domain, Client, User } from '../types';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, Timestamp, where, doc, updateDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
-import { BulkAddModal } from './BulkAddModal';
-import { MergeModal } from './MergeModal';
 import { DomainManager } from './DomainManager';
 import { DomainTransferRequests } from './DomainTransferRequests';
 import { ClientDetail } from './ClientDetail';
-
 import { ColumnSelector } from './ColumnSelector';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface DomainsProps {
   searchQuery: string;
   currentUser: User;
+  clientId?: string;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -46,20 +46,26 @@ const AVAILABLE_COLUMNS = [
   { id: 'pricing', label: 'Pricing' },
 ];
 
-export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) => {
+export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clientId }) => {
+  const { check } = usePermissions(currentUser);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser.columnPreferences?.['domains'] || ['domainName', 'client', 'registrar', 'status', 'dates', 'pricing']
   );
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expiring_soon' | 'expired' | 'unassigned'>('all');
+
+  useEffect(() => {
+    if (clientId) {
+      setNewDomain(prev => ({ ...prev, clientId }));
+    }
+  }, [clientId]);
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -84,7 +90,10 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
     registrationDate: '',
     expirationDate: '',
     costPrice: 0,
-    salePrice: 0
+    salePrice: 0,
+    isSubscribed: true,
+    isDomainSubscribedFromUs: true,
+    isHostingSubscribedFromUs: true
   });
 
   const calculateStatus = (expirationDate: string): Domain['status'] => {
@@ -101,7 +110,13 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
   useEffect(() => {
     let q = query(collection(db, 'domains'), orderBy('expirationDate', 'asc'));
     
-    if (!isEmployee) {
+    if (clientId) {
+      q = query(
+        collection(db, 'domains'),
+        where('clientId', '==', clientId),
+        orderBy('expirationDate', 'asc')
+      );
+    } else if (!isEmployee) {
       q = query(
         collection(db, 'domains'), 
         where('clientId', '==', currentUser.id),
@@ -153,17 +168,34 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
 
   const filteredDomains = domains.filter(domain => {
     const client = clients.find(c => c.id === domain.clientId);
-    return (domain.domainName?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-           (client?.name?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+    const matchesSearch = (domain.domainName?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+                         (client?.name?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || 
+                         (statusFilter === 'unassigned' ? !domain.clientId : domain.status === statusFilter);
+    
+    return matchesSearch && matchesStatus;
   });
+
+  const handleDeleteDomain = async (domain: Domain) => {
+    if (!confirm(`Are you sure you want to move "${domain.domainName}" to trash?`)) return;
+    try {
+      await moveToTrash('domains', domain.id, domain, currentUser.name);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'domains');
+    }
+  };
 
   const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Check for uniqueness
-    const isDuplicate = domains.some(d => d.domainName.toLowerCase() === newDomain.domainName.toLowerCase());
-    if (isDuplicate) {
-      alert('This domain name already exists in the system.');
+    const existingDomain = domains.find(d => d.domainName.toLowerCase() === newDomain.domainName.toLowerCase());
+    if (existingDomain) {
+      if (confirm(`Domain "${newDomain.domainName}" is already assigned to another client. Would you like to transfer it instead?`)) {
+        setSelectedDomain(existingDomain);
+        setIsManagerModalOpen(true);
+        setIsModalOpen(false);
+      }
       return;
     }
 
@@ -179,6 +211,7 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
 
       await addDoc(collection(db, 'domains'), {
         ...newDomain,
+        isSubscribed: newDomain.isSubscribed ?? true,
         registrationDate: newDomain.registrationDate ? Timestamp.fromDate(new Date(newDomain.registrationDate)) : null,
         expirationDate: Timestamp.fromDate(new Date(newDomain.expirationDate)),
         ownershipHistory: [ownershipEntry],
@@ -199,7 +232,10 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
         registrationDate: '',
         expirationDate: '',
         costPrice: 0,
-        salePrice: 0
+        salePrice: 0,
+        isSubscribed: true,
+        isDomainSubscribedFromUs: true,
+        isHostingSubscribedFromUs: true
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'domains');
@@ -266,30 +302,35 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
           </button>
           {isEmployee && (
             <>
-              <button 
-                onClick={() => setIsMergeModalOpen(true)}
-                className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-              >
-                <GitMerge size={20} className="text-indigo-600" />
-                Merge
-              </button>
-              <button 
-                onClick={() => setIsBulkModalOpen(true)}
-                className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-              >
-                <Plus size={20} className="text-indigo-600" />
-                Bulk Add
-              </button>
-              <button 
-                onClick={() => setIsModalOpen(true)}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-              >
-                <Plus size={20} />
-                Add New Domain
-              </button>
+              {check('domains', 'add') && (
+                <button 
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                >
+                  <Plus size={20} />
+                  Add New Domain
+                </button>
+              )}
             </>
           )}
         </div>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-2">
+        {(['all', 'active', 'expiring_soon', 'expired', 'unassigned'] as const).map(status => (
+          <button
+            key={status}
+            onClick={() => setStatusFilter(status)}
+            className={cn(
+              "px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap",
+              statusFilter === status 
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-200" 
+                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+            )}
+          >
+            {status.replace('_', ' ')}
+          </button>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -323,7 +364,7 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -331,8 +372,8 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('domainName') && <th className="px-6 py-4">Domain Name</th>}
                   {selectedColumns.includes('client') && <th className="px-6 py-4">Client</th>}
                   {selectedColumns.includes('registrar') && <th className="px-6 py-4">Registrar</th>}
@@ -378,11 +419,14 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
                                 const client = clients.find(c => c.id === domain.clientId);
                                 if (client) setViewingClient(client);
                               }}
-                              className="text-sm font-medium text-slate-700 hover:text-indigo-600 hover:underline text-left"
+                              className={cn(
+                                "text-sm font-bold hover:underline text-left",
+                                domain.clientId ? "text-slate-700 hover:text-indigo-600" : "text-rose-500"
+                              )}
                             >
-                              {clients.find(c => c.id === domain.clientId)?.name || 'Unknown Client'}
+                              {clients.find(c => c.id === domain.clientId)?.name || 'Unassigned'}
                             </button>
-                            <p className="text-[10px] text-slate-400 font-mono">{domain.clientId}</p>
+                            {domain.clientId && <p className="text-[10px] text-slate-400 font-mono">{domain.clientId}</p>}
                           </div>
                         </td>
                       )}
@@ -393,17 +437,39 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
                           </span>
                         </td>
                       )}
-                      {selectedColumns.includes('status') && (
-                        <td className="px-6 py-4">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
-                            getStatusColor(domain.status)
-                          )}>
-                            {getStatusIcon(domain.status)}
-                            {domain.status.replace('_', ' ')}
-                          </span>
-                        </td>
-                      )}
+      {selectedColumns.includes('status') && (
+        <td className="px-6 py-4">
+          <div className="flex flex-col gap-1">
+            <span className={cn(
+              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+              getStatusColor(domain.status)
+            )}>
+              {getStatusIcon(domain.status)}
+              {domain.status.replace('_', ' ')}
+            </span>
+            <div className="flex flex-col gap-1">
+              {domain.isDomainSubscribedFromUs ? (
+                <span className="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-600 border-emerald-100 self-start">
+                  Domain (Us)
+                </span>
+              ) : (
+                <span className="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-amber-50 text-amber-600 border-amber-100 self-start">
+                  Domain (External)
+                </span>
+              )}
+              {domain.isHostingSubscribedFromUs ? (
+                <span className="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-600 border-emerald-100 self-start">
+                  Hosting (Us)
+                </span>
+              ) : (
+                <span className="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-amber-50 text-amber-600 border-amber-100 self-start">
+                  Hosting (External)
+                </span>
+              )}
+            </div>
+          </div>
+        </td>
+      )}
                       {selectedColumns.includes('dates') && (
                         <td className="px-6 py-4">
                           <div className="space-y-1">
@@ -460,6 +526,18 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
                           >
                             <MoreHorizontal size={16} />
                           </button>
+                          {check('domains', 'delete') && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteDomain(domain);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                              title="Delete Domain"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
@@ -491,6 +569,35 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
               ))}
             </select>
           </div>
+          <div className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100 space-y-4">
+            <h3 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+              <Shield size={18} />
+              Subscription Awareness
+            </h3>
+            <p className="text-xs text-amber-700">Identify which services are subscribed through us to enable billing and support features.</p>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newDomain.isDomainSubscribedFromUs}
+                  onChange={e => setNewDomain(prev => ({ ...prev, isDomainSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">Domain (Us)</span>
+              </label>
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newDomain.isHostingSubscribedFromUs}
+                  onChange={e => setNewDomain(prev => ({ ...prev, isHostingSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">Hosting (Us)</span>
+              </label>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Domain Name</label>
             <input 
@@ -556,6 +663,19 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
               />
             </div>
           </div>
+          <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+            <input 
+              type="checkbox"
+              id="isSubscribed"
+              className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              checked={newDomain.isSubscribed}
+              onChange={e => setNewDomain(prev => ({ ...prev, isSubscribed: e.target.checked }))}
+            />
+            <label htmlFor="isSubscribed" className="text-sm font-bold text-slate-700 cursor-pointer">
+              Client has officially subscribed to this service
+              <p className="text-[10px] text-slate-400 font-medium">Unsubscribed services restrict client chat and support access.</p>
+            </label>
+          </div>
           <div className="pt-4">
             <button 
               type="submit"
@@ -594,22 +714,6 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser }) =>
           clients={clients} 
         />
       </Modal>
-
-      {isEmployee && (
-        <>
-          <BulkAddModal 
-            isOpen={isBulkModalOpen} 
-            onClose={() => setIsBulkModalOpen(false)} 
-            type="domains" 
-            clients={clients}
-          />
-          <MergeModal 
-            isOpen={isMergeModalOpen}
-            onClose={() => setIsMergeModalOpen(false)}
-            type="domains"
-          />
-        </>
-      )}
 
       {viewingClient && (
         <ClientDetail 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { StatCard } from './StatCard';
 import { JournalDistribution } from './Charts';
+import { HelpIcon } from './HelpIcon';
 import { 
   Users, 
   Globe, 
@@ -24,6 +25,7 @@ import { collection, onSnapshot, query, where, orderBy, limit, getDocs } from 'f
 import { Client, Domain, Journal, ISSNRequest, User as CRMUser, Invoice, ActivityLog, UserPermissions } from '../types';
 import { geminiService } from '../services/geminiService';
 import { Sparkles, Wand2 } from 'lucide-react';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface DashboardProps {
   currentUser: CRMUser;
@@ -31,14 +33,17 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab }) => {
+  const { check, canView } = usePermissions(currentUser);
   const [stats, setStats] = useState({
     clients: 0,
     domains: 0,
     journals: 0,
     pendingISSN: 0,
+    pendingInvoices: 0,
     totalRevenue: 0,
     outstandingInvoices: 0,
-    totalExpenses: 0
+    totalExpenses: 0,
+    pendingRegistrations: 0
   });
   const [topEmployee, setTopEmployee] = useState<CRMUser | null>(null);
   const [topClient, setTopClient] = useState<Client | null>(null);
@@ -56,24 +61,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
         ...doc.data()
       })) as ActivityLog[];
       setActivities(activityData);
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'activity_logs'));
     // Real-time stats
     const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       setStats(prev => ({ ...prev, clients: snapshot.size }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'users'));
 
     const unsubDomains = onSnapshot(collection(db, 'domains'), (snapshot) => {
       setStats(prev => ({ ...prev, domains: snapshot.size }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'domains'));
 
     const unsubJournals = onSnapshot(collection(db, 'journals'), (snapshot) => {
       setStats(prev => ({ ...prev, journals: snapshot.size }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'journals'));
 
     const qISSN = query(collection(db, 'issn_requests'), where('status', '==', 'pending'));
     const unsubISSN = onSnapshot(qISSN, (snapshot) => {
       setStats(prev => ({ ...prev, pendingISSN: snapshot.size }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'issn_requests'));
+
+    const unsubPendingInvoices = onSnapshot(
+      query(collection(db, 'users'), where('role', '==', 'Client')), 
+      (snapshot) => {
+        let pendingCount = 0;
+        snapshot.docs.forEach(doc => {
+          const data = doc.data() as any;
+          if (data.subscriptions) {
+            pendingCount += data.subscriptions.filter((s: any) => !s.invoiceId).length;
+          }
+        });
+        setStats(prev => ({ ...prev, pendingInvoices: pendingCount }));
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'users')
+    );
 
     const unsubInvoices = onSnapshot(collection(db, 'invoices'), (snapshot) => {
       let revenue = 0;
@@ -87,7 +107,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
         }
       });
       setStats(prev => ({ ...prev, totalRevenue: revenue, outstandingInvoices: outstanding }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'invoices'));
 
     const unsubExpenses = onSnapshot(collection(db, 'expenses'), (snapshot) => {
       let total = 0;
@@ -96,7 +116,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
         total += data.amount || 0;
       });
       setStats(prev => ({ ...prev, totalExpenses: total }));
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'expenses'));
+
+    const unsubRegistrations = onSnapshot(
+      query(collection(db, 'registration_requests'), where('status', '==', 'pending')),
+      (snapshot) => {
+        setStats(prev => ({ ...prev, pendingRegistrations: snapshot.size }));
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'registration_requests')
+    );
 
     // Top performers
     const qTopEmp = query(collection(db, 'users'), orderBy('points', 'desc'), limit(1));
@@ -104,7 +132,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
       if (!snapshot.empty) {
         setTopEmployee({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as CRMUser);
       }
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'users'));
 
     const qTopClient = query(collection(db, 'users'), where('role', '==', 'Client'), orderBy('points', 'desc'), limit(1));
     const unsubTopClient = onSnapshot(qTopClient, (snapshot) => {
@@ -112,17 +140,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
         setTopClient({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Client);
       }
       setLoading(false);
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'users'));
 
     return () => {
       unsubClients();
       unsubDomains();
       unsubJournals();
       unsubISSN();
+      unsubPendingInvoices();
       unsubTopEmp();
       unsubTopClient();
       unsubActivities();
       unsubExpenses();
+      unsubRegistrations();
     };
   }, []);
 
@@ -134,11 +164,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
     setIsSummarizing(false);
   };
 
-  const hasPermission = (key: keyof UserPermissions) => {
-    if (!currentUser.permissions) return true;
-    return currentUser.permissions[key] !== false;
-  };
-
   return (
     <div className="p-8 space-y-8">
       {/* Welcome Section */}
@@ -146,6 +171,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-slate-900">
             Welcome back, {currentUser.name.split(' ')[0]}!
+            <HelpIcon policyTitle="Admin Dashboard Overview" />
           </h2>
           <p className="text-slate-500 mt-1">Real-time insights for Host A Journal Pvt Ltd.</p>
         </div>
@@ -174,7 +200,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
       ) : (
         <>
           {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             <StatCard 
               label="Total Clients" 
               value={stats.clients.toString()} 
@@ -182,7 +208,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
               icon={Users} 
               color="bg-indigo-500" 
             />
-            {hasPermission('dataTools') && (
+            {canView('domains') && (
               <StatCard 
                 label="Total Domains" 
                 value={stats.domains.toString()} 
@@ -191,7 +217,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                 color="bg-emerald-500" 
               />
             )}
-            {hasPermission('journals') && (
+            {canView('journals') && (
               <StatCard 
                 label="Total Journals" 
                 value={stats.journals.toString()} 
@@ -200,7 +226,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                 color="bg-amber-500" 
               />
             )}
-            {hasPermission('issnRequests') && (
+            {canView('issnRequests') && (
               <StatCard 
                 label="Pending ISSN" 
                 value={stats.pendingISSN.toString()} 
@@ -209,7 +235,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                 color="bg-rose-500" 
               />
             )}
-            {hasPermission('invoices') && (
+            {canView('invoices') && (
               <>
                 <StatCard 
                   label="Total Revenue" 
@@ -227,7 +253,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                 />
               </>
             )}
-            {hasPermission('expenses') && (
+            {canView('expenses') && (
               <StatCard 
                 label="Total Expenses" 
                 value={`Rs. ${(stats.totalExpenses || 0).toLocaleString()}`} 
@@ -317,11 +343,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                 </div>
                 <div className="space-y-4">
                   {[
-                    { id: 1, type: 'domain', title: 'Domain renewals pending', date: 'Check Domains Module', priority: 'high', permission: 'dataTools' },
+                    { id: 1, type: 'domain', title: 'Domain renewals pending', date: 'Check Domains Module', priority: 'high', permission: 'domains' },
                     { id: 2, type: 'issn', title: `${stats.pendingISSN} ISSN Requests pending`, date: 'Action Required', priority: 'high', permission: 'issnRequests' },
+                    { id: 6, type: 'registration', title: `${stats.pendingRegistrations} Registration Requests`, date: 'Review Required', priority: 'high', roles: ['Admin', 'Manager'] },
+                    { id: 5, type: 'invoice', title: `${stats.pendingInvoices} Services pending invoice`, date: 'Action Required', priority: 'high', permission: 'invoices' },
                     { id: 3, type: 'task', title: 'New tasks assigned today', date: 'Check Tasks', priority: 'medium' },
                     { id: 4, type: 'subscription', title: 'Monthly reports generated', date: 'Ready for Review', priority: 'medium' },
-                  ].filter(alert => !alert.permission || hasPermission(alert.permission as keyof UserPermissions)).map((alert) => (
+                  ].filter(alert => {
+                    if (alert.permission && !canView(alert.permission as any)) return false;
+                    if (alert.roles && !alert.roles.includes(currentUser.role)) return false;
+                    return true;
+                  }).map((alert) => (
                     <div key={alert.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 hover:border-indigo-200 transition-all group">
                       <div className="flex items-center gap-4">
                         <div className={`p-2 rounded-lg ${alert.priority === 'high' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'}`}>
@@ -338,8 +370,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                         onClick={() => {
                           if (alert.type === 'domain') setActiveTab('domains');
                           if (alert.type === 'issn') setActiveTab('issn');
+                          if (alert.type === 'invoice') setActiveTab('invoices');
                           if (alert.type === 'task') setActiveTab('tasks');
                           if (alert.type === 'subscription') setActiveTab('clients');
+                          if (alert.type === 'registration') setActiveTab('registration-requests');
                         }}
                         className="text-indigo-600 text-sm font-bold opacity-0 group-hover:opacity-100 transition-all"
                       >
@@ -402,7 +436,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
           </div>
 
           {/* Charts Section */}
-          {hasPermission('journals') && (
+          {canView('journals') && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <div className="flex items-center justify-between mb-6">
@@ -420,7 +454,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
           )}
 
           {/* Recent Invoices Section */}
-          {hasPermission('invoices') && (
+          {canView('invoices') && (
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden mb-8">
               <div className="px-8 py-5 border-b border-slate-100 flex items-center justify-between">
                 <h3 className="font-bold text-slate-900">Recent Billing Activity</h3>
@@ -435,10 +469,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ currentUser, setActiveTab 
                   </div>
                 </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                    <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                       <th className="px-8 py-4">Invoice ID</th>
                       <th className="px-8 py-4">Total Amount</th>
                       <th className="px-8 py-4 text-center">Status</th>

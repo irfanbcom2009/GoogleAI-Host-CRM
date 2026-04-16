@@ -72,6 +72,20 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+export async function logActivity(userId: string, userName: string, action: string, details: string) {
+  try {
+    await addDoc(collection(db, 'activity_logs'), {
+      userId,
+      userName,
+      action,
+      details,
+      timestamp: serverTimestamp()
+    });
+  } catch (error) {
+    console.error("Error logging activity:", error);
+  }
+}
+
 export async function moveToTrash(collectionName: string, id: string, data: any, deletedBy: string) {
   try {
     await addDoc(collection(db, 'trash'), {

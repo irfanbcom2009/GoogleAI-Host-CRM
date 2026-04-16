@@ -29,6 +29,9 @@
         "costPrice": { "type": "number" },
         "salePrice": { "type": "number" },
         "eppCode": { "type": "string" },
+        "isSubscribed": { "type": "boolean" },
+        "isDomainSubscribedFromUs": { "type": "boolean" },
+        "isHostingSubscribedFromUs": { "type": "boolean" },
         "hostingCredentials": { "type": "object" },
         "registrarHistory": { "type": "array", "items": { "type": "object" } },
         "hostingHistory": { "type": "array", "items": { "type": "object" } }
@@ -55,7 +58,7 @@
         "transferHistory": { "type": "array", "items": { "type": "object" } },
         "category": { "type": "string" },
         "subCategory": { "type": "string" },
-        "scope": { "type": "string" },
+        "scope": { "type": "array", "items": { "type": "string" } },
         "apcAmount": { "type": "number" },
         "costPrice": { "type": "number" },
         "salePrice": { "type": "number" },
@@ -70,6 +73,15 @@
         },
         "assignedEmployeeId": { "type": "string" },
         "assignedEmployeeName": { "type": "string" },
+        "subjectCategory": { "type": "string" },
+        "publisherCountry": { "type": "string" },
+        "languages": { "type": "string" },
+        "license": { "type": "string" },
+        "isSubscribed": { "type": "boolean" },
+        "isOjsSubscribedFromUs": { "type": "boolean" },
+        "isIssnSubscribedFromUs": { "type": "boolean" },
+        "isHecSubscribedFromUs": { "type": "boolean" },
+        "isDoiSubscribedFromUs": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["clientId", "title", "status"]
@@ -116,8 +128,15 @@
       "properties": {
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "role": { "type": "string", "enum": ["Admin", "Employee", "Client"] },
-        "points": { "type": "number" }
+        "role": { "type": "string", "enum": ["Admin", "Manager", "Employee", "Client"] },
+        "points": { "type": "number" },
+        "photoURL": { "type": "string" },
+        "permissions": { "type": "object" },
+        "portalEnabled": { "type": "boolean" },
+        "employeeId": { "type": "string" },
+        "joiningDate": { "type": "string", "format": "date" },
+        "department": { "type": "string" },
+        "officialMail": { "type": "string" }
       },
       "required": ["name", "email", "role"]
     },
@@ -134,7 +153,7 @@
         "documents": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["clientId", "name", "ownerName", "secpRegistration", "ntn"]
+      "required": ["clientId", "name", "ownerName"]
     },
     "HECEntry": {
       "title": "HEC Entry",
@@ -161,7 +180,10 @@
       "description": "An invoice for a client",
       "type": "object",
       "properties": {
+        "invoiceNumber": { "type": "string" },
         "clientId": { "type": "string" },
+        "issueDate": { "type": "string", "format": "date" },
+        "dueDate": { "type": "string", "format": "date" },
         "items": { 
           "type": "array",
           "items": {
@@ -169,20 +191,43 @@
             "properties": {
               "description": { "type": "string" },
               "quantity": { "type": "number" },
-              "unitPrice": { "type": "number" },
+              "rate": { "type": "number" },
+              "taxRate": { "type": "number" },
+              "discountRate": { "type": "number" },
               "total": { "type": "number" }
             }
           }
         },
         "subtotal": { "type": "number" },
-        "tax": { "type": "number" },
+        "taxTotal": { "type": "number" },
+        "discountTotal": { "type": "number" },
         "total": { "type": "number" },
-        "status": { "type": "string", "enum": ["paid", "unpaid", "overdue"] },
-        "dueDate": { "type": "string", "format": "date-time" },
+        "balance": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "sent", "viewed", "unpaid", "partially_paid", "paid", "overdue", "void"] },
+        "billingType": { "type": "string", "enum": ["one-time", "recurring"] },
+        "recurringDetails": { "type": "object" },
         "notes": { "type": "string" },
+        "terms": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["clientId", "items", "total", "status", "dueDate"]
+      "required": ["invoiceNumber", "clientId", "items", "total", "status", "dueDate", "billingType"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "A payment record for an invoice",
+      "type": "object",
+      "properties": {
+        "invoiceId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string", "format": "date" },
+        "method": { "type": "string", "enum": ["Bank Transfer", "Cash", "Online", "Cheque", "Adjustment"] },
+        "reference": { "type": "string" },
+        "notes": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["invoiceId", "clientId", "amount", "date", "method", "recordedBy"]
     },
     "Folder": {
       "title": "Folder",
@@ -430,6 +475,63 @@
         "reason": { "type": "string" }
       },
       "required": ["userId", "type", "points", "reason"]
+    },
+    "ProfileUpdateRequest": {
+      "title": "Profile Update Request",
+      "description": "A request to update user profile fields that require approval",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "changes": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "userRole", "changes", "status"]
+    },
+    "HECCategory": {
+      "title": "HEC Category",
+      "description": "A managed category for HEC journals",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["main", "sub", "subject"] },
+        "parentId": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "isActive"]
+    },
+    "RegistrationRequest": {
+      "title": "Registration Request",
+      "description": "A request for account creation from an unregistered user",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "organization": { "type": "string" },
+        "contactNumber": { "type": "string" },
+        "requiredServices": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "rejectionReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "organization", "contactNumber", "status"]
+    },
+    "AccessLog": {
+      "title": "Access Log",
+      "description": "A log of unauthorized access attempts",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "ipAddress": { "type": "string" },
+        "userAgent": { "type": "string" },
+        "status": { "type": "string", "enum": ["unauthorized", "authorized"] }
+      },
+      "required": ["email", "timestamp", "status"]
     }
   },
   "firestore": {
@@ -442,6 +544,7 @@
     "/publishers": { "schema": "Publisher", "description": "Collection of publishers" },
     "/hec_entries": { "schema": "HECEntry", "description": "Collection of HEC entries" },
     "/invoices": { "schema": "Invoice", "description": "Collection of invoices" },
+    "/payments": { "schema": "Payment", "description": "Collection of invoice payments" },
     "/trash": { "schema": "TrashItem", "description": "Collection of soft-deleted items" },
     "/indexing_agencies": { "schema": "IndexingAgency", "description": "Global list of indexing agencies" },
     "/journal_indexing": { "schema": "JournalIndexing", "description": "Journal-specific indexing status" },
@@ -457,6 +560,10 @@
     "/journal_activities": { "schema": "ActivityLog", "description": "Collection of journal-specific activity logs" },
     "/catalog": { "schema": "CatalogItem", "description": "Collection of catalog services" },
     "/orders": { "schema": "Order", "description": "Collection of service orders" },
-    "/point_history": { "schema": "PointHistory", "description": "Collection of point history records" }
+    "/point_history": { "schema": "PointHistory", "description": "Collection of point history records" },
+    "/profile_update_requests": { "schema": "ProfileUpdateRequest", "description": "Collection of profile update requests" },
+    "/hec_categories": { "schema": "HECCategory", "description": "Collection of HEC managed categories" },
+    "/registration_requests": { "schema": "RegistrationRequest", "description": "Collection of registration requests" },
+    "/access_logs": { "schema": "AccessLog", "description": "Collection of access logs" }
   }
 }

@@ -16,7 +16,8 @@ import {
   Mail,
   CreditCard,
   Calendar,
-  Settings2
+  Settings2,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ISSNRequest, Client, Journal, Publisher, User, GlobalSettings } from '../types';
@@ -26,9 +27,10 @@ import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, doc, u
 import { Modal } from './Modal';
 import { ISSNDetail } from './ISSNDetail';
 import { ColumnSelector } from './ColumnSelector';
-import { BulkAddModal } from './BulkAddModal';
 import { ClientDetail } from './ClientDetail';
 import { JournalDetail } from './JournalDetail';
+import { usePermissions } from '../hooks/usePermissions';
+import { ConfigModal } from './ConfigModal';
 
 interface ISSNRequestsProps {
   searchQuery: string;
@@ -56,13 +58,15 @@ const AVAILABLE_COLUMNS = [
 ];
 
 export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [requests, setRequests] = useState<ISSNRequest[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [isSubjectConfigOpen, setIsSubjectConfigOpen] = useState(false);
+  const [isFrequencyConfigOpen, setIsFrequencyConfigOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<ISSNRequest | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
@@ -99,23 +103,33 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
 
   useEffect(() => {
     const fetchSettings = async () => {
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        if (settingsDoc.exists()) {
-          const data = settingsDoc.data() as GlobalSettings;
-          setGlobalSettings(data);
+      const unsubscribeSettings = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as GlobalSettings;
+          const sanitizedData: GlobalSettings = {
+            ...data,
+            expenseHeads: Array.isArray(data.expenseHeads) ? data.expenseHeads : [],
+            journalCategories: Array.isArray(data.journalCategories) ? data.journalCategories : [],
+            issnTypes: Array.isArray(data.issnTypes) ? data.issnTypes : [],
+            issnSubjects: Array.isArray(data.issnSubjects) ? data.issnSubjects : [],
+            frequencies: Array.isArray(data.frequencies) ? data.frequencies : [],
+            departments: Array.isArray(data.departments) ? data.departments : [],
+            modes: Array.isArray(data.modes) ? data.modes : [],
+            journalScopes: Array.isArray(data.journalScopes) ? data.journalScopes : [],
+            officeSubscriptions: Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []
+          };
+          setGlobalSettings(sanitizedData);
           setNewRequest(prev => ({
             ...prev,
-            requestType: data.issnTypes?.[0] || 'Assignment',
-            frequency: data.frequencies?.[0] || 'Monthly',
-            subject: data.issnSubjects?.[0] || 'Pluridisciplinary'
+            requestType: prev.requestType || sanitizedData.issnTypes?.[0] || 'Assignment',
+            frequency: prev.frequency || sanitizedData.frequencies?.[0] || 'Monthly',
+            subject: prev.subject || sanitizedData.issnSubjects?.[0] || 'Pluridisciplinary'
           }));
         }
-      } catch (error) {
-        console.error('Error fetching global settings:', error);
-      }
+      });
+      return unsubscribeSettings;
     };
-    fetchSettings();
+    const unsubSettings = fetchSettings();
 
     const q = query(collection(db, 'issn_requests'), orderBy('createdAt', 'desc'));
     const unsubscribeRequests = onSnapshot(q, (snapshot) => {
@@ -293,28 +307,41 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
             onChange={handleColumnChange}
           />
           {currentUser.role !== 'Client' && (
-            <>
-              <button 
-                onClick={() => setIsBulkModalOpen(true)}
-                className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-              >
-                <Plus size={20} className="text-indigo-600" />
-                Bulk Add
-              </button>
-              <button 
-                onClick={() => setIsModalOpen(true)}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-              >
-                <Plus size={20} />
-                New Request
-              </button>
-            </>
+            <div className="flex items-center gap-2">
+              {currentUser.role === 'Admin' && (
+                <div className="flex gap-2 mr-2">
+                  <button 
+                    onClick={() => setIsSubjectConfigOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure ISSN Subjects"
+                  >
+                    <Settings2 size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setIsFrequencyConfigOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure Frequencies"
+                  >
+                    <Settings size={20} />
+                  </button>
+                </div>
+              )}
+              {check('issnRequests', 'add') && (
+                <button 
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                >
+                  <Plus size={20} />
+                  New Request
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-400px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -322,8 +349,8 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('requestNo') && <th className="px-6 py-4">Request No</th>}
                   {selectedColumns.includes('journal') && <th className="px-6 py-4">Journal</th>}
                   {selectedColumns.includes('client') && <th className="px-6 py-4">Client</th>}
@@ -499,15 +526,6 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
           )}
         </div>
       </div>
-
-      {currentUser.role !== 'Client' && (
-        <BulkAddModal 
-          isOpen={isBulkModalOpen} 
-          onClose={() => setIsBulkModalOpen(false)} 
-          type="issn" 
-          clients={clients}
-        />
-      )}
 
       <Modal 
         isOpen={isModalOpen} 
@@ -821,6 +839,28 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
           </div>
         </form>
       </Modal>
+
+      {isSubjectConfigOpen && (
+        <ConfigModal
+          isOpen={isSubjectConfigOpen}
+          onClose={() => setIsSubjectConfigOpen(false)}
+          title="Configure ISSN Subjects"
+          fieldName="issnSubjects"
+          type="string-list"
+          initialItems={globalSettings?.issnSubjects || []}
+        />
+      )}
+
+      {isFrequencyConfigOpen && (
+        <ConfigModal
+          isOpen={isFrequencyConfigOpen}
+          onClose={() => setIsFrequencyConfigOpen(false)}
+          title="Configure Frequencies"
+          fieldName="frequencies"
+          type="string-list"
+          initialItems={globalSettings?.frequencies || []}
+        />
+      )}
     </div>
   );
 };

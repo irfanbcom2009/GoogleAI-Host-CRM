@@ -14,6 +14,7 @@ import {
   Shield,
   AlertCircle
 } from 'lucide-react';
+import { HelpIcon } from './HelpIcon';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -24,7 +25,7 @@ import {
   orderBy, 
   limit 
 } from 'firebase/firestore';
-import { User as UserType, Domain, Journal, Task } from '../types';
+import { User as UserType, Domain, Journal, Task, Invoice } from '../types';
 import { cn } from '../lib/utils';
 import { ChatBoard } from './ChatBoard';
 
@@ -37,6 +38,7 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
   const [domains, setDomains] = useState<Domain[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<'overview' | 'chat'>('overview');
 
@@ -48,7 +50,8 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
       query(collection(db, 'domains'), where('clientId', '==', currentUser.id)),
       (snapshot) => {
         setDomains(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Domain[]);
-      }
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'domains')
     );
 
     // Fetch client's journals
@@ -56,7 +59,8 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
       query(collection(db, 'journals'), where('clientId', '==', currentUser.id)),
       (snapshot) => {
         setJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Journal[]);
-      }
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'journals')
     );
 
     // Fetch client's tasks (only visible ones)
@@ -70,6 +74,23 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
       ),
       (snapshot) => {
         setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Task[]);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'tasks')
+    );
+
+    // Fetch client's invoices
+    const unsubscribeInvoices = onSnapshot(
+      query(
+        collection(db, 'invoices'),
+        where('clientId', '==', currentUser.id),
+        orderBy('issueDate', 'desc')
+      ),
+      (snapshot) => {
+        setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Invoice[]);
+        setLoading(false);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'invoices');
         setLoading(false);
       }
     );
@@ -78,12 +99,14 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
       unsubscribeDomains();
       unsubscribeJournals();
       unsubscribeTasks();
+      unsubscribeInvoices();
     };
   }, [currentUser.id]);
 
   const stats = [
     { label: 'Active Services', value: domains.length + journals.length, icon: Package, color: 'text-indigo-600', bg: 'bg-indigo-50' },
     { label: 'Pending Tasks', value: tasks.filter(t => t.status !== 'completed').length, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { label: 'Unpaid Invoices', value: invoices.filter(inv => inv.status !== 'paid').length, icon: FileText, color: 'text-rose-600', bg: 'bg-rose-50' },
     { label: 'My Points', value: currentUser.points || 0, icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50' },
   ];
 
@@ -101,7 +124,10 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">Welcome back, {currentUser.name.split(' ')[0]}!</h1>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight">
+            Welcome back, {currentUser.name.split(' ')[0]}!
+            <HelpIcon policyTitle="Client Portal Access Policy" />
+          </h1>
           <p className="text-slate-500 font-medium">Here's what's happening with your projects today.</p>
         </div>
         <div className="flex bg-white p-1 rounded-xl shadow-sm border border-slate-200">
@@ -145,7 +171,14 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.1 }}
                   key={stat.label}
-                  className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:shadow-md transition-all group"
+                  onClick={() => {
+                    if (stat.label === 'Unpaid Invoices') setActiveTab('invoices');
+                    if (stat.label === 'Pending Tasks') setActiveTab('tasks');
+                  }}
+                  className={cn(
+                    "bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:shadow-md transition-all group",
+                    (stat.label === 'Unpaid Invoices' || stat.label === 'Pending Tasks') && "cursor-pointer"
+                  )}
                 >
                   <div className="flex items-center justify-between mb-4">
                     <div className={cn("p-3 rounded-2xl transition-transform group-hover:scale-110", stat.bg, stat.color)}>
@@ -262,6 +295,25 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
                       ))}
                     </div>
                   </div>
+
+                  {/* Billing Alert Card */}
+                  {currentUser.subscriptions && currentUser.subscriptions.some(s => !s.invoiceId) && (
+                    <div className="bg-rose-50 p-6 rounded-3xl border border-rose-100 shadow-sm">
+                      <div className="flex items-center gap-3 text-rose-600 mb-3">
+                        <AlertCircle size={20} />
+                        <p className="text-sm font-bold">Pending Invoices</p>
+                      </div>
+                      <p className="text-xs text-rose-500 leading-relaxed mb-4">
+                        You have services subscribed that are pending invoice generation. Please contact support to finalize your billing.
+                      </p>
+                      <button 
+                        onClick={() => setActiveView('chat')}
+                        className="w-full py-2 bg-rose-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-700 transition-all"
+                      >
+                        Contact Support
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

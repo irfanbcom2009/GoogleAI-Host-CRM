@@ -1,35 +1,21 @@
-import React from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  LayoutDashboard, 
-  Users, 
-  Globe, 
-  BookOpen, 
-  FileCheck, 
-  Briefcase, 
-  Trophy, 
-  DollarSign,
-  Shield,
-  UserCog, 
-  Bell, 
-  Settings, 
+  ChevronDown, 
+  ChevronRight, 
+  Search, 
+  Menu, 
+  X, 
+  ChevronLeft,
+  Settings,
   LogOut,
-  Layers,
-  Building2,
-  GraduationCap,
-  CreditCard,
-  Trash2,
-  CheckCircle,
-  ChevronDown,
-  ChevronRight,
-  HelpCircle,
-  MessageSquare,
-  TrendingDown,
-  Layout,
-  ShoppingCart
+  Shield,
+  Sparkles,
+  Layers
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { UserRole, UserPermissions } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
+import { MENU_CONFIG, MenuItem, MenuGroup } from '../constants/menu';
 
 interface SidebarProps {
   activeTab: string;
@@ -40,6 +26,7 @@ interface SidebarProps {
   onLogout?: () => void;
   isImpersonating?: boolean;
   onStopImpersonating?: () => void;
+  pendingApprovalsCount?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -50,161 +37,176 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userDepartment,
   onLogout,
   isImpersonating,
-  onStopImpersonating
+  onStopImpersonating,
+  pendingApprovalsCount = 0
 }) => {
-  const [expandedGroups, setExpandedGroups] = React.useState<string[]>(['core', 'publishing', 'operations', 'data', 'finance', 'other']);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+
+  // Auto-expand group containing active tab
+  useEffect(() => {
+    const activeGroup = MENU_CONFIG.find(group => 
+      group.items.some(item => item.id === activeTab)
+    );
+    if (activeGroup && !expandedGroups.includes(activeGroup.id)) {
+      setExpandedGroups(prev => [...prev, activeGroup.id]);
+    }
+  }, [activeTab]);
 
   const toggleGroup = (groupId: string) => {
+    if (isCollapsed) {
+      setIsCollapsed(false);
+      setExpandedGroups([groupId]);
+      return;
+    }
     setExpandedGroups(prev => 
       prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
     );
   };
 
-  const menuGroups = [
-    {
-      id: 'core',
-      label: 'Core Management',
-      items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-        { id: 'approvals', label: 'Approval Requests', icon: FileCheck, roles: ['Admin', 'Manager', 'Employee'], permission: 'approvalRequests' },
-        { id: 'clients', label: 'Clients', icon: Users, roles: ['Admin', 'Manager', 'Employee'] },
-        { id: 'employees', label: 'Employees', icon: Users, roles: ['Admin', 'Manager'] },
-      ]
-    },
-    {
-      id: 'publishing',
-      label: 'Publishing & Journals',
-      items: [
-        { id: 'journals', label: 'Journals', icon: BookOpen, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'journals' },
-        { id: 'indexing', label: 'Indexing Agencies', icon: Building2, roles: ['Admin', 'Manager', 'Employee'], permission: 'indexingAgencies' },
-        { id: 'publishers', label: 'Publishers', icon: Building2, roles: ['Admin', 'Manager', 'Employee'], permission: 'publishers' },
-        { id: 'hec', label: 'HEC Applications', icon: GraduationCap, roles: ['Admin', 'Manager', 'Employee'], permission: 'hecApplications' },
-        { id: 'issn', label: 'ISSN Requests', icon: FileCheck, roles: ['Admin', 'Manager', 'Employee'], permission: 'issnRequests' },
-        { id: 'doi', label: 'DOI Management', icon: Globe, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'doiManagement' },
-      ]
-    },
-    {
-      id: 'operations',
-      label: 'Operations Hub',
-      items: [
-        { id: 'catalog', label: 'Service Catalog', icon: Layout, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-        { id: 'orders', label: 'Service Orders', icon: ShoppingCart, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-        { id: 'tasks', label: 'Tasks & Workflow', icon: Briefcase, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-        { id: 'points', label: 'Points & Rewards', icon: Trophy, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
-      ]
-    },
-    {
-      id: 'data',
-      label: 'Data Tools',
-      items: [
-        { id: 'domains', label: 'Domains', icon: Globe, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'dataTools' },
-        { id: 'files', label: 'File Manager', icon: Layers, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'dataTools' },
-      ]
-    },
-    {
-      id: 'finance',
-      label: 'Financials',
-      items: [
-        { id: 'finance-dashboard', label: 'Finance Hub', icon: DollarSign, roles: ['Admin', 'Manager', 'Employee'], department: 'Finance' },
-        { id: 'invoices', label: 'Invoices', icon: CreditCard, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'invoices' },
-        { id: 'expenses', label: 'Expenses', icon: TrendingDown, roles: ['Admin', 'Manager', 'Employee'], permission: 'expenses' },
-      ]
-    },
-    {
-      id: 'admin',
-      label: 'Administration',
-      items: [
-        { id: 'catalog-manager', label: 'Catalog Settings', icon: Settings, roles: ['Admin', 'Manager'] },
-        { id: 'employees', label: 'Employee Directory', icon: Users, roles: ['Admin', 'Manager'] },
-        { id: 'trash', label: 'Trash Bin', icon: Trash2, roles: ['Admin', 'Manager'], permission: 'trash' },
-      ]
-    },
-    {
-      id: 'other',
-      label: 'Resources',
-      items: [
-        { id: 'chat', label: 'Live Chat', icon: MessageSquare, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
-        { id: 'policies', label: 'Policies', icon: BookOpen, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
-        { id: 'faq', label: 'FAQ', icon: HelpCircle, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
-        { id: 'notifications', label: 'Notifications', icon: Bell, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'notifications' },
-      ]
-    }
-  ];
+  const filteredMenu = useMemo(() => {
+    return MENU_CONFIG.map(group => ({
+      ...group,
+      items: group.items.filter(item => {
+        // Role check
+        if (!item.roles.includes(userRole)) return false;
+        
+        // Permission check
+        if (item.permission && userPermissions) {
+          const modulePerms = (userPermissions as any)[item.permission];
+          if (modulePerms === false) return false;
+          if (modulePerms && typeof modulePerms === 'object' && modulePerms.view === false) return false;
+        }
 
-  return (
-    <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen border-r border-slate-800 shrink-0">
-      <div className="p-6">
-        <h1 className="text-xl font-bold text-white flex items-center gap-2">
-          <Layers className="text-indigo-500" />
-          Host A Journal
-        </h1>
-        <p className="text-xs text-slate-500 mt-1 uppercase tracking-widest font-semibold">CRM System</p>
+        // Department check
+        if (item.department && userRole !== 'Admin' && userDepartment !== item.department) return false;
+
+        // Search check
+        if (searchQuery && !item.label.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+
+        return true;
+      })
+    })).filter(group => group.items.length > 0);
+  }, [userRole, userPermissions, userDepartment, searchQuery]);
+
+  const renderMenuItem = (item: MenuItem) => {
+    const isActive = activeTab === item.id;
+    const badge = item.id === 'approvals' ? pendingApprovalsCount : item.badge;
+
+    const isRecommended = MENU_CONFIG.some(group => 
+      group.items.some(i => i.id === activeTab && i.recommendation === item.id)
+    );
+
+    return (
+      <button
+        key={item.id}
+        onClick={() => {
+          setActiveTab(item.id);
+          if (isMobileOpen) setIsMobileOpen(false);
+        }}
+        className={cn(
+          "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all group relative",
+          isActive 
+            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" 
+            : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200",
+          isCollapsed && "justify-center px-0"
+        )}
+        title={isCollapsed ? item.label : undefined}
+      >
+        <item.icon size={18} className={cn(
+          "shrink-0 transition-colors",
+          isActive ? "text-white" : "group-hover:text-indigo-400"
+        )} />
+        
+        {!isCollapsed && (
+          <>
+            <span className="font-medium text-xs truncate">{item.label}</span>
+            {badge && badge > 0 ? (
+              <span className="ml-auto px-1.5 py-0.5 bg-rose-500 text-white text-[10px] font-bold rounded-full min-w-[18px] text-center">
+                {badge}
+              </span>
+            ) : isRecommended ? (
+              <Sparkles size={12} className="ml-auto text-amber-400 animate-pulse" />
+            ) : null}
+          </>
+        )}
+
+        {isActive && !isCollapsed && (
+          <motion.div 
+            layoutId="activeTabIndicator"
+            className="absolute left-0 w-1 h-6 bg-white rounded-r-full"
+          />
+        )}
+      </button>
+    );
+  };
+
+  const sidebarContent = (
+    <div className={cn(
+      "bg-slate-900 text-slate-300 flex flex-col h-screen border-r border-slate-800 transition-all duration-300 relative",
+      isCollapsed ? "w-20" : "w-64"
+    )}>
+      {/* Header */}
+      <div className={cn("p-6", isCollapsed && "px-4 text-center")}>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
+            <Layers className="text-white" size={24} />
+          </div>
+          {!isCollapsed && (
+            <div>
+              <h1 className="text-sm font-bold text-white truncate">Host A Journal</h1>
+              <p className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">CRM System</p>
+            </div>
+          )}
+        </div>
       </div>
 
+      {/* Search */}
+      {!isCollapsed && (
+        <div className="px-4 mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
+            <input 
+              type="text"
+              placeholder="Search menu..."
+              className="w-full pl-9 pr-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-slate-200"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Navigation */}
       <nav className="flex-1 px-4 space-y-2 overflow-y-auto pb-8 scrollbar-hide">
-        {menuGroups.map((group) => {
-          const visibleItems = group.items.filter(item => {
-            const hasRole = item.roles.includes(userRole);
-            if (!hasRole) return false;
-            
-            // If item has a permission requirement, check it
-            if (item.permission && userPermissions) {
-              if (userPermissions[item.permission as keyof UserPermissions] === false) return false;
-            }
-
-            // If item has a department requirement, check it
-            if ((item as any).department && userRole !== 'Admin') {
-              if (userDepartment !== (item as any).department) return false;
-            }
-            
-            return true;
-          });
-          if (visibleItems.length === 0) return null;
-
+        {filteredMenu.map((group) => {
           const isExpanded = expandedGroups.includes(group.id);
 
           return (
             <div key={group.id} className="space-y-1">
-              <button 
-                onClick={() => toggleGroup(group.id)}
-                className="w-full flex items-center justify-between px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider hover:text-slate-300 transition-colors group"
-              >
-                <span className="group-hover:translate-x-1 transition-transform">{group.label}</span>
-                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              </button>
+              {!isCollapsed ? (
+                <button 
+                  onClick={() => toggleGroup(group.id)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider hover:text-slate-300 transition-colors group"
+                >
+                  <span className="group-hover:translate-x-1 transition-transform">{group.label}</span>
+                  {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </button>
+              ) : (
+                <div className="h-px bg-slate-800 my-4 mx-2" />
+              )}
               
               <AnimatePresence initial={false}>
-                {isExpanded && (
+                {(isExpanded || isCollapsed) && (
                   <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
+                    initial={isCollapsed ? { opacity: 1 } : { height: 0, opacity: 0 }}
+                    animate={isCollapsed ? { opacity: 1 } : { height: 'auto', opacity: 1 }}
+                    exit={isCollapsed ? { opacity: 1 } : { height: 0, opacity: 0 }}
                     className="space-y-1 overflow-hidden"
                   >
-                    {visibleItems.map((item) => (
-                      <button
-                        key={item.id}
-                        onClick={() => setActiveTab(item.id)}
-                        className={cn(
-                          "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all group relative",
-                          activeTab === item.id 
-                            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20" 
-                            : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
-                        )}
-                      >
-                        <item.icon size={18} className={cn(
-                          "transition-colors",
-                          activeTab === item.id ? "text-white" : "group-hover:text-indigo-400"
-                        )} />
-                        <span className="font-medium text-xs">{item.label}</span>
-                        {activeTab === item.id && (
-                          <motion.div 
-                            layoutId="activeTab"
-                            className="absolute left-0 w-1 h-6 bg-white rounded-r-full"
-                          />
-                        )}
-                      </button>
-                    ))}
+                    {group.items.map(renderMenuItem)}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -213,36 +215,94 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </nav>
 
-      <div className="p-4 border-t border-slate-800 space-y-1">
+      {/* Footer */}
+      <div className={cn("p-4 border-t border-slate-800 space-y-1", isCollapsed && "px-2")}>
         {isImpersonating && (
           <button 
             onClick={onStopImpersonating}
-            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition-all mb-2"
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl bg-amber-600 text-white hover:bg-amber-700 transition-all mb-2",
+              isCollapsed && "justify-center px-0"
+            )}
+            title={isCollapsed ? "Stop Impersonation" : undefined}
           >
-            <Shield size={18} />
-            <span className="font-medium text-sm">Stop Impersonation</span>
+            <Shield size={18} className="shrink-0" />
+            {!isCollapsed && <span className="font-medium text-xs">Stop Impersonation</span>}
           </button>
         )}
+        
         <button 
           onClick={() => setActiveTab('settings')}
           className={cn(
-            "w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all text-slate-400",
-            activeTab === 'settings' ? "bg-slate-800 text-white" : "hover:bg-slate-800 hover:text-white"
+            "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all text-slate-400 group",
+            activeTab === 'settings' ? "bg-slate-800 text-white" : "hover:bg-slate-800 hover:text-white",
+            isCollapsed && "justify-center px-0"
           )}
+          title={isCollapsed ? "Settings" : undefined}
         >
-          <Settings size={18} />
-          <span className="font-medium text-sm">
-            {(userRole === 'Admin' || userRole === 'Manager') ? 'Admin & Settings' : 'Settings'}
-          </span>
+          <Settings size={18} className={cn("shrink-0 transition-colors", activeTab === 'settings' ? "text-white" : "group-hover:text-indigo-400")} />
+          {!isCollapsed && (
+            <span className="font-medium text-xs truncate">
+              {(userRole === 'Admin' || userRole === 'Manager') ? 'Admin & Settings' : 'Settings'}
+            </span>
+          )}
         </button>
+
         <button 
           onClick={onLogout}
-          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-red-900/20 hover:text-red-400 transition-all text-slate-400"
+          className={cn(
+            "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl hover:bg-red-900/20 hover:text-red-400 transition-all text-slate-400 group",
+            isCollapsed && "justify-center px-0"
+          )}
+          title={isCollapsed ? "Logout" : undefined}
         >
-          <LogOut size={18} />
-          <span className="font-medium text-sm">Logout</span>
+          <LogOut size={18} className="shrink-0 group-hover:text-red-400" />
+          {!isCollapsed && <span className="font-medium text-xs">Logout</span>}
         </button>
       </div>
+
+      {/* Collapse Toggle */}
+      <button 
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        className="absolute -right-3 top-20 w-6 h-6 bg-slate-800 border border-slate-700 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-indigo-600 transition-all z-50 hidden md:flex"
+      >
+        {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+      </button>
     </div>
+  );
+
+  return (
+    <>
+      {/* Mobile Toggle */}
+      <div className="md:hidden fixed top-4 left-4 z-[100]">
+        <button 
+          onClick={() => setIsMobileOpen(!isMobileOpen)}
+          className="p-2 bg-slate-900 text-white rounded-xl shadow-lg border border-slate-800"
+        >
+          {isMobileOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
+      </div>
+
+      {/* Mobile Sidebar Overlay */}
+      <AnimatePresence>
+        {isMobileOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsMobileOpen(false)}
+            className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[90] md:hidden"
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar Container */}
+      <div className={cn(
+        "fixed inset-y-0 left-0 z-[95] transition-transform duration-300 md:relative md:translate-x-0",
+        isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+      )}>
+        {sidebarContent}
+      </div>
+    </>
   );
 };

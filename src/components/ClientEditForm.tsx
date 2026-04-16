@@ -12,19 +12,20 @@ import {
   Loader2
 } from 'lucide-react';
 import { Client, ServiceType, Subscription, Domain } from '../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { cn } from '../lib/utils';
 import { Globe } from 'lucide-react';
 
 interface ClientEditFormProps {
   client: Client;
+  currentUser: any;
   onClose: () => void;
 }
 
 const SALUTATIONS = ['Mr.', 'Miss', 'Mrs.', 'Dr.', 'Prof.', 'Dr. Prof.'];
 
-export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose }) => {
+export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentUser, onClose }) => {
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +37,9 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
     phone: client.phone,
     address: client.address,
     status: client.status,
+    portalEnabled: client.portalEnabled ?? false,
     endingDate: client.endingDate || '',
+    photoURL: client.photoURL || '',
     subscriptions: client.subscriptions || []
   });
 
@@ -73,42 +76,76 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
     if (isSaving) return;
     setIsSaving(true);
     setError(null);
+
+    // Restriction: Only admin can add/edit clients with gmail address
+    const isDefaultAdmin = auth.currentUser?.email === 'irfanbcom2009@gmail.com';
+    if (formData.email.toLowerCase().endsWith('@gmail.com') && !isDefaultAdmin) {
+      setError("Only administrators can manage records with @gmail.com addresses.");
+      setIsSaving(false);
+      return;
+    }
+
     try {
+      console.log("Starting client update for ID:", client.id);
       const updatedSubscriptions = formData.subscriptions.map(sub => {
         const service = typeof sub === 'string' ? sub : sub.service;
         const currentSub = typeof sub === 'string' ? { service, status: 'active' as const } : sub;
         
         const domainId = subscriptionDates[service]?.domainId || (typeof sub === 'string' ? undefined : sub.domainId);
-        const domainName = clientDomains.find(d => d.id === domainId)?.domainName;
+        const domainName = clientDomains.find(d => d.id === domainId)?.domainName || '';
         
-        return {
+        const subObj: any = {
           ...currentSub,
-          startDate: subscriptionDates[service]?.startDate || (typeof sub === 'string' ? new Date().toISOString().split('T')[0] : sub.startDate),
-          expiryDate: subscriptionDates[service]?.expiryDate || (typeof sub === 'string' ? new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0] : sub.expiryDate),
-          domainId,
-          domainName
+          startDate: subscriptionDates[service]?.startDate || (typeof sub === 'string' ? new Date().toISOString().split('T')[0] : sub.startDate) || new Date().toISOString().split('T')[0],
+          expiryDate: subscriptionDates[service]?.expiryDate || (typeof sub === 'string' ? new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0] : sub.expiryDate) || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
         };
+
+        if (domainId) subObj.domainId = domainId;
+        if (domainName) subObj.domainName = domainName;
+
+        return subObj;
       });
 
       const finalStatus = formData.endingDate ? 'inactive' : formData.status;
-
-      await updateDoc(doc(db, 'users', client.id), {
-        ...formData,
+      
+      const updateData = {
+        salutation: formData.salutation || '',
+        name: formData.name || '',
+        careOf: formData.careOf || '',
+        email: formData.email || '',
+        phone: formData.phone || '',
+        address: formData.address || '',
+        portalEnabled: formData.portalEnabled ?? false,
+        endingDate: formData.endingDate || '',
+        photoURL: formData.photoURL || '',
         status: finalStatus,
         subscriptions: updatedSubscriptions,
         updatedAt: serverTimestamp()
-      });
+      };
+
+      console.log("Update payload:", updateData);
+
+      if (!client.id) {
+        throw new Error("Client ID is missing. Cannot update record.");
+      }
+
+      const clientRef = doc(db, 'users', client.id);
+      await updateDoc(clientRef, updateData);
+      
+      console.log("Update successful");
       setIsSaved(true);
       setTimeout(() => {
         setIsSaved(false);
         onClose();
-      }, 1500);
+      }, 500);
     } catch (err: any) {
       console.error("Error updating client:", err);
       setError(err.message || "Failed to save changes. Please try again.");
       try {
-        handleFirestoreError(err, OperationType.UPDATE, 'clients');
-      } catch (e) {}
+        handleFirestoreError(err, OperationType.UPDATE, 'users');
+      } catch (e) {
+        console.error("Firestore error handler failed:", e);
+      }
     } finally {
       setIsSaving(false);
     }
@@ -155,6 +192,21 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
           <p className="text-sm font-bold">{error}</p>
         </div>
       )}
+      <div className="space-y-2">
+        <label className="text-sm font-bold text-slate-700">Profile Photo URL</label>
+        <div className="flex gap-2">
+          <input 
+            type="text" 
+            value={formData.photoURL}
+            onChange={e => setFormData({ ...formData, photoURL: e.target.value })}
+            placeholder="https://example.com/photo.jpg"
+            className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          {formData.photoURL && (
+            <img src={formData.photoURL} alt="Preview" className="w-10 h-10 rounded-lg object-cover border border-slate-200" />
+          )}
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <label className="text-sm font-bold text-slate-700">Salutation</label>
@@ -313,6 +365,34 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, onClose 
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
           </select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700">Portal Access</label>
+          <div className="flex items-center gap-3 h-[42px]">
+            <button
+              type="button"
+              disabled={currentUser?.role !== 'Admin'}
+              onClick={() => setFormData(prev => ({ ...prev, portalEnabled: !prev.portalEnabled }))}
+              className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                formData.portalEnabled ? "bg-indigo-600" : "bg-slate-200",
+                currentUser?.role !== 'Admin' && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                  formData.portalEnabled ? "translate-x-6" : "translate-x-1"
+                )}
+              />
+            </button>
+            <span className="text-sm font-medium text-slate-600">
+              {formData.portalEnabled ? 'Enabled' : 'Disabled'}
+            </span>
+            {currentUser?.role !== 'Admin' && (
+              <span className="text-[10px] text-rose-500 font-bold uppercase tracking-tight">Admin Only</span>
+            )}
+          </div>
         </div>
         <div className="space-y-2">
           <label className="text-sm font-bold text-slate-700 flex items-center gap-2">

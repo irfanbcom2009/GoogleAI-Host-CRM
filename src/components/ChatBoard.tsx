@@ -8,16 +8,18 @@ import {
   AlertCircle,
   Plus,
   ArrowRight,
+  ArrowLeft,
   DollarSign,
   Package,
   Loader2,
   MessageSquare,
   Search,
   Users as UsersIcon,
+  Paperclip,
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
   collection, 
   onSnapshot, 
@@ -25,13 +27,14 @@ import {
   serverTimestamp, 
   query, 
   orderBy, 
+  where,
   doc, 
   getDoc,
   setDoc, 
   updateDoc,
   limit
 } from 'firebase/firestore';
-import { ChatMessage, ChatSession, User as UserType, ServiceType } from '../types';
+import { ChatMessage, ChatSession, User as UserType, ServiceType, Domain, Journal } from '../types';
 import { cn } from '../lib/utils';
 import { useServices } from '../hooks/useServices';
 
@@ -39,9 +42,10 @@ interface ChatBoardProps {
   currentUser: UserType;
   targetClientId?: string; // If admin is viewing, they need to know which client
   targetClientName?: string;
+  onBack?: () => void;
 }
 
-export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientId, targetClientName }) => {
+export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientId, targetClientName, onBack }) => {
   const { catalog: SERVICES_CATALOG } = useServices();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeClientId, setActiveClientId] = useState<string | null>(targetClientId || (currentUser.role === 'Client' ? currentUser.id : null));
@@ -49,6 +53,44 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const [allUsers, setAllUsers] = useState<UserType[]>([]);
   const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [hasSubscribedServices, setHasSubscribedServices] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (currentUser.role !== 'Client') {
+      setHasSubscribedServices(true);
+      return;
+    }
+
+    // Check for subscribed domains or journals from us
+    const unsubscribeDomains = onSnapshot(
+      query(collection(db, 'domains'), where('clientId', '==', currentUser.id)),
+      (snapshot) => {
+        const domains = snapshot.docs.map(doc => doc.data() as Domain);
+        const hasSubscribedDomain = domains.some(d => d.isDomainSubscribedFromUs || d.isHostingSubscribedFromUs);
+        
+        if (hasSubscribedDomain) {
+          setHasSubscribedServices(true);
+        } else {
+          // If no domains, check journals
+          onSnapshot(
+            query(collection(db, 'journals'), where('clientId', '==', currentUser.id)),
+            (journalSnapshot) => {
+              const journals = journalSnapshot.docs.map(doc => doc.data() as Journal);
+              const hasSubscribedJournal = journals.some(j => 
+                j.isOjsSubscribedFromUs || 
+                j.isIssnSubscribedFromUs || 
+                j.isHecSubscribedFromUs || 
+                j.isDoiSubscribedFromUs
+              );
+              setHasSubscribedServices(hasSubscribedJournal);
+            }
+          );
+        }
+      }
+    );
+
+    return () => unsubscribeDomains();
+  }, [currentUser.id, currentUser.role]);
 
   useEffect(() => {
     if (targetClientId && !targetClientName) {
@@ -74,6 +116,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [isOrdering, setIsOrdering] = useState(false);
+  const [isAttaching, setIsAttaching] = useState(false);
   const [orderForm, setOrderForm] = useState({
     serviceType: 'Hosting' as ServiceType | string,
     amount: 0,
@@ -187,6 +230,55 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
     }
   };
 
+  const handleFileAttachment = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeClientId) return;
+
+    // Limit file size to 1MB for Firestore
+    if (file.size > 1024 * 1024) {
+      alert("File size exceeds 1MB. Please upload a smaller file.");
+      return;
+    }
+
+    setIsAttaching(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      
+      const messageData = {
+        senderId: currentUser.id,
+        senderName: currentUser.name,
+        senderRole: currentUser.role,
+        text: file.name,
+        fileData: base64,
+        type: 'file',
+        createdAt: new Date().toISOString()
+      };
+
+      try {
+        await addDoc(collection(db, 'chats', activeClientId, 'messages'), messageData);
+        
+        // Update session
+        await setDoc(doc(db, 'chats', activeClientId), {
+          clientId: activeClientId,
+          clientName: activeClientName || 'Unknown Client',
+          lastMessage: `File: ${file.name}`,
+          lastMessageAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          unreadCount: currentUser.role === 'Client' ? 1 : 0
+        }, { merge: true });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `chats/${activeClientId}/messages`);
+      } finally {
+        setIsAttaching(false);
+      }
+    };
+    reader.readAsDataURL(file);
+    
+    // Reset input
+    e.target.value = '';
+  };
+
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeClientId || orderForm.amount <= 0 || !orderForm.description.trim()) return;
@@ -273,6 +365,29 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
     );
   }
 
+  if (currentUser.role === 'Client' && hasSubscribedServices === false) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-4">
+        <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center text-rose-500 mb-2">
+          <Shield size={40} />
+        </div>
+        <h2 className="text-2xl font-black text-slate-900">Subscription Required</h2>
+        <p className="text-slate-500 max-w-md font-medium">
+          Live chat is only available for clients with at least one active service subscription. 
+          Please subscribe to a service or contact support via email to enable this feature.
+        </p>
+        <div className="pt-4">
+          <button 
+            onClick={onBack}
+            className="px-6 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // If staff and no client selected, show session list
   if (currentUser.role !== 'Client' && !activeClientId) {
     return (
@@ -347,7 +462,15 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
       {/* Chat Header */}
       <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {currentUser.role !== 'Client' && (
+          {onBack && (
+            <button 
+              onClick={onBack}
+              className="p-2 hover:bg-white rounded-xl text-slate-400 hover:text-slate-600 transition-all border border-transparent hover:border-slate-200 lg:hidden"
+            >
+              <ArrowLeft size={20} />
+            </button>
+          )}
+          {currentUser.role !== 'Client' && !onBack && (
             <button 
               onClick={() => setActiveClientId(null)}
               className="p-2 hover:bg-white rounded-xl text-slate-400 hover:text-slate-600 transition-all border border-transparent hover:border-slate-200"
@@ -368,10 +491,12 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
         </div>
         <button 
           onClick={() => setIsOrdering(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-sm"
+          disabled={hasSubscribedServices === false}
+          className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs sm:text-sm hover:bg-indigo-700 transition-all shadow-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Plus size={18} />
-          Place Order
+          <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
+          <span className="hidden xs:inline">Place Order</span>
+          <span className="xs:hidden">Order</span>
         </button>
       </div>
 
@@ -423,6 +548,28 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
                       {msg.orderData?.amount}
                     </div>
                   </div>
+                ) : msg.type === 'file' ? (
+                  <div className="flex items-center gap-3 min-w-[200px]">
+                    <div className={cn(
+                      "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                      msg.senderId === currentUser.id ? "bg-white/20" : "bg-indigo-50"
+                    )}>
+                      <Paperclip size={20} className={msg.senderId === currentUser.id ? "text-white" : "text-indigo-600"} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold truncate text-xs">{msg.text}</p>
+                      <a 
+                        href={msg.fileData} 
+                        download={msg.text}
+                        className={cn(
+                          "text-[10px] font-bold uppercase tracking-widest hover:underline mt-1 inline-block",
+                          msg.senderId === currentUser.id ? "text-white/80" : "text-indigo-600"
+                        )}
+                      >
+                        Download
+                      </a>
+                    </div>
+                  </div>
                 ) : (
                   <p>{msg.text}</p>
                 )}
@@ -442,15 +589,31 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
         className="p-4 bg-white border-t border-slate-100 flex items-center gap-3"
       >
         <input 
+          type="file"
+          id="chat-attachment"
+          className="hidden"
+          onChange={handleFileAttachment}
+        />
+        <button
+          type="button"
+          disabled={isAttaching || hasSubscribedServices === false}
+          onClick={() => document.getElementById('chat-attachment')?.click()}
+          className="p-2.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Attach File"
+        >
+          {isAttaching ? <Loader2 className="animate-spin" size={20} /> : <Paperclip size={20} />}
+        </button>
+        <input 
           type="text" 
-          placeholder="Type your message..."
-          className="flex-1 px-4 py-2.5 bg-slate-100 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm"
+          placeholder={hasSubscribedServices === false ? "Support restricted to subscribed services only" : "Type your message..."}
+          disabled={hasSubscribedServices === false}
+          className="flex-1 px-4 py-2.5 bg-slate-100 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           value={newMessage}
           onChange={(e) => setNewMessage(e.target.value)}
         />
         <button 
           type="submit"
-          disabled={!newMessage.trim()}
+          disabled={!newMessage.trim() || hasSubscribedServices === false}
           className="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send size={20} />

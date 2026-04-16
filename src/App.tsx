@@ -10,7 +10,7 @@ import { Points } from './components/Points';
 import { Notifications } from './components/Notifications';
 import { Publishers } from './components/Publishers';
 import { HEC } from './components/HEC';
-import { Invoices } from './components/Invoices';
+import { InvoiceModule } from './components/InvoiceModule';
 import { TrashManagement } from './components/TrashManagement';
 import { FileManager } from './components/FileManager';
 import { FileRequests } from './components/FileRequests';
@@ -18,6 +18,7 @@ import { ClientSetupWorkflow } from './components/ClientSetupWorkflow';
 import { IndexingAgencies } from './components/IndexingAgencies';
 import { ApprovalRequests } from './components/ApprovalRequests';
 import { DOIManagement } from './components/DOIManagement';
+import { DOAJApplications } from './components/DOAJApplications';
 import { Policies } from './components/Policies';
 import { Employees } from './components/Employees';
 import { EmployeeDashboard } from './components/EmployeeDashboard';
@@ -33,14 +34,20 @@ import { OrderManagement } from './components/OrderManagement';
 import { FinanceDashboard } from './components/FinanceDashboard';
 import { LandingPage } from './components/LandingPage';
 import { GlobalAddButton } from './components/GlobalAddButton';
-import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck } from 'lucide-react';
+import { StandaloneChat } from './components/StandaloneChat';
+import { RegistrationFlow } from './components/RegistrationFlow';
+import { RegistrationRequests } from './components/RegistrationRequests';
+import { AccessLogs } from './components/AccessLogs';
+import { PermissionDenied } from './components/PermissionDenied';
+import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck, MessageSquare, UserPlus, ShieldAlert } from 'lucide-react';
 import { cn } from './lib/utils';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { db, auth } from './lib/firebase';
-import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserRole, User as CRMUser, UserPermissions } from './types';
 import { geminiService } from './services/geminiService';
+import { FULL_MODULE_PERMISSIONS } from './lib/permissions';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -58,6 +65,17 @@ export default function App() {
   const [aiAssistantResponse, setAiAssistantResponse] = useState<string | null>(null);
   const [isAiAssistantLoading, setIsAiAssistantLoading] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isStandaloneChat, setIsStandaloneChat] = useState(false);
+  const [isUnauthorized, setIsUnauthorized] = useState(false);
+  const [unauthorizedUser, setUnauthorizedUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'chat') {
+      setIsStandaloneChat(true);
+    }
+  }, []);
 
   const handleAiAssistantAsk = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,50 +93,161 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
       if (user) {
-        // Fetch user role and full document
-        try {
-          const userRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userRef);
-          if (userDoc.exists()) {
-            const userData = userDoc.data() as CRMUser;
-            setCurrentUserDoc({ ...userData, id: userDoc.id });
-            setUserRole(userData.role as UserRole);
-          } else {
-            // Check if user is a client by email
-            const clientsRef = collection(db, 'clients');
-            const q = query(clientsRef, where('email', '==', user.email));
-            const clientSnapshot = await getDocs(q);
+        // Real-time listener for the current user's document
+        const userRef = doc(db, 'users', user.uid);
+        const unsubDoc = onSnapshot(userRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            const userData = docSnap.data() as CRMUser;
             
-            let initialRole: UserRole = 'Employee';
-            const isDefaultAdmin = user.email === 'irfanbcom2009@gmail.com';
-            
-            if (isDefaultAdmin) {
-              initialRole = 'Admin';
-            } else if (!clientSnapshot.empty) {
-              initialRole = 'Client';
+            // Check if portal access is enabled
+            if (userData.portalEnabled === false) {
+              setLoginError("Your portal access has been disabled. Please contact your administrator.");
+              await signOut(auth);
+              setUser(null);
+              setCurrentUserDoc(null);
+              return;
             }
 
-            const newUser = {
-              name: user.displayName || 'New User',
-              email: user.email,
-              role: initialRole,
-              points: 0,
-              createdAt: serverTimestamp()
-            };
+            setCurrentUserDoc({ ...userData, id: docSnap.id });
+            setUserRole(userData.role as UserRole);
+            setUser(user);
 
-            await setDoc(userRef, newUser);
-            setCurrentUserDoc({ ...newUser, id: user.uid } as any);
-            setUserRole(initialRole);
+            // Special handling for Ayesha Tariq - ensure full employee access
+            const ayeshaEmails = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
+            if (ayeshaEmails.includes(user.email || '')) {
+              const currentPerms = (userData.permissions || {}) as any;
+              const needsUpdate = !currentPerms.employees || 
+                                 !currentPerms.employees.view || 
+                                 !currentPerms.employees.edit || 
+                                 !currentPerms.employees.delete;
+              
+              if (needsUpdate) {
+                const updatedPerms: UserPermissions = {
+                  ...(userData.permissions || {} as any),
+                  employees: FULL_MODULE_PERMISSIONS
+                };
+                await updateDoc(userRef, { 
+                  permissions: updatedPerms,
+                  updatedAt: serverTimestamp()
+                });
+                // Update local state as well
+                setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
+              }
+            }
+
+            setLoading(false);
+          } else {
+            // If doc doesn't exist by UID, check by email (legacy or first-time)
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('email', '==', user.email));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const userDoc = querySnapshot.docs[0];
+              const userData = { ...userDoc.data() as CRMUser, id: userDoc.id };
+              
+              if (userData.portalEnabled === false) {
+                setLoginError("Your portal access has been disabled. Please contact your administrator.");
+                await signOut(auth);
+                setUser(null);
+                setCurrentUserDoc(null);
+                return;
+              }
+
+              // Link this user to their UID if it's not already linked
+              // This is critical for Firestore rules to work correctly
+              if (userDoc.id !== user.uid) {
+                await setDoc(doc(db, 'users', user.uid), {
+                  ...userData,
+                  uid: user.uid,
+                  updatedAt: serverTimestamp()
+                });
+              }
+
+              setCurrentUserDoc({ ...userData, id: user.uid });
+              setUserRole(userData.role as UserRole);
+              setUser(user);
+
+              // Special handling for Ayesha Tariq - ensure full employee access
+              const ayeshaEmails = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
+              if (ayeshaEmails.includes(user.email || '')) {
+                const currentPerms = (userData.permissions || {}) as any;
+                const needsUpdate = !currentPerms.employees || 
+                                   !currentPerms.employees.view || 
+                                   !currentPerms.employees.edit || 
+                                   !currentPerms.employees.delete;
+                
+                if (needsUpdate) {
+                  const updatedPerms: UserPermissions = {
+                    ...(userData.permissions || {} as any),
+                    employees: FULL_MODULE_PERMISSIONS
+                  };
+                  await updateDoc(doc(db, 'users', userData.id), { 
+                    permissions: updatedPerms,
+                    updatedAt: serverTimestamp()
+                  });
+                  // Update local state as well
+                  setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
+                }
+              }
+
+              setLoading(false);
+            } else if (user.email === 'irfanbcom2009@gmail.com') {
+              // Default Admin
+              const newUser = {
+                name: user.displayName || 'Irfan Rashid',
+                email: user.email,
+                role: 'Admin' as UserRole,
+                points: 0,
+                photoURL: user.photoURL,
+                portalEnabled: true,
+                createdAt: serverTimestamp()
+              };
+              await setDoc(doc(db, 'users', user.uid), newUser);
+              setCurrentUserDoc({ ...newUser, id: user.uid } as any);
+              setUserRole('Admin');
+              setUser(user);
+              setLoading(false);
+            } else {
+              // Unauthorized access attempt
+              setUnauthorizedUser(user);
+              setIsUnauthorized(true);
+              setLoading(false);
+              
+              // Log unauthorized attempt in access_logs
+              try {
+                await addDoc(collection(db, 'access_logs'), {
+                  email: user.email,
+                  timestamp: new Date().toISOString(),
+                  status: 'unauthorized',
+                  userAgent: navigator.userAgent
+                });
+                
+                // Also log in activity_logs for admin visibility
+                await addDoc(collection(db, 'activity_logs'), {
+                  action: 'UNAUTHORIZED_LOGIN_ATTEMPT',
+                  details: `Email: ${user.email}`,
+                  userName: user.displayName || 'Unknown',
+                  userId: user.uid,
+                  timestamp: serverTimestamp()
+                });
+              } catch (logError) {
+                console.error("Error logging unauthorized attempt:", logError);
+              }
+            }
           }
-        } catch (error) {
-          console.error("Error fetching/creating user role:", error);
-        }
+        }, (err) => {
+          console.error("User doc listener error:", err);
+          setLoading(false);
+        });
+
+        return () => unsubDoc();
       } else {
+        setUser(null);
         setCurrentUserDoc(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
     return () => unsubscribe();
   }, []);
@@ -132,15 +261,17 @@ export default function App() {
     let issnCount = 0;
     let indexingCount = 0;
     let taskCount = 0;
+    let registrationCount = 0;
 
-    const updateCount = () => setPendingApprovalsCount(issnCount + indexingCount + taskCount);
+    const updateCount = () => setPendingApprovalsCount(issnCount + indexingCount + taskCount + registrationCount);
 
     const unsubIssn = onSnapshot(
       query(collection(db, 'issn_requests'), where('status', '==', 'pending')),
       (snapshot) => {
         issnCount = snapshot.size;
         updateCount();
-      }
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'issn_requests')
     );
 
     const unsubIndexing = onSnapshot(
@@ -148,7 +279,8 @@ export default function App() {
       (snapshot) => {
         indexingCount = snapshot.size;
         updateCount();
-      }
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'journal_indexing')
     );
 
     const unsubTasks = onSnapshot(
@@ -156,13 +288,24 @@ export default function App() {
       (snapshot) => {
         taskCount = snapshot.size;
         updateCount();
-      }
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'tasks')
+    );
+
+    const unsubRegistrations = onSnapshot(
+      query(collection(db, 'registration_requests'), where('status', '==', 'pending')),
+      (snapshot) => {
+        registrationCount = snapshot.size;
+        updateCount();
+      },
+      (error) => handleFirestoreError(error, OperationType.GET, 'registration_requests')
     );
 
     return () => {
       unsubIssn();
       unsubIndexing();
       unsubTasks();
+      unsubRegistrations();
     };
   }, [user, userRole]);
 
@@ -182,8 +325,29 @@ export default function App() {
     );
   }
 
+  if (isStandaloneChat) {
+    return <StandaloneChat />;
+  }
+
+  if (isUnauthorized && unauthorizedUser) {
+    return (
+      <RegistrationFlow 
+        user={unauthorizedUser} 
+        onClose={async () => {
+          await signOut(auth);
+          setIsUnauthorized(false);
+          setUnauthorizedUser(null);
+          setShowLogin(false);
+        }} 
+      />
+    );
+  }
+
   if (!user) {
-    if (showLogin) return <Login />;
+    if (showLogin) return <Login error={loginError} onBack={() => {
+      setShowLogin(false);
+      setLoginError(null);
+    }} />;
     return <LandingPage onLogin={() => setShowLogin(true)} />;
   }
 
@@ -211,9 +375,10 @@ export default function App() {
       'indexing': 'indexingAgencies',
       'publishers': 'publishers',
       'hec': 'hecApplications',
+      'doaj': 'doajApplications',
       'issn': 'issnRequests',
       'doi': 'doiManagement',
-      'domains': 'dataTools',
+      'domains': 'domains',
       'files': 'dataTools',
       'invoices': 'invoices',
       'expenses': 'expenses',
@@ -221,29 +386,28 @@ export default function App() {
       'policies': 'resources',
       'faq': 'resources',
       'notifications': 'notifications',
-      'trash': 'trash'
+      'trash': 'trash',
+      'employees': 'employees',
+      'clients': 'clients',
+      'tasks': 'tasks',
+      'catalog': 'dataTools',
+      'catalog-manager': 'dataTools',
+      'registration-requests': 'approvalRequests',
+      'access-logs': 'approvalRequests',
+      'orders': 'invoices',
+      'finance-dashboard': 'invoices',
+      'points': 'resources',
+      'settings': 'settings'
     };
 
     const requiredPermission = tabToPermissionMap[activeTab];
-    if (requiredPermission && currentUser.permissions && currentUser.permissions[requiredPermission] === false) {
-      return (
-        <div className="h-full flex flex-col items-center justify-center p-8 text-center">
-          <div className="w-20 h-20 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mb-6">
-            <ShieldCheck size={40} />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">Access Denied</h2>
-          <p className="text-slate-500 max-w-md mx-auto">
-            You don't have permission to access the <span className="font-bold text-slate-900">{activeTab.replace('-', ' ')}</span> module. 
-            Please contact your administrator if you believe this is an error.
-          </p>
-          <button 
-            onClick={() => setActiveTab('dashboard')}
-            className="mt-8 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-      );
+    if (requiredPermission && currentUser.permissions) {
+      const modulePerms = (currentUser.permissions as any)[requiredPermission];
+      if (modulePerms && typeof modulePerms === 'object') {
+        if (modulePerms.view === false) {
+          return <PermissionDenied onBack={() => setActiveTab('dashboard')} />;
+        }
+      }
     }
 
     switch (activeTab) {
@@ -260,7 +424,7 @@ export default function App() {
       );
       case 'approvals': return <ApprovalRequests />;
       case 'workflow': return <ClientSetupWorkflow />;
-      case 'indexing': return <IndexingAgencies />;
+      case 'indexing': return <IndexingAgencies currentUser={currentUser} />;
       case 'clients': return (
         <Clients 
           searchQuery={searchQuery} 
@@ -277,15 +441,18 @@ export default function App() {
       case 'journals': return <Journals searchQuery={searchQuery} currentUser={currentUser} />;
       case 'publishers': return <Publishers searchQuery={searchQuery} currentUser={currentUser} />;
       case 'hec': return <HEC searchQuery={searchQuery} currentUser={currentUser} />;
+      case 'doaj': return <DOAJApplications searchQuery={searchQuery} currentUser={currentUser} />;
       case 'issn': return <ISSNRequests searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'doi': return <DOIManagement userRole={currentUser.role} userId={currentUser.id} />;
-      case 'invoices': return <Invoices searchQuery={searchQuery} currentUser={currentUser} />;
+      case 'doi': return <DOIManagement currentUser={currentUser} />;
+      case 'invoices': return <InvoiceModule currentUser={currentUser} />;
       case 'expenses': return <Expenses currentUser={currentUser} />;
       case 'files': return <FileManager searchQuery={searchQuery} />;
       case 'file-requests': return <FileRequests searchQuery={searchQuery} />;
       case 'tasks': return <Tasks searchQuery={searchQuery} currentUser={currentUser} />;
       case 'catalog': return <Services currentUser={currentUser} />;
       case 'catalog-manager': return <CatalogManager currentUser={currentUser} />;
+      case 'registration-requests': return <RegistrationRequests />;
+      case 'access-logs': return <AccessLogs />;
       case 'orders': return <OrderManagement currentUser={currentUser} />;
       case 'finance-dashboard': return <FinanceDashboard currentUser={currentUser} />;
       case 'points': return <Points />;
@@ -319,6 +486,7 @@ export default function App() {
         onLogout={handleLogout}
         isImpersonating={!!impersonatedUser}
         onStopImpersonating={() => setImpersonatedUser(null)}
+        pendingApprovalsCount={pendingApprovalsCount}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -455,7 +623,7 @@ export default function App() {
               </div>
               <div className="relative group">
                 <img 
-                  src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`} 
+                  src={currentUser.photoURL || user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`} 
                   alt="Avatar" 
                   className="w-10 h-10 rounded-full bg-indigo-100 border border-slate-200 cursor-pointer"
                 />
@@ -490,7 +658,7 @@ export default function App() {
       </main>
 
       {user && (currentUser.role === 'Admin' || currentUser.role === 'Manager' || currentUser.role === 'Employee') && (
-        <GlobalAddButton setActiveTab={setActiveTab} userPermissions={currentUser.permissions} />
+        <GlobalAddButton setActiveTab={setActiveTab} currentUser={currentUser} />
       )}
 
       {/* AI Assistant Modal */}

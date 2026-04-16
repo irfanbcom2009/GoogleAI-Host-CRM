@@ -15,8 +15,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, writeBatch, where } from 'firebase/firestore';
 
 interface Notification {
   id: string;
@@ -33,7 +33,15 @@ export const Notifications: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
+    if (!auth.currentUser) return;
+
+    let q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
+    
+    // If user is a client, only fetch their own notifications
+    // We check the role from the current user document if available, 
+    // but for simplicity here we can just try to filter if we know the user is a client
+    // In this app, we can pass the currentUser prop or check the role
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const notifData = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -42,7 +50,26 @@ export const Notifications: React.FC = () => {
       setNotifications(notifData);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'notifications');
+      // If permission denied, it might be because we're a client trying to read all
+      if (error.code === 'permission-denied') {
+        const clientQ = query(
+          collection(db, 'notifications'), 
+          where('userId', '==', auth.currentUser?.uid),
+          orderBy('createdAt', 'desc')
+        );
+        onSnapshot(clientQ, (snapshot) => {
+          const notifData = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as Notification[];
+          setNotifications(notifData);
+          setLoading(false);
+        }, (err) => {
+          handleFirestoreError(err, OperationType.LIST, 'notifications');
+        });
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'notifications');
+      }
     });
 
     return () => unsubscribe();

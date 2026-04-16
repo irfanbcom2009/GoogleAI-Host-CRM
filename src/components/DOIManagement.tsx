@@ -22,16 +22,16 @@ import {
   Ticket
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { DOI, DOIPayment, Client, Journal, UserRole, Publisher } from '../types';
+import { DOI, DOIPayment, Client, Journal, User, Publisher } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, where, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
 import { cn, sanitizeUrl } from '../lib/utils';
 import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface DOIManagementProps {
-  userRole: UserRole;
-  userId: string;
+  currentUser: User;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -47,7 +47,8 @@ const AVAILABLE_COLUMNS = [
   { id: 'org', label: 'Sponsoring Org' }
 ];
 
-export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }) => {
+export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [dois, setDois] = useState<DOI[]>([]);
   const [payments, setPayments] = useState<DOIPayment[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -87,11 +88,11 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
     screenshotUrl: ''
   });
 
-  const isClient = userRole === 'Client';
+  const isClient = currentUser.role === 'Client';
 
   useEffect(() => {
     // Load column preferences
-    const savedPrefs = localStorage.getItem(`doi_columns_${userId}`);
+    const savedPrefs = localStorage.getItem(`doi_columns_${currentUser.id}`);
     if (savedPrefs) {
       try {
         setSelectedColumns(JSON.parse(savedPrefs));
@@ -105,11 +106,11 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
 
     if (isClient) {
       unsubDois = onSnapshot(
-        query(collection(db, 'doi_records'), where('clientId', '==', userId)),
+        query(collection(db, 'doi_records'), where('clientId', '==', currentUser.id)),
         (snapshot) => setDois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOI)))
       );
       unsubPayments = onSnapshot(
-        query(collection(db, 'doi_payments'), where('clientId', '==', userId)),
+        query(collection(db, 'doi_payments'), where('clientId', '==', currentUser.id)),
         (snapshot) => setPayments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOIPayment)))
       );
     } else {
@@ -141,11 +142,11 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
       unsubPublishers();
       unsubJournals();
     };
-  }, [isClient, userId]);
+  }, [isClient, currentUser.id]);
 
   const handleColumnChange = (newColumns: string[]) => {
     setSelectedColumns(newColumns);
-    localStorage.setItem(`doi_columns_${userId}`, JSON.stringify(newColumns));
+    localStorage.setItem(`doi_columns_${currentUser.id}`, JSON.stringify(newColumns));
   };
 
   const handleCreateDOI = async (e: React.FormEvent) => {
@@ -163,7 +164,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
     try {
       await addDoc(collection(db, 'doi_records'), {
         ...newDOI,
-        clientId: isClient ? userId : newDOI.clientId,
+        clientId: isClient ? currentUser.id : newDOI.clientId,
         status: 'pending',
         createdAt: serverTimestamp()
       });
@@ -193,7 +194,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
   const handleBulkAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     const urls = bulkUrls.split('\n').map(u => sanitizeUrl(u.trim())).filter(u => u !== '');
-    const targetClientId = isClient ? userId : selectedClientId;
+    const targetClientId = isClient ? currentUser.id : selectedClientId;
     
     if (!targetClientId) {
       alert('Please select a client.');
@@ -276,6 +277,10 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
     return { totalActivated, totalPayments, balance };
   };
 
+  const canAdd = check('doiManagement', 'add');
+  const canEdit = check('doiManagement', 'edit');
+  const canApprove = check('doiManagement', 'approve');
+
   if (loading) {
     return (
       <div className="p-8 flex flex-col items-center justify-center min-h-[400px] text-slate-400">
@@ -298,21 +303,18 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
             selectedColumns={selectedColumns}
             onChange={handleColumnChange}
           />
-          <button 
-            onClick={() => setIsSingleModalOpen(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-          >
-            <Plus size={20} />
-            New Application
-          </button>
-          <button 
-            onClick={() => setIsBulkModalOpen(true)}
-            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-          >
-            <Upload size={20} />
-            Bulk Add
-          </button>
-          {!isClient && (
+          {canAdd && (
+            <>
+              <button 
+                onClick={() => setIsSingleModalOpen(true)}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              >
+                <Plus size={20} />
+                New Application
+              </button>
+            </>
+          )}
+          {!isClient && canAdd && (
             <button 
               onClick={() => setIsPaymentModalOpen(true)}
               className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20"
@@ -340,9 +342,9 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Current Balance</p>
               <h4 className={cn(
                 "text-2xl font-bold",
-                getClientStats(userId).balance >= 0 ? "text-indigo-600" : "text-rose-600"
+                getClientStats(currentUser.id).balance >= 0 ? "text-indigo-600" : "text-rose-600"
               )}>
-                ${getClientStats(userId).balance.toLocaleString()}
+                ${getClientStats(currentUser.id).balance.toLocaleString()}
               </h4>
             </div>
           </>
@@ -384,10 +386,10 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
             </span>
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+              <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                 {selectedColumns.includes('journal') && <th className="px-6 py-4">Journal & URL</th>}
                 {selectedColumns.includes('prefix') && <th className="px-6 py-4">Prefix</th>}
                 {selectedColumns.includes('member') && <th className="px-6 py-4">Member Name</th>}
@@ -491,7 +493,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
                       </td>
                     )}
                     <td className="px-6 py-4 text-right">
-                      {!isClient && doi.status === 'pending' && (
+                      {!isClient && doi.status === 'pending' && canApprove && (
                         <button 
                           onClick={() => activateDOI(doi.id)}
                           className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
@@ -547,7 +549,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ userRole, userId }
                 >
                   <option value="">Select Publisher</option>
                   {publishers
-                    .filter(p => p.clientId === (isClient ? userId : newDOI.clientId))
+                    .filter(p => p.clientId === (isClient ? currentUser.id : newDOI.clientId))
                     .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>

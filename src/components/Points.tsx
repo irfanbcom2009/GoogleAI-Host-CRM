@@ -179,10 +179,10 @@ export const Points: React.FC = () => {
                 <h3 className="font-black text-lg text-slate-900">Point History</h3>
               </div>
             </div>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
               <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/50 text-slate-500 text-[10px] uppercase tracking-wider font-black">
+                <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                  <tr className="text-slate-500 text-[10px] uppercase tracking-wider font-black border-b border-slate-100">
                     <th className="px-6 py-4">User</th>
                     <th className="px-6 py-4">Type</th>
                     <th className="px-6 py-4">Points</th>

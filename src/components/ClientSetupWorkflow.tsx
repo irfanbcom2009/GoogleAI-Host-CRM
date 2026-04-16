@@ -23,8 +23,8 @@ import { cn } from '../lib/utils';
 
 const STEPS = [
   { id: 'client', title: 'Client', icon: User },
-  { id: 'domain', title: 'Domain', icon: Globe },
   { id: 'publisher', title: 'Publisher', icon: Building2 },
+  { id: 'domain', title: 'Domain', icon: Globe },
   { id: 'journal', title: 'Journal', icon: BookOpen },
   { id: 'services', title: 'Services', icon: CreditCard },
 ];
@@ -66,7 +66,10 @@ export const ClientSetupWorkflow: React.FC = () => {
 
     const unsubDomains = onSnapshot(
       query(collection(db, 'domains'), where('clientId', '==', selectedClient.id)),
-      (snap) => setDomains(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain)))
+      (snap) => {
+        const allDomains = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain));
+        setDomains(selectedPublisher ? allDomains.filter(d => d.publisherId === selectedPublisher.id) : allDomains);
+      }
     );
 
     const unsubPublishers = onSnapshot(
@@ -76,7 +79,10 @@ export const ClientSetupWorkflow: React.FC = () => {
 
     const unsubJournals = onSnapshot(
       query(collection(db, 'journals'), where('clientId', '==', selectedClient.id)),
-      (snap) => setJournals(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal)))
+      (snap) => {
+        const allJournals = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal));
+        setJournals(selectedDomain ? allJournals.filter(j => j.domainId === selectedDomain.id) : allJournals);
+      }
     );
 
     return () => {
@@ -197,91 +203,11 @@ export const ClientSetupWorkflow: React.FC = () => {
           </div>
         );
 
-      case 'domain':
-        return (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-500 mb-2">
-              <User size={14} /> {selectedClient?.name}
-            </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search or add domain..." 
-                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
-              {domains.filter(d => d.domainName.toLowerCase().includes(search.toLowerCase())).map(domain => (
-                <button 
-                  key={domain.id}
-                  onClick={() => {
-                    setSelectedDomain(domain);
-                    handleNext();
-                  }}
-                  className={cn(
-                    "p-4 rounded-2xl border text-left transition-all flex items-center justify-between group",
-                    selectedDomain?.id === domain.id 
-                      ? "border-indigo-600 bg-indigo-50 shadow-sm" 
-                      : "border-slate-100 bg-white hover:border-indigo-200 hover:bg-slate-50"
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
-                      selectedDomain?.id === domain.id ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
-                    )}>
-                      <Globe size={20} />
-                    </div>
-                    <div>
-                      <p className="font-bold text-slate-900">{domain.domainName}</p>
-                      <p className="text-xs text-slate-500">{domain.registrar}</p>
-                    </div>
-                  </div>
-                  {selectedDomain?.id === domain.id && <CheckCircle2 size={20} className="text-indigo-600" />}
-                </button>
-              ))}
-              {search && !domains.some(d => d.domainName.toLowerCase() === search.toLowerCase()) && (
-                <button 
-                  onClick={async () => {
-                    try {
-                      await addDoc(collection(db, 'domains'), {
-                        clientId: selectedClient?.id,
-                        domainName: search,
-                        registrar: 'Manual Entry',
-                        status: 'active',
-                        expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-                        createdAt: serverTimestamp()
-                      });
-                    } catch (e) {
-                      handleFirestoreError(e, OperationType.CREATE, 'domains');
-                    }
-                  }}
-                  className="p-4 rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/30 text-indigo-600 flex items-center gap-3 hover:bg-indigo-50 transition-all font-bold"
-                >
-                  <Plus size={20} />
-                  Add "{search}" as new domain
-                </button>
-              )}
-              <button 
-                onClick={handleNext}
-                className="p-4 rounded-2xl border border-dashed border-slate-200 text-slate-500 flex items-center justify-center gap-2 hover:bg-slate-50 transition-all font-medium"
-              >
-                Skip Domain Selection
-              </button>
-            </div>
-          </div>
-        );
-
       case 'publisher':
         return (
           <div className="space-y-4">
             <div className="flex items-center gap-4 text-sm font-medium text-slate-500 mb-2">
               <span className="flex items-center gap-1"><User size={14} /> {selectedClient?.name}</span>
-              <span className="text-slate-300">/</span>
-              <span className="flex items-center gap-1"><Globe size={14} /> {selectedDomain?.domainName || 'No Domain'}</span>
             </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
@@ -356,13 +282,94 @@ export const ClientSetupWorkflow: React.FC = () => {
           </div>
         );
 
-      case 'journal':
+      case 'domain':
         return (
           <div className="space-y-4">
             <div className="flex items-center gap-4 text-sm font-medium text-slate-500 mb-2">
               <span className="flex items-center gap-1"><User size={14} /> {selectedClient?.name}</span>
               <span className="text-slate-300">/</span>
               <span className="flex items-center gap-1"><Building2 size={14} /> {selectedPublisher?.name || 'No Publisher'}</span>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Search or add domain..." 
+                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2">
+              {domains.filter(d => d.domainName.toLowerCase().includes(search.toLowerCase())).map(domain => (
+                <button 
+                  key={domain.id}
+                  onClick={() => {
+                    setSelectedDomain(domain);
+                    handleNext();
+                  }}
+                  className={cn(
+                    "p-4 rounded-2xl border text-left transition-all flex items-center justify-between group",
+                    selectedDomain?.id === domain.id 
+                      ? "border-indigo-600 bg-indigo-50 shadow-sm" 
+                      : "border-slate-100 bg-white hover:border-indigo-200 hover:bg-slate-50"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                      selectedDomain?.id === domain.id ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600"
+                    )}>
+                      <Globe size={20} />
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-900">{domain.domainName}</p>
+                      <p className="text-xs text-slate-500">{domain.registrar}</p>
+                    </div>
+                  </div>
+                  {selectedDomain?.id === domain.id && <CheckCircle2 size={20} className="text-indigo-600" />}
+                </button>
+              ))}
+              {search && !domains.some(d => d.domainName.toLowerCase() === search.toLowerCase()) && (
+                <button 
+                  onClick={async () => {
+                    try {
+                      await addDoc(collection(db, 'domains'), {
+                        clientId: selectedClient?.id,
+                        publisherId: selectedPublisher?.id || '',
+                        domainName: search,
+                        registrar: 'Manual Entry',
+                        status: 'active',
+                        expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+                        createdAt: serverTimestamp()
+                      });
+                    } catch (e) {
+                      handleFirestoreError(e, OperationType.CREATE, 'domains');
+                    }
+                  }}
+                  className="p-4 rounded-2xl border border-dashed border-indigo-200 bg-indigo-50/30 text-indigo-600 flex items-center gap-3 hover:bg-indigo-50 transition-all font-bold"
+                >
+                  <Plus size={20} />
+                  Add "{search}" as new domain
+                </button>
+              )}
+              <button 
+                onClick={handleNext}
+                className="p-4 rounded-2xl border border-dashed border-slate-200 text-slate-500 flex items-center justify-center gap-2 hover:bg-slate-50 transition-all font-medium"
+              >
+                Skip Domain Selection
+              </button>
+            </div>
+          </div>
+        );
+
+      case 'journal':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center gap-4 text-sm font-medium text-slate-500 mb-2">
+              <span className="flex items-center gap-1"><User size={14} /> {selectedClient?.name}</span>
+              <span className="text-slate-300">/</span>
+              <span className="flex items-center gap-1"><Globe size={14} /> {selectedDomain?.domainName || 'No Domain'}</span>
             </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
@@ -411,6 +418,7 @@ export const ClientSetupWorkflow: React.FC = () => {
                       await addDoc(collection(db, 'journals'), {
                         clientId: selectedClient?.id,
                         publisherId: selectedPublisher?.id || '',
+                        domainId: selectedDomain?.id || '',
                         title: search,
                         status: 'pending_issn',
                         createdAt: serverTimestamp()

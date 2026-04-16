@@ -213,10 +213,10 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+              <tr className="border-b border-slate-200">
                 {selectedColumns.includes('name') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Publisher Name</th>}
                 {selectedColumns.includes('owner') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Owner</th>}
                 {selectedColumns.includes('secp') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">SECP Reg</th>}
@@ -422,7 +422,6 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">SECP Registration No.</label>
                     <input 
-                      required
                       type="text" 
                       placeholder="Registration number"
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
@@ -433,7 +432,6 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">NTN Number</label>
                     <input 
-                      required
                       type="text" 
                       placeholder="National Tax Number"
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"

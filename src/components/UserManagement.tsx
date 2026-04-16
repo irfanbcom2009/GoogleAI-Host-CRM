@@ -21,6 +21,8 @@ import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, doc, u
 import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
 
+import { usePermissions } from '../hooks/usePermissions';
+
 interface UserManagementProps {
   onImpersonate?: (user: { id: string, role: UserRole, name: string, email: string }) => void;
   currentUser: UserType;
@@ -34,6 +36,7 @@ const AVAILABLE_COLUMNS = [
 ];
 
 export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [users, setUsers] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -146,7 +149,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -154,8 +157,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('info') && <th className="px-6 py-4">User Info</th>}
                   {selectedColumns.includes('role') && <th className="px-6 py-4">Role</th>}
                   {selectedColumns.includes('points') && <th className="px-6 py-4">Points</th>}

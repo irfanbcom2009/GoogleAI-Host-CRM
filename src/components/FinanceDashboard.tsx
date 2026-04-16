@@ -176,9 +176,10 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
           </div>
 
           <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-[10px] uppercase tracking-wider font-black">
+            <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                  <tr className="text-slate-500 text-[10px] uppercase tracking-wider font-black border-b border-slate-100">
                   <th className="px-6 py-4">Order</th>
                   <th className="px-6 py-4">Client</th>
                   <th className="px-6 py-4">Total</th>
@@ -227,6 +228,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
             </table>
           </div>
         </div>
+      </div>
 
         {/* Recent Expenses */}
         <div className="space-y-6">

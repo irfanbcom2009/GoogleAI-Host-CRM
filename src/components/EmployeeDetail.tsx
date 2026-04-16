@@ -32,9 +32,13 @@ import { motion } from 'motion/react';
 import { User as CRMUser, Task, UserRole } from '../types';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { EmployeeEditForm } from './EmployeeEditForm';
+
+import { FloatingActionBar } from './FloatingActionBar';
+import { toast } from 'react-hot-toast';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface EmployeeDetailProps {
   employee: CRMUser;
@@ -44,11 +48,63 @@ interface EmployeeDetailProps {
 }
 
 export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack, currentUser, onImpersonate }) => {
+  const { check } = usePermissions(currentUser);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdatingPortal, setIsUpdatingPortal] = useState(false);
   const [isRehiring, setIsRehiring] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editData, setEditData] = useState<CRMUser>(employee);
+
+  useEffect(() => {
+    setEditData(employee);
+  }, [employee]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditing) return;
+      
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditData(employee);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editData, employee]);
+
+  useEffect(() => {
+    if (isEditing) {
+      const firstInput = document.querySelector('input, select, textarea');
+      if (firstInput) {
+        (firstInput as HTMLElement).focus();
+      }
+    }
+  }, [isEditing]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await updateDoc(doc(db, 'users', employee.id), {
+        ...editData,
+        updatedAt: serverTimestamp()
+      });
+      setIsEditing(false);
+      toast.success('Profile updated successfully');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+      toast.error('Failed to update profile');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleRehire = async () => {
     if (!window.confirm('Are you sure you want to rehire this employee? This will clear the ending date and set a new joining date to today.')) return;
@@ -128,13 +184,23 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
           Back to Directory
         </button>
 
-        <button 
-          onClick={() => setIsEditModalOpen(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-        >
-          <Edit size={18} />
-          Edit Profile
-        </button>
+        <div className="flex items-center gap-3">
+          {check('employees', 'edit') && (
+            <button 
+              onClick={() => setIsEditing(!isEditing)}
+              disabled={isSaving}
+              className={cn(
+                "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg",
+                isEditing 
+                  ? "bg-indigo-50 text-indigo-600 border border-indigo-200" 
+                  : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/20"
+              )}
+            >
+              <Edit size={18} />
+              {isEditing ? 'Editing Mode' : 'Edit Profile'}
+            </button>
+          )}
+        </div>
 
         <Modal 
           isOpen={isEditModalOpen} 
@@ -142,17 +208,24 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
           title="Edit Employee Profile"
           maxWidth="4xl"
         >
-          <EmployeeEditForm employee={employee} onClose={() => setIsEditModalOpen(false)} />
+          <EmployeeEditForm 
+            employee={employee} 
+            currentUser={currentUser}
+            onClose={() => setIsEditModalOpen(false)} 
+          />
         </Modal>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <div className={cn(
+        "grid grid-cols-1 lg:grid-cols-4 gap-8 transition-all",
+        isEditing && "opacity-90"
+      )}>
         {/* Left Column: Profile Card */}
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center space-y-6">
             <div className="relative inline-block">
               <img 
-                src={employee.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${employee.name}`} 
+                src={employee.photoURL || employee.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${employee.name}`} 
                 className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-xl mx-auto object-cover" 
                 alt={employee.name} 
               />
@@ -162,11 +235,31 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
             </div>
             
             <div>
-              <h1 className="text-2xl font-black text-slate-900 break-words">{employee.name}</h1>
-              <p className="text-slate-500 flex items-center justify-center gap-1 mt-1 break-all">
-                <Mail size={14} />
-                {employee.email}
-              </p>
+              {isEditing ? (
+                <input 
+                  type="text"
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xl font-black text-center"
+                  value={editData.name}
+                  onChange={e => setEditData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="Full Name"
+                />
+              ) : (
+                <h1 className="text-2xl font-black text-slate-900 break-words">{employee.name}</h1>
+              )}
+              {isEditing ? (
+                <input 
+                  type="email"
+                  className="w-full px-4 py-1 mt-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm text-center"
+                  value={editData.email}
+                  onChange={e => setEditData(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="Email Address"
+                />
+              ) : (
+                <p className="text-slate-500 flex items-center justify-center gap-1 mt-1 break-all">
+                  <Mail size={14} />
+                  {employee.email}
+                </p>
+              )}
               {employee.employeeId && (
                 <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mt-2 bg-indigo-50 px-2 py-1 rounded-full inline-block">
                   ID: {employee.employeeId}
@@ -175,16 +268,40 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
             </div>
 
             <div className="flex justify-center gap-2">
-              <span className={cn(
-                "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider",
-                employee.role === 'Manager' ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"
-              )}>
-                {employee.role}
-              </span>
-              {employee.modeOfWorking && (
-                <span className="px-3 py-1 rounded-full text-xs font-bold border border-slate-200 bg-slate-50 text-slate-600 uppercase tracking-wider">
-                  {employee.modeOfWorking}
+              {isEditing ? (
+                <select 
+                  className="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider bg-slate-50 border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={editData.role}
+                  onChange={e => setEditData(prev => ({ ...prev, role: e.target.value as any }))}
+                >
+                  <option value="Employee">Employee</option>
+                  <option value="Manager">Manager</option>
+                  <option value="Admin">Admin</option>
+                </select>
+              ) : (
+                <span className={cn(
+                  "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider",
+                  employee.role === 'Manager' ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-emerald-50 text-emerald-700 border-emerald-100"
+                )}>
+                  {employee.role}
                 </span>
+              )}
+              {isEditing ? (
+                <select 
+                  className="px-3 py-1 rounded-full text-xs font-bold border border-slate-200 bg-slate-50 text-slate-600 uppercase tracking-wider focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={editData.modeOfWorking}
+                  onChange={e => setEditData(prev => ({ ...prev, modeOfWorking: e.target.value as any }))}
+                >
+                  <option value="On-site">On-site</option>
+                  <option value="Remote">Remote</option>
+                  <option value="Hybrid">Hybrid</option>
+                </select>
+              ) : (
+                employee.modeOfWorking && (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold border border-slate-200 bg-slate-50 text-slate-600 uppercase tracking-wider">
+                    {employee.modeOfWorking}
+                  </span>
+                )
               )}
             </div>
 
@@ -227,10 +344,11 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                 </div>
                 <button 
                   onClick={handleTogglePortal}
-                  disabled={isUpdatingPortal}
+                  disabled={isUpdatingPortal || !check('employees', 'edit')}
                   className={cn(
                     "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
-                    employee.portalEnabled ? "bg-indigo-600" : "bg-slate-200"
+                    employee.portalEnabled ? "bg-indigo-600" : "bg-slate-200",
+                    !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
                   )}
                 >
                   <span className={cn(
@@ -250,11 +368,13 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                 </button>
               )}
 
-              {employee.endingDate && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
+              {employee.endingDate && check('employees', 'edit') && (
                 <button 
                   onClick={handleRehire}
-                  disabled={isRehiring}
-                  className="w-full flex items-center justify-center gap-2 p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 font-bold text-xs hover:bg-emerald-100 transition-all"
+                  disabled={isRehiring || !check('employees', 'edit')}
+                  className={cn(
+                    "w-full flex items-center justify-center gap-2 p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 font-bold text-xs hover:bg-emerald-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
                 >
                   {isRehiring ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
                   Rehire Employee
@@ -320,7 +440,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.department || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.department}
+                          onChange={e => setEditData(prev => ({ ...prev, department: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.department || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -329,7 +458,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Assignments</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.assignments || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.assignments}
+                          onChange={e => setEditData(prev => ({ ...prev, assignments: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.assignments || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -338,7 +476,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Qualification</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.qualification || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.qualification}
+                          onChange={e => setEditData(prev => ({ ...prev, qualification: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.qualification || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -350,7 +497,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Joining Date</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.joiningDate || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="date"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.joiningDate}
+                          onChange={e => setEditData(prev => ({ ...prev, joiningDate: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.joiningDate || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -359,7 +515,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ending Date</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.endingDate || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="date"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.endingDate}
+                          onChange={e => setEditData(prev => ({ ...prev, endingDate: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.endingDate || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -368,7 +533,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Experience</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.experience || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.experience}
+                          onChange={e => setEditData(prev => ({ ...prev, experience: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.experience || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -377,7 +551,20 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gender</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.gender || 'N/A'}</p>
+                      {isEditing ? (
+                        <select 
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.gender}
+                          onChange={e => setEditData(prev => ({ ...prev, gender: e.target.value as any }))}
+                        >
+                          <option value="">Select</option>
+                          <option value="Male">Male</option>
+                          <option value="Female">Female</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.gender || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -389,17 +576,35 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Official Mail</p>
-                      <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.officialMail || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="email"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.officialMail}
+                          onChange={e => setEditData(prev => ({ ...prev, officialMail: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.officialMail || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
-                  {employee.officialMailPassword && (
+                  {(employee.officialMailPassword || isEditing) && (
                     <div className="flex items-center gap-3">
                       <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">
                         <Lock size={18} />
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mail Password</p>
-                        <p className="text-sm font-bold text-slate-900">{employee.officialMailPassword}</p>
+                        {isEditing ? (
+                          <input 
+                            type="text"
+                            className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                            value={editData.officialMailPassword}
+                            onChange={e => setEditData(prev => ({ ...prev, officialMailPassword: e.target.value }))}
+                          />
+                        ) : (
+                          <p className="text-sm font-bold text-slate-900">{employee.officialMailPassword}</p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -409,7 +614,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Personal Email</p>
-                      <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.personalEmail || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="email"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.personalEmail}
+                          onChange={e => setEditData(prev => ({ ...prev, personalEmail: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.personalEmail || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -418,7 +632,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">CNIC</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.cnic || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.cnic}
+                          onChange={e => setEditData(prev => ({ ...prev, cnic: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.cnic || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -427,7 +650,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">WhatsApp</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.whatsappPersonal || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.whatsappPersonal}
+                          onChange={e => setEditData(prev => ({ ...prev, whatsappPersonal: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.whatsappPersonal || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
@@ -436,7 +668,16 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     </div>
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Home Phone</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.homePhone || 'N/A'}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.homePhone}
+                          onChange={e => setEditData(prev => ({ ...prev, homePhone: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.homePhone || 'N/A'}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -449,18 +690,34 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                   <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">
                     <MapPin size={18} />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Home Address</p>
-                    <p className="text-sm text-slate-600 leading-relaxed">{employee.address || 'N/A'}</p>
+                    {isEditing ? (
+                      <textarea 
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
+                        value={editData.address}
+                        onChange={e => setEditData(prev => ({ ...prev, address: e.target.value }))}
+                      />
+                    ) : (
+                      <p className="text-sm text-slate-600 leading-relaxed">{employee.address || 'N/A'}</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">
                     <FileText size={18} />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Remarks</p>
-                    <p className="text-sm text-slate-600 leading-relaxed italic">"{employee.remarks || 'No remarks provided.'}"</p>
+                    {isEditing ? (
+                      <textarea 
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
+                        value={editData.remarks}
+                        onChange={e => setEditData(prev => ({ ...prev, remarks: e.target.value }))}
+                      />
+                    ) : (
+                      <p className="text-sm text-slate-600 leading-relaxed italic">"{employee.remarks || 'No remarks provided.'}"</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -471,30 +728,57 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                   <div className="p-2 bg-white text-slate-400 rounded-lg shadow-sm">
                     <Monitor size={18} />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">PC Allotted</p>
-                    <p className="text-sm font-bold text-slate-900">{employee.pcAllotted || 'N/A'}</p>
+                    {isEditing ? (
+                      <input 
+                        type="text"
+                        className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                        value={editData.pcAllotted}
+                        onChange={e => setEditData(prev => ({ ...prev, pcAllotted: e.target.value }))}
+                      />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-900">{employee.pcAllotted || 'N/A'}</p>
+                    )}
                   </div>
                 </div>
-                {employee.pcUsername && (
+                {(employee.pcUsername || isEditing) && (
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-white text-slate-400 rounded-lg shadow-sm">
                       <User size={18} />
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">PC Username</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.pcUsername}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.pcUsername}
+                          onChange={e => setEditData(prev => ({ ...prev, pcUsername: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.pcUsername}</p>
+                      )}
                     </div>
                   </div>
                 )}
-                {employee.pcPassword && (
+                {(employee.pcPassword || isEditing) && (
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-white text-slate-400 rounded-lg shadow-sm">
                       <Lock size={18} />
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">PC Password</p>
-                      <p className="text-sm font-bold text-slate-900">{employee.pcPassword}</p>
+                      {isEditing ? (
+                        <input 
+                          type="text"
+                          className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                          value={editData.pcPassword}
+                          onChange={e => setEditData(prev => ({ ...prev, pcPassword: e.target.value }))}
+                        />
+                      ) : (
+                        <p className="text-sm font-bold text-slate-900">{employee.pcPassword}</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -590,6 +874,15 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
           </div>
         </div>
       </div>
+      <FloatingActionBar 
+        isVisible={isEditing}
+        onSave={handleSave}
+        onCancel={() => {
+          setIsEditing(false);
+          setEditData(employee);
+        }}
+        isSaving={isSaving}
+      />
     </motion.div>
   );
 };

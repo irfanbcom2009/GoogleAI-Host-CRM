@@ -25,7 +25,10 @@ import { ColumnSelector } from './ColumnSelector';
 import { JournalDetail } from './JournalDetail';
 import { ClientDetail } from './ClientDetail';
 import { moveToTrash } from '../lib/firebase';
-import { Shield } from 'lucide-react';
+import { HECCategorySettings } from './HECCategorySettings';
+import { Settings2, Shield } from 'lucide-react';
+import { Modal } from './Modal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface HECProps {
   searchQuery?: string;
@@ -64,10 +67,12 @@ const HEC_DISCIPLINES: Record<string, Record<string, string[]>> = {
 };
 
 export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [entries, setEntries] = useState<HECEntry[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
@@ -262,21 +267,32 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
             selectedColumns={selectedColumns}
             onChange={handleColumnChange}
           />
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
-          >
-            <Plus size={20} />
-            New HEC Application
-          </button>
+          {currentUser.role === 'Admin' && (
+            <button 
+              onClick={() => setIsConfigOpen(true)}
+              className="p-3 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+              title="Configure HEC Categories"
+            >
+              <Settings2 size={20} />
+            </button>
+          )}
+          {check('hecApplications', 'add') && (
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            >
+              <Plus size={20} />
+              New HEC Application
+            </button>
+          )}
         </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+              <tr className="border-b border-slate-200">
                 {selectedColumns.includes('journal') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Journal</th>}
                 {selectedColumns.includes('app_psid') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App No / PSID</th>}
                 {selectedColumns.includes('year_freq') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Year / Freq</th>}
@@ -383,7 +399,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                         >
                           <Key size={18} />
                         </button>
-                        {!entry.isVerified && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
+                        {check('hecApplications', 'approve') && !entry.isVerified && (
                           <button 
                             onClick={() => handleVerifyEntry(entry.id)}
                             className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
@@ -392,19 +408,21 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                             <Shield size={18} />
                           </button>
                         )}
-                        <button 
-                          onClick={() => handleDeleteEntry(entry)}
-                          disabled={entry.isVerified && currentUser.role !== 'Admin'}
-                          className={cn(
-                            "p-2 rounded-lg transition-all",
-                            entry.isVerified && currentUser.role !== 'Admin'
-                              ? "text-slate-200 cursor-not-allowed"
-                              : "text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                          )}
-                          title={entry.isVerified && currentUser.role !== 'Admin' ? "Only Admins can delete verified entries" : "Delete Application"}
-                        >
-                          <Trash2 size={18} />
-                        </button>
+                        {check('hecApplications', 'delete') && (
+                          <button 
+                            onClick={() => handleDeleteEntry(entry)}
+                            disabled={entry.isVerified && !check('hecApplications', 'delete')}
+                            className={cn(
+                              "p-2 rounded-lg transition-all",
+                              entry.isVerified && !check('hecApplications', 'delete')
+                                ? "text-slate-200 cursor-not-allowed"
+                                : "text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                            )}
+                            title={entry.isVerified && !check('hecApplications', 'delete') ? "Only Admins can delete verified entries" : "Delete Application"}
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -594,6 +612,15 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
           </div>
         )}
       </AnimatePresence>
+
+      <Modal
+        isOpen={isConfigOpen}
+        onClose={() => setIsConfigOpen(false)}
+        title="HEC Category Settings"
+        maxWidth="4xl"
+      >
+        <HECCategorySettings currentUser={currentUser} />
+      </Modal>
     </div>
   );
 };

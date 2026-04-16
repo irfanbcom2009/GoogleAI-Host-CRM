@@ -3,6 +3,7 @@ import { X, Upload, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { UserPermissions } from '../types';
+import { DEFAULT_EMPLOYEE_PERMISSIONS } from '../lib/permissions';
 import { seedEmployees } from '../lib/seedData';
 
 interface BulkEmployeeAddModalProps {
@@ -49,21 +50,7 @@ export const BulkEmployeeAddModal: React.FC<BulkEmployeeAddModalProps> = ({ isOp
         role: 'Employee',
         points: 0,
         email: parts[7]?.trim() || parts[6]?.trim()?.replace(/"/g, '') || `emp${parts[0]?.trim()}@hostajournal.biz`,
-        permissions: {
-          approvalRequests: true,
-          journals: true,
-          indexingAgencies: true,
-          publishers: true,
-          hecApplications: true,
-          issnRequests: true,
-          doiManagement: true,
-          dataTools: true,
-          invoices: true,
-          expenses: true,
-          resources: true,
-          notifications: true,
-          trash: true
-        } as UserPermissions,
+        permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
         createdAt: serverTimestamp()
       };
 

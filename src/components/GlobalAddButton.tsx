@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { 
   Plus, 
-  User, 
+  User as UserIcon, 
   Globe, 
   Building2, 
   BookOpen, 
   FileText, 
+  GraduationCap,
   DollarSign, 
   CreditCard,
   Layers,
@@ -15,11 +16,12 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
-import { UserPermissions } from '../types';
+import { UserPermissions, User } from '../types';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface GlobalAddButtonProps {
   setActiveTab: (tab: string) => void;
-  userPermissions?: UserPermissions;
+  currentUser: User;
   onAddClient?: () => void;
   onAddDomain?: () => void;
   onAddPublisher?: () => void;
@@ -33,7 +35,7 @@ interface GlobalAddButtonProps {
 
 export const GlobalAddButton: React.FC<GlobalAddButtonProps> = ({ 
   setActiveTab,
-  userPermissions,
+  currentUser,
   onAddClient,
   onAddDomain,
   onAddPublisher,
@@ -44,13 +46,16 @@ export const GlobalAddButton: React.FC<GlobalAddButtonProps> = ({
   onAddInvoice,
   onAddIndexing
 }) => {
+  const { check } = usePermissions(currentUser);
   const [isOpen, setIsOpen] = useState(false);
 
   const actions = [
-    { id: 'client', label: 'Add Client', icon: User, color: 'bg-indigo-500', tab: 'clients' },
-    { id: 'domain', label: 'Add Domain', icon: Globe, color: 'bg-emerald-500', tab: 'domains', permission: 'dataTools' },
+    { id: 'client', label: 'Add Client', icon: UserIcon, color: 'bg-indigo-500', tab: 'clients', permission: 'clients' },
+    { id: 'domain', label: 'Add Domain', icon: Globe, color: 'bg-emerald-500', tab: 'domains', permission: 'domains' },
     { id: 'publisher', label: 'Add Publisher', icon: Building2, color: 'bg-amber-500', tab: 'publishers', permission: 'publishers' },
     { id: 'journal', label: 'Add Journal', icon: BookOpen, color: 'bg-rose-500', tab: 'journals', permission: 'journals' },
+    { id: 'hec', label: 'Add HEC App', icon: GraduationCap, color: 'bg-indigo-500', tab: 'hec', permission: 'hecApplications' },
+    { id: 'doaj', label: 'Add DOAJ App', icon: Globe, color: 'bg-blue-500', tab: 'doaj', permission: 'doajApplications' },
     { id: 'issn', label: 'Add ISSN Request', icon: FileText, color: 'bg-violet-500', tab: 'issn', permission: 'issnRequests' },
     { id: 'expense', label: 'Add Expense', icon: DollarSign, color: 'bg-red-500', tab: 'expenses', permission: 'expenses' },
     { id: 'income', label: 'Add Income', icon: DollarSign, color: 'bg-green-500', tab: 'expenses', permission: 'expenses' },
@@ -59,8 +64,8 @@ export const GlobalAddButton: React.FC<GlobalAddButtonProps> = ({
   ];
 
   const filteredActions = actions.filter(action => {
-    if (action.permission && userPermissions) {
-      return userPermissions[action.permission as keyof UserPermissions] !== false;
+    if (action.permission) {
+      return check(action.permission as any, 'add');
     }
     return true;
   });

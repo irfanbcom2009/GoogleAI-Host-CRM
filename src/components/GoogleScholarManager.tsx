@@ -164,7 +164,7 @@ export const GoogleScholarManager: React.FC<GoogleScholarManagerProps> = ({ jour
       </AnimatePresence>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
               <Loader2 className="animate-spin" size={24} />
@@ -177,8 +177,8 @@ export const GoogleScholarManager: React.FC<GoogleScholarManagerProps> = ({ jour
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Date</th>
                   <th className="px-6 py-4">Last Action</th>

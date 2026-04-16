@@ -27,29 +27,31 @@ import {
   FileSpreadsheet,
   Edit,
   Trash2,
+  X,
   AlertCircle,
   Activity,
   Key,
-  GitMerge
+  GitMerge,
+  Database,
+  Settings2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Journal, Client, Publisher, Domain, User as UserType } from '../types';
+import { Journal, Client, Publisher, Domain, User as UserType, HECCategory } from '../types';
 import { cn, sanitizeUrl } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
 import { geminiService } from '../services/geminiService';
 import { Sparkles, Wand2 } from 'lucide-react';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, where, getDocs, getDoc, limit } from 'firebase/firestore';
 import { Modal } from './Modal';
-import { GoogleSheetImport } from './GoogleSheetImport';
 import { JournalIndexingManager } from './JournalIndexingManager';
 import { GoogleScholarManager } from './GoogleScholarManager';
 import { JournalTransferManager } from './JournalTransferManager';
-import { BulkAddModal } from './BulkAddModal';
-import { MergeModal } from './MergeModal';
 import { JournalDetail } from './JournalDetail';
 import { ClientDetail } from './ClientDetail';
 import { ColumnSelector } from './ColumnSelector';
 import { doc, updateDoc } from 'firebase/firestore';
+import { usePermissions } from '../hooks/usePermissions';
+import { ConfigModal } from './ConfigModal';
 
 interface JournalsProps {
   searchQuery: string;
@@ -66,6 +68,7 @@ const AVAILABLE_COLUMNS = [
 ];
 
 export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [publishers, setPublishers] = useState<Publisher[]>([]);
@@ -73,13 +76,14 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
   const [employees, setEmployees] = useState<UserType[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isGoogleImportOpen, setIsGoogleImportOpen] = useState(false);
   const [isIndexingModalOpen, setIsIndexingModalOpen] = useState(false);
   const [isScholarModalOpen, setIsScholarModalOpen] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [isScopeConfigOpen, setIsScopeConfigOpen] = useState(false);
   const [journalCategories, setJournalCategories] = useState<any[]>([]);
+  const [journalScopes, setJournalScopes] = useState<string[]>([]);
+  const [hecCategories, setHecCategories] = useState<HECCategory[]>([]);
   const [selectedJournal, setSelectedJournal] = useState<Journal | null>(null);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
@@ -109,15 +113,14 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
     invoiceNumber: '',
     category: '',
     subCategory: '',
-    databaseType: 'HEC' as Journal['databaseType'],
-    hecMainCategory: '',
-    hecSubCategory: '',
-    hecThirdCategory: '',
     subjectCategory: '',
     publisherCountry: '',
     languages: '',
     license: 'CC BY' as Journal['license'],
-    scope: '',
+    hecMainCategoryId: '',
+    hecSubCategoryId: '',
+    hecSubjectCategoryId: '',
+    scope: [] as string[],
     apcAmount: 0,
     editorEmail: '',
     credentials: {
@@ -126,7 +129,12 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
       loginLink: ''
     },
     assignedEmployeeId: '',
-    status: 'pending_issn' as const
+    status: 'pending_issn' as const,
+    isSubscribed: true,
+    isOjsSubscribedFromUs: true,
+    isIssnSubscribedFromUs: true,
+    isHecSubscribedFromUs: true,
+    isDoiSubscribedFromUs: true
   });
 
   useEffect(() => {
@@ -166,50 +174,62 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
-    const unsubscribePublishers = onSnapshot(collection(db, 'publishers'), (snapshot) => {
-      const pubData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Publisher[];
-      setPublishers(pubData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'publishers');
+    const unsubscribeHec = onSnapshot(query(collection(db, 'hec_categories'), where('isActive', '==', true)), (snapshot) => {
+      setHecCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HECCategory)));
     });
 
-    const unsubscribeDomains = onSnapshot(query(collection(db, 'domains'), where('status', '==', 'active')), (snapshot) => {
-      const domainData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Domain[];
-      setDomains(domainData);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'domains');
-    });
+    if (isEmployee) {
+      const unsubscribePublishers = onSnapshot(collection(db, 'publishers'), (snapshot) => {
+        const pubData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Publisher[];
+        setPublishers(pubData);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'publishers');
+      });
 
-    // Fetch employees for assignment
-    const fetchEmployees = async () => {
-      try {
-        const q = query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager', 'Admin']), where('status', '==', 'active'));
-        const snapshot = await getDocs(q);
-        const employeeData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserType[];
-        setEmployees(employeeData);
-      } catch (error) {
-        console.error("Error fetching employees:", error);
-      }
-    };
-    fetchEmployees();
+      const unsubscribeDomains = onSnapshot(query(collection(db, 'domains'), where('status', '==', 'active')), (snapshot) => {
+        const domainData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Domain[];
+        setDomains(domainData);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'domains');
+      });
 
-    const fetchSettings = async () => {
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        if (settingsDoc.exists()) {
-          setJournalCategories(settingsDoc.data().journalCategories || []);
+      // Fetch employees for assignment
+      const fetchEmployees = async () => {
+        try {
+          const q = query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager', 'Admin']), where('status', '==', 'active'));
+          const snapshot = await getDocs(q);
+          const employeeData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserType[];
+          setEmployees(employeeData);
+        } catch (error) {
+          console.error("Error fetching employees:", error);
         }
-      } catch (error) {
-        console.error("Error fetching settings:", error);
-      }
-    };
-    fetchSettings();
+      };
+      fetchEmployees();
+
+      const fetchSettings = async () => {
+        const unsubscribeSettings = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+          if (snapshot.exists()) {
+            setJournalCategories(snapshot.data().journalCategories || []);
+            setJournalScopes(snapshot.data().journalScopes || []);
+          }
+        });
+        return unsubscribeSettings;
+      };
+      const unsubSettings = fetchSettings();
+
+      return () => {
+        unsubscribeJournals();
+        unsubscribeClients();
+        unsubscribePublishers();
+        unsubscribeDomains();
+        unsubscribeHec();
+      };
+    }
 
     return () => {
       unsubscribeJournals();
       unsubscribeClients();
-      unsubscribePublishers();
-      unsubscribeDomains();
+      unsubscribeHec();
     };
   }, [currentUser.id, currentUser.role, isEmployee]);
 
@@ -258,10 +278,12 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
   const handleAiSuggestScope = async () => {
     if (!newJournal.title) return;
     setIsAiSuggesting(true);
-    const response = await geminiService.generateTaskDescription(newJournal.title, "Journal Scope & Aims");
+    const response = await geminiService.generateTaskDescription(newJournal.title, "Journal Scope & Aims (Provide 5-8 short keywords separated by commas)");
     if (response) {
-      setNewJournal(prev => ({ ...prev, scope: response }));
+      const keywords = response.split(',').map(k => k.trim()).filter(Boolean);
+      setNewJournal(prev => ({ ...prev, scope: keywords }));
     }
+    setIsAiSuggesting(true);
     setIsAiSuggesting(false);
   };
 
@@ -314,6 +336,7 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
           loginLink: sanitizeUrl(newJournal.credentials.loginLink)
         },
         assignedEmployeeName: assignedEmployee?.name || '',
+        isSubscribed: newJournal.isSubscribed ?? true,
         createdAt: new Date().toISOString(),
         createdBy: currentUser.name,
         createdById: currentUser.id,
@@ -341,15 +364,14 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
         invoiceNumber: '',
         category: '',
         subCategory: '',
-        databaseType: 'HEC',
-        hecMainCategory: '',
-        hecSubCategory: '',
-        hecThirdCategory: '',
         subjectCategory: '',
         publisherCountry: '',
         languages: '',
         license: 'CC BY',
-        scope: '',
+        hecMainCategoryId: '',
+        hecSubCategoryId: '',
+        hecSubjectCategoryId: '',
+        scope: [] as string[],
         apcAmount: 0,
         editorEmail: '',
         credentials: {
@@ -358,7 +380,12 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
           loginLink: ''
         },
         assignedEmployeeId: '',
-        status: 'pending_issn'
+        status: 'pending_issn',
+        isSubscribed: true,
+        isOjsSubscribedFromUs: true,
+        isIssnSubscribedFromUs: true,
+        isHecSubscribedFromUs: true,
+        isDoiSubscribedFromUs: true
       });
       setIsModalOpen(false);
     } catch (error) {
@@ -437,16 +464,6 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
             />
           </div>
           
-          {isEmployee && currentUser.role === 'Admin' && (
-            <button 
-              onClick={() => setIsGoogleImportOpen(true)}
-              className="p-2.5 bg-white text-emerald-600 border border-emerald-100 rounded-xl hover:bg-emerald-50 transition-all shadow-sm group"
-              title="Import from Sheets"
-            >
-              <FileSpreadsheet size={20} />
-            </button>
-          )}
-
           <ColumnSelector 
             availableColumns={AVAILABLE_COLUMNS}
             selectedColumns={selectedColumns}
@@ -455,27 +472,33 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
 
           {isEmployee && (
             <div className="flex items-center gap-2">
-              <button 
-                onClick={() => setIsMergeModalOpen(true)}
-                className="px-4 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl text-sm font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2"
-              >
-                <GitMerge size={18} className="text-indigo-600" />
-                Merge
-              </button>
-              <button 
-                onClick={() => setIsBulkModalOpen(true)}
-                className="px-4 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 flex items-center gap-2"
-              >
-                <Plus size={18} />
-                Bulk Add
-              </button>
-              <button 
-                onClick={() => setIsModalOpen(true)}
-                className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2"
-              >
-                <Plus size={18} />
-                New Journal
-              </button>
+              {currentUser.role === 'Admin' && (
+                <div className="flex gap-2 mr-2">
+                  <button 
+                    onClick={() => setIsConfigModalOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure Journal Categories"
+                  >
+                    <Settings2 size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setIsScopeConfigOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure Journal Scopes"
+                  >
+                    <Settings2 size={20} className="text-indigo-600" />
+                  </button>
+                </div>
+              )}
+              {check('journals', 'add') && (
+                <button 
+                  onClick={() => setIsModalOpen(true)}
+                  className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2"
+                >
+                  <Plus size={18} />
+                  New Journal
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -521,7 +544,7 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
       </div>
 
       <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-400px)] overflow-y-auto">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-32 gap-4">
               <div className="relative">
@@ -532,8 +555,8 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
             </div>
           ) : (
             <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="border-b border-slate-100">
                   {selectedColumns.includes('title') && (
                     <th className="px-6 py-5 text-left">
                       <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -697,13 +720,23 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
                       )}
                       {selectedColumns.includes('status') && (
                         <td className="px-6 py-4">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
-                            journal.status === 'complete' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
-                          )}>
-                            {journal.status === 'complete' ? <CheckCircle2 size={14} /> : <Clock size={14} />}
-                            {journal.status.replace('_', ' ')}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className={cn(
+                              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+                              journal.status === 'complete' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
+                            )}>
+                              {journal.status === 'complete' ? <CheckCircle2 size={14} /> : <Clock size={14} />}
+                              {journal.status.replace('_', ' ')}
+                            </span>
+                            <span className={cn(
+                              "text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border self-start",
+                              journal.isSubscribed 
+                                ? "bg-emerald-50 text-emerald-600 border-emerald-100" 
+                                : "bg-rose-50 text-rose-600 border-rose-100"
+                            )}>
+                              {journal.isSubscribed ? 'Subscribed' : 'Not Subscribed'}
+                            </span>
+                          </div>
                         </td>
                       )}
                       <td className="px-6 py-4">
@@ -718,59 +751,65 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
                           >
                             <FileSearch size={16} />
                           </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setViewingJournal({ id: journal.id, editMode: true });
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="Edit Journal"
-                          >
-                            <Edit size={16} />
-                          </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedJournal(journal);
-                              setIsIndexingModalOpen(true);
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="Manage Indexing"
-                          >
-                            <Building2 size={16} />
-                          </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedJournal(journal);
-                              setIsScholarModalOpen(true);
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="Google Scholar History"
-                          >
-                            <GraduationCap size={16} />
-                          </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedJournal(journal);
-                              setIsTransferModalOpen(true);
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="Ownership Transfer"
-                          >
-                            <ArrowLeftRight size={16} />
-                          </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteJournal(journal);
-                            }}
-                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                            title="Move to Trash"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {check('journals', 'edit') && (
+                            <>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setViewingJournal({ id: journal.id, editMode: true });
+                                }}
+                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                title="Edit Journal"
+                              >
+                                <Edit size={16} />
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedJournal(journal);
+                                  setIsIndexingModalOpen(true);
+                                }}
+                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                title="Manage Indexing"
+                              >
+                                <Building2 size={16} />
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedJournal(journal);
+                                  setIsScholarModalOpen(true);
+                                }}
+                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                title="Google Scholar History"
+                              >
+                                <GraduationCap size={16} />
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedJournal(journal);
+                                  setIsTransferModalOpen(true);
+                                }}
+                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                title="Ownership Transfer"
+                              >
+                                <ArrowLeftRight size={16} />
+                              </button>
+                            </>
+                          )}
+                          {check('journals', 'delete') && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteJournal(journal);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                              title="Move to Trash"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
@@ -781,34 +820,6 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
           )}
         </div>
       </div>
-
-      <Modal
-        isOpen={isGoogleImportOpen}
-        onClose={() => setIsGoogleImportOpen(false)}
-        title="Import Journals from Google Sheets"
-      >
-        <GoogleSheetImport 
-          collectionName="journals" 
-          onClose={() => setIsGoogleImportOpen(false)}
-          onSuccess={() => setIsGoogleImportOpen(false)}
-        />
-      </Modal>
-
-      {isEmployee && (
-        <>
-          <BulkAddModal 
-            isOpen={isBulkModalOpen} 
-            onClose={() => setIsBulkModalOpen(false)} 
-            type="journals" 
-            clients={clients}
-          />
-          <MergeModal 
-            isOpen={isMergeModalOpen}
-            onClose={() => setIsMergeModalOpen(false)}
-            type="journals"
-          />
-        </>
-      )}
 
       <Modal 
         isOpen={isModalOpen} 
@@ -858,6 +869,53 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
               ))}
             </select>
           </div>
+          <div className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100 space-y-4">
+            <h3 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+              <Shield size={18} />
+              Subscription Awareness
+            </h3>
+            <p className="text-xs text-amber-700">Identify which services are subscribed through us to enable billing and support features.</p>
+            
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newJournal.isOjsSubscribedFromUs}
+                  onChange={e => setNewJournal(prev => ({ ...prev, isOjsSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">OJS (Us)</span>
+              </label>
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newJournal.isIssnSubscribedFromUs}
+                  onChange={e => setNewJournal(prev => ({ ...prev, isIssnSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">ISSN (Us)</span>
+              </label>
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newJournal.isHecSubscribedFromUs}
+                  onChange={e => setNewJournal(prev => ({ ...prev, isHecSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">HEC (Us)</span>
+              </label>
+              <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+                <input 
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                  checked={newJournal.isDoiSubscribedFromUs}
+                  onChange={e => setNewJournal(prev => ({ ...prev, isDoiSubscribedFromUs: e.target.checked }))}
+                />
+                <span className="text-xs font-bold text-slate-700">DOI (Us)</span>
+              </label>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Journal Title</label>
             <input 
@@ -896,18 +954,6 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Database Type</label>
-              <select 
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newJournal.databaseType}
-                onChange={e => setNewJournal(prev => ({ ...prev, databaseType: e.target.value as any }))}
-              >
-                <option value="HEC">HEC Journals</option>
-                <option value="ISSN">ISSN Journals</option>
-                <option value="DOAJ">DOAJ Journals</option>
-              </select>
-            </div>
-            <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">License Permitted</label>
               <select 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
@@ -927,54 +973,69 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
             </div>
           </div>
 
-          {newJournal.databaseType === 'HEC' ? (
-            <div className="space-y-4 p-4 bg-slate-50 rounded-2xl border border-slate-200">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">HEC Category Structure</h4>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Main Category</label>
-                  <input 
-                    type="text"
-                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newJournal.hecMainCategory}
-                    onChange={e => setNewJournal(prev => ({ ...prev, hecMainCategory: e.target.value }))}
-                    placeholder="Enter Main Category"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Sub Category</label>
-                  <input 
-                    type="text"
-                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newJournal.hecSubCategory}
-                    onChange={e => setNewJournal(prev => ({ ...prev, hecSubCategory: e.target.value }))}
-                    placeholder="Enter Sub Category"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Third Category</label>
-                  <input 
-                    type="text"
-                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newJournal.hecThirdCategory}
-                    onChange={e => setNewJournal(prev => ({ ...prev, hecThirdCategory: e.target.value }))}
-                    placeholder="Enter Third Category"
-                  />
-                </div>
+          <div className="p-6 bg-indigo-50/30 rounded-3xl border border-indigo-100 space-y-4">
+            <div className="flex items-center gap-2 text-indigo-900 font-bold">
+              <Database size={18} />
+              HEC Category Management
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">HEC Main Category</label>
+                <select 
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newJournal.hecMainCategoryId}
+                  onChange={e => setNewJournal(prev => ({ ...prev, hecMainCategoryId: e.target.value, hecSubCategoryId: '', hecSubjectCategoryId: '' }))}
+                >
+                  <option value="">Select Main Category...</option>
+                  {hecCategories.filter(c => c.type === 'main').map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">HEC Sub Category</label>
+                <select 
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newJournal.hecSubCategoryId}
+                  onChange={e => setNewJournal(prev => ({ ...prev, hecSubCategoryId: e.target.value, hecSubjectCategoryId: '' }))}
+                  disabled={!newJournal.hecMainCategoryId}
+                >
+                  <option value="">Select Sub Category...</option>
+                  {hecCategories.filter(c => c.type === 'sub' && c.parentId === newJournal.hecMainCategoryId).map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase">HEC Subject Category</label>
+                <select 
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newJournal.hecSubjectCategoryId}
+                  onChange={e => setNewJournal(prev => ({ ...prev, hecSubjectCategoryId: e.target.value }))}
+                  disabled={!newJournal.hecSubCategoryId}
+                >
+                  <option value="">Select Subject Category...</option>
+                  {hecCategories.filter(c => c.type === 'subject' && c.parentId === newJournal.hecSubCategoryId).map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
               </div>
             </div>
-          ) : (
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Subject Category</label>
-              <input 
-                type="text"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newJournal.subjectCategory}
-                onChange={e => setNewJournal(prev => ({ ...prev, subjectCategory: e.target.value }))}
-                placeholder="Enter Subject Category"
-              />
-            </div>
-          )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Subject Category</label>
+            <input 
+              type="text"
+              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+              value={newJournal.subjectCategory}
+              onChange={e => setNewJournal(prev => ({ ...prev, subjectCategory: e.target.value }))}
+              placeholder="Enter Subject Category"
+            />
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -1042,7 +1103,7 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-bold text-slate-700">Journal Scope</label>
+              <label className="text-sm font-bold text-slate-700">Journal Scope (Keywords)</label>
               <button
                 type="button"
                 onClick={handleAiSuggestScope}
@@ -1053,12 +1114,41 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
                 AI Generate
               </button>
             </div>
-            <textarea 
-              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all min-h-[100px]"
-              placeholder="Enter journal scope and aims..."
-              value={newJournal.scope}
-              onChange={e => setNewJournal(prev => ({ ...prev, scope: e.target.value }))}
-            />
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl min-h-[50px]">
+                {newJournal.scope.map((keyword, index) => (
+                  <span 
+                    key={index}
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold"
+                  >
+                    {keyword}
+                    <button 
+                      type="button"
+                      onClick={() => setNewJournal(prev => ({ ...prev, scope: prev.scope.filter((_, i) => i !== index) }))}
+                      className="hover:text-indigo-900"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <input 
+                  type="text"
+                  className="flex-1 bg-transparent outline-none text-sm min-w-[120px]"
+                  placeholder="Type and press Enter..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const val = e.currentTarget.value.trim();
+                      if (val && !newJournal.scope.includes(val)) {
+                        setNewJournal(prev => ({ ...prev, scope: [...prev.scope, val] }));
+                        e.currentTarget.value = '';
+                      }
+                    }
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-slate-400">Press Enter to add multiple keywords.</p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4">
@@ -1090,54 +1180,56 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
             </div>
           </div>
 
-          <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4">
-            <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-2">
-              <Key size={14} />
-              Access & Credentials
-            </h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500">Journal Website URL</label>
-                <input 
-                  type="url" 
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  placeholder="https://journal.example.com"
-                  value={newJournal.url}
-                  onChange={e => setNewJournal(prev => ({ ...prev, url: e.target.value }))}
-                />
+          {newJournal.isOjsSubscribedFromUs && (
+            <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 space-y-4">
+              <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-2">
+                <Key size={14} />
+                Access & Credentials
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500">Journal Website URL</label>
+                  <input 
+                    type="url" 
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    placeholder="https://journal.example.com"
+                    value={newJournal.url}
+                    onChange={e => setNewJournal(prev => ({ ...prev, url: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500">Admin Login URL</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    placeholder="https://journal.com/login"
+                    value={newJournal.credentials.loginLink}
+                    onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, loginLink: e.target.value } }))}
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500">Admin Login URL</label>
-                <input 
-                  type="text" 
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  placeholder="https://journal.com/login"
-                  value={newJournal.credentials.loginLink}
-                  onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, loginLink: e.target.value } }))}
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500">Login Username</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    value={newJournal.credentials.email}
+                    onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, email: e.target.value } }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500">Password</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    value={newJournal.credentials.password}
+                    onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, password: e.target.value } }))}
+                  />
+                </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500">Login Username</label>
-                <input 
-                  type="text" 
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  value={newJournal.credentials.email}
-                  onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, email: e.target.value } }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500">Password</label>
-                <input 
-                  type="text" 
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  value={newJournal.credentials.password}
-                  onChange={e => setNewJournal(prev => ({ ...prev, credentials: { ...prev.credentials, password: e.target.value } }))}
-                />
-              </div>
-            </div>
-          </div>
+          )}
 
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
@@ -1201,16 +1293,33 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">Invoice Number (Optional)</label>
+          {(newJournal.isOjsSubscribedFromUs || newJournal.isIssnSubscribedFromUs || newJournal.isHecSubscribedFromUs || newJournal.isDoiSubscribedFromUs) && (
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Invoice Number</label>
+              <input 
+                required
+                type="text" 
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                placeholder="INV-2024-XXX"
+                value={newJournal.invoiceNumber}
+                onChange={e => setNewJournal(prev => ({ ...prev, invoiceNumber: e.target.value }))}
+              />
+            </div>
+          )}
+          <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
             <input 
-              type="text" 
-              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              placeholder="INV-2024-XXX"
-              value={newJournal.invoiceNumber}
-              onChange={e => setNewJournal(prev => ({ ...prev, invoiceNumber: e.target.value }))}
+              type="checkbox"
+              id="journalIsSubscribed"
+              className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              checked={newJournal.isSubscribed}
+              onChange={e => setNewJournal(prev => ({ ...prev, isSubscribed: e.target.checked }))}
             />
+            <label htmlFor="journalIsSubscribed" className="text-sm font-bold text-slate-700 cursor-pointer">
+              Client has officially subscribed to this service
+              <p className="text-[10px] text-slate-400 font-medium">Unsubscribed services restrict client chat and support access.</p>
+            </label>
           </div>
+
           <div className="pt-4">
             <button 
               type="submit"
@@ -1265,6 +1374,28 @@ export const Journals: React.FC<JournalsProps> = ({ searchQuery, currentUser }) 
           />
         )}
       </Modal>
+
+      {isConfigModalOpen && (
+        <ConfigModal
+          isOpen={isConfigModalOpen}
+          onClose={() => setIsConfigModalOpen(false)}
+          title="Configure Journal Categories"
+          fieldName="journalCategories"
+          type="journal-categories"
+          initialItems={journalCategories}
+        />
+      )}
+
+      {isScopeConfigOpen && (
+        <ConfigModal
+          isOpen={isScopeConfigOpen}
+          onClose={() => setIsScopeConfigOpen(false)}
+          title="Configure Journal Scopes"
+          fieldName="journalScopes"
+          type="string-list"
+          initialItems={journalScopes}
+        />
+      )}
     </div>
   );
 };

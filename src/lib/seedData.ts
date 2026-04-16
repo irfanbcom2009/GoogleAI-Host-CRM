@@ -1086,7 +1086,7 @@ const employeeData = [
     "experience": "Navttc Jamber (HR Assistant) 6 Months",
     "role": "Employee",
     "points": 0,
-    "email": "ayeshatariq88991@gmail.com"
+    "email": "ayeshatariq8836@gmail.com"
   },
   {
     "employeeId": "69",
@@ -1253,6 +1253,7 @@ export const seedEmployees = async () => {
     expenses: true,
     resources: true,
     notifications: true,
+    employees: true,
     trash: true
   };
 

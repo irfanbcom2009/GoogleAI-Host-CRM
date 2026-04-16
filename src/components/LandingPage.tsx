@@ -24,41 +24,54 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db } from '../lib/firebase';
-import { collection, query, orderBy, limit, onSnapshot, where } from 'firebase/firestore';
-import { Journal, Domain, ISSNRequest } from '../types';
+import { collection, query, orderBy, limit, onSnapshot, where, getDocs } from 'firebase/firestore';
+import { Journal, Domain, ISSNRequest, User as CRMUser } from '../types';
 import { useServices } from '../hooks/useServices';
 import { FAQ } from './FAQ';
 import { Policies } from './Policies';
 import { Services } from './Services';
+import { Users, Award, Star, Briefcase } from 'lucide-react';
 
 export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const { catalog: SERVICES_CATALOG } = useServices();
   const [latestJournals, setLatestJournals] = useState<Journal[]>([]);
   const [latestDomains, setLatestDomains] = useState<Domain[]>([]);
   const [latestIssn, setLatestIssn] = useState<ISSNRequest[]>([]);
+  const [employees, setEmployees] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<'home' | 'faq' | 'policies' | 'services'>('home');
+  const [activeSection, setActiveSection] = useState<'home' | 'faq' | 'policies' | 'services' | 'team'>('home');
 
   useEffect(() => {
     const unsubJournals = onSnapshot(
       query(collection(db, 'journals'), orderBy('createdAt', 'desc'), limit(5)),
       (snapshot) => {
         setLatestJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal)));
-      }
+      },
+      (error) => console.error("Error fetching latest journals:", error)
     );
 
     const unsubDomains = onSnapshot(
       query(collection(db, 'domains'), orderBy('createdAt', 'desc'), limit(5)),
       (snapshot) => {
         setLatestDomains(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain)));
-      }
+      },
+      (error) => console.error("Error fetching latest domains:", error)
     );
 
     const unsubIssn = onSnapshot(
       query(collection(db, 'issn_requests'), where('status', '==', 'approved'), orderBy('createdAt', 'desc'), limit(5)),
       (snapshot) => {
         setLatestIssn(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ISSNRequest)));
-      }
+      },
+      (error) => console.error("Error fetching latest ISSN approvals:", error)
+    );
+
+    const unsubEmployees = onSnapshot(
+      query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager']), limit(20)),
+      (snapshot) => {
+        setEmployees(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CRMUser)));
+      },
+      (error) => console.error("Error fetching employees:", error)
     );
 
     setLoading(false);
@@ -66,6 +79,7 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       unsubJournals();
       unsubDomains();
       unsubIssn();
+      unsubEmployees();
     };
   }, []);
 
@@ -74,6 +88,55 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       case 'faq': return <FAQ />;
       case 'policies': return <Policies currentUser={null} />;
       case 'services': return <Services currentUser={null} />;
+      case 'team': return (
+        <div className="max-w-7xl mx-auto px-8 py-20 space-y-16">
+          <div className="text-center space-y-4">
+            <h2 className="text-5xl font-black text-slate-900 tracking-tight">Meet Our <span className="text-indigo-600">Expert Team</span></h2>
+            <p className="text-slate-500 text-lg max-w-2xl mx-auto">
+              The dedicated professionals behind Host A Journal CRM, committed to excellence in academic publishing and technical support.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            {employees.map((emp) => (
+              <motion.div 
+                key={emp.id}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                className="bg-white rounded-[2.5rem] p-6 border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col items-center text-center group hover:border-indigo-200 transition-all"
+              >
+                <div className="relative mb-6">
+                  <div className="absolute inset-0 bg-indigo-600 rounded-full scale-110 opacity-0 group-hover:opacity-10 transition-all" />
+                  <img 
+                    src={emp.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.id}`} 
+                    alt={emp.name} 
+                    className="w-32 h-32 rounded-full object-cover border-4 border-white shadow-lg relative z-10"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute -bottom-2 -right-2 bg-indigo-600 text-white p-2 rounded-xl shadow-lg z-20">
+                    <Award size={16} />
+                  </div>
+                </div>
+                <h3 className="text-xl font-black text-slate-900 group-hover:text-indigo-600 transition-colors">{emp.name}</h3>
+                <p className="text-indigo-600 text-xs font-black uppercase tracking-widest mt-1">{emp.role}</p>
+                <div className="mt-4 flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full text-[10px] font-bold text-slate-500">
+                  <Briefcase size={12} />
+                  {emp.department || 'Operations'}
+                </div>
+                <div className="mt-6 w-full pt-6 border-t border-slate-50 flex items-center justify-center gap-4">
+                  <div className="flex flex-col items-center">
+                    <span className="text-sm font-black text-slate-900">
+                      {emp.joiningDate ? new Date().getFullYear() - new Date(emp.joiningDate).getFullYear() : 0}+
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Years Exp.</span>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      );
       default: return (
         <div className="space-y-20 pb-20">
           {/* Hero Section */}
@@ -92,19 +155,20 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                   <p className="text-xl text-slate-500 leading-relaxed max-w-lg">
                     The all-in-one CRM for academic publishers. Track ISSN requests, manage indexing, and grow your publishing house with AI-powered insights.
                   </p>
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
                     <button 
                       onClick={onLogin}
-                      className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center gap-2"
+                      className="w-full sm:w-auto px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2"
                     >
                       Get Started Now
                       <ArrowRight size={20} />
                     </button>
                     <button 
-                      onClick={() => setActiveSection('services')}
-                      className="px-8 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-black text-lg hover:bg-slate-50 transition-all"
+                      onClick={() => window.location.href = '/?view=chat'}
+                      className="w-full sm:w-auto px-8 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-black text-lg hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
                     >
-                      View Services
+                      <MessageSquare size={20} className="text-indigo-600" />
+                      Live Chat
                     </button>
                   </div>
                 </div>
@@ -283,7 +347,7 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* Navigation */}
       <nav className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-[100]">
-        <div className="max-w-7xl mx-auto px-8 h-20 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-20 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <div 
               className="flex items-center gap-3 cursor-pointer"
@@ -292,9 +356,9 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
               <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
                 <BookOpen size={24} />
               </div>
-              <span className="text-xl font-black tracking-tight">Host A Journal <span className="text-indigo-600">CRM</span></span>
+              <span className="text-lg sm:text-xl font-black tracking-tight truncate max-w-[150px] sm:max-w-none">Host A Journal <span className="text-indigo-600">CRM</span></span>
             </div>
-            <div className="hidden md:flex items-center gap-6">
+            <div className="hidden lg:flex items-center gap-6">
               <button 
                 onClick={() => setActiveSection('home')}
                 className={cn("text-sm font-bold transition-all", activeSection === 'home' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900")}
@@ -306,6 +370,12 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                 className={cn("text-sm font-bold transition-all", activeSection === 'services' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900")}
               >
                 Services
+              </button>
+              <button 
+                onClick={() => setActiveSection('team')}
+                className={cn("text-sm font-bold transition-all", activeSection === 'team' ? "text-indigo-600" : "text-slate-500 hover:text-slate-900")}
+              >
+                Our Team
               </button>
               <button 
                 onClick={() => setActiveSection('faq')}
@@ -321,12 +391,19 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <button 
+              onClick={() => window.location.href = '/?view=chat'}
+              className="p-2.5 text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-all lg:hidden"
+              title="Live Chat"
+            >
+              <MessageSquare size={20} />
+            </button>
             <button 
               onClick={onLogin}
-              className="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+              className="px-4 sm:px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
             >
-              Login / Register
+              Login
             </button>
           </div>
         </div>
@@ -335,6 +412,14 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       <main>
         {renderSection()}
       </main>
+
+      {/* Floating Chat Button for Mobile */}
+      <button 
+        onClick={() => window.location.href = '/?view=chat'}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-2xl flex items-center justify-center hover:bg-indigo-700 transition-all z-[90] lg:hidden"
+      >
+        <MessageSquare size={24} />
+      </button>
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-100 py-12">
@@ -347,6 +432,7 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
           </div>
           <p className="text-slate-400 text-sm">© 2026 Host A Journal. All rights reserved.</p>
           <div className="flex items-center gap-6">
+            <button onClick={() => window.location.href = '/?view=chat'} className="text-sm text-slate-500 hover:text-indigo-600 font-medium">Live Chat</button>
             <button onClick={() => setActiveSection('policies')} className="text-sm text-slate-500 hover:text-indigo-600 font-medium">Privacy Policy</button>
             <button onClick={() => setActiveSection('policies')} className="text-sm text-slate-500 hover:text-indigo-600 font-medium">Terms of Service</button>
           </div>

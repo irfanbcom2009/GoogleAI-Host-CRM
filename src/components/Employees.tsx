@@ -16,21 +16,33 @@ import {
   FileSearch,
   MessageSquare,
   Edit,
+  Trash2,
   Upload,
   Paperclip,
   X,
-  ShieldCheck
+  ShieldCheck,
+  Settings2,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { User as CRMUser, UserRole, User as UserType, GlobalSettings, UserPermissions } from '../types';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, doc, updateDoc, getDoc } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, moveToTrash, logActivity } from '../lib/firebase';
+import { collection, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, doc, updateDoc, getDoc, getDocs } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { EmployeeDetail } from './EmployeeDetail';
 import { EmployeeEditForm } from './EmployeeEditForm';
 import { ColumnSelector } from './ColumnSelector';
 import { BulkEmployeeAddModal } from './BulkEmployeeAddModal';
+import { PermissionsDashboard } from './PermissionsDashboard';
+import { HelpIcon } from './HelpIcon';
+import { usePermissions } from '../hooks/usePermissions';
+import { DEFAULT_EMPLOYEE_PERMISSIONS } from '../lib/permissions';
+import { ConfigModal } from './ConfigModal';
+import { ConfirmModal } from './ConfirmModal';
+import { MergeModal } from './MergeModal';
+import { toast } from 'react-hot-toast';
+import { GitMerge, AlertCircle } from 'lucide-react';
 
 interface EmployeesProps {
   currentUser: UserType;
@@ -40,6 +52,7 @@ interface EmployeesProps {
 
 const AVAILABLE_COLUMNS = [
   { id: 'employee', label: 'Employee' },
+  { id: 'status', label: 'Status' },
   { id: 'employeeId', label: 'Employee ID' },
   { id: 'joiningDate', label: 'Joining Date' },
   { id: 'modeOfWorking', label: 'Mode' },
@@ -64,21 +77,32 @@ const AVAILABLE_COLUMNS = [
 ];
 
 export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate, onOpenChat }) => {
+  const { check, isAdmin } = usePermissions(currentUser);
   const [employees, setEmployees] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isDeptConfigOpen, setIsDeptConfigOpen] = useState(false);
+  const [isModeConfigOpen, setIsModeConfigOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [employeeToEdit, setEmployeeToEdit] = useState<CRMUser | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<CRMUser | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['employees'] || ['employee', 'role', 'performance', 'points', 'assignedTasks']
+    currentUser.columnPreferences?.['employees'] || ['employee', 'status', 'role', 'performance', 'points', 'assignedTasks']
   );
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [allTasks, setAllTasks] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'list' | 'permissions'>('list');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active');
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [employeeToDelete, setEmployeeToDelete] = useState<CRMUser | null>(null);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeSource, setMergeSource] = useState<CRMUser | null>(null);
+  const [duplicates, setDuplicates] = useState<CRMUser[][]>([]);
+  const [isScanning, setIsScanning] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'tasks'));
@@ -124,24 +148,11 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     endingDate: '',
     experience: '',
     officialMailPassword: '',
+    portalEnabled: false,
     pcAllotted: '',
     pcUsername: '',
     pcPassword: '',
-    permissions: {
-      approvalRequests: true,
-      journals: true,
-      indexingAgencies: true,
-      publishers: true,
-      hecApplications: true,
-      issnRequests: true,
-      doiManagement: true,
-      dataTools: true,
-      invoices: true,
-      expenses: true,
-      resources: true,
-      notifications: true,
-      trash: true
-    } as UserPermissions,
+    permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
     attachments: {
       cv: '',
       photo: '',
@@ -152,23 +163,33 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
   useEffect(() => {
     const fetchSettings = async () => {
-      try {
-        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        if (settingsDoc.exists()) {
-          const data = settingsDoc.data() as GlobalSettings;
-          setGlobalSettings(data);
+      const unsubscribeSettings = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as GlobalSettings;
+          const sanitizedData: GlobalSettings = {
+            ...data,
+            expenseHeads: Array.isArray(data.expenseHeads) ? data.expenseHeads : [],
+            journalCategories: Array.isArray(data.journalCategories) ? data.journalCategories : [],
+            issnTypes: Array.isArray(data.issnTypes) ? data.issnTypes : [],
+            issnSubjects: Array.isArray(data.issnSubjects) ? data.issnSubjects : [],
+            frequencies: Array.isArray(data.frequencies) ? data.frequencies : [],
+            departments: Array.isArray(data.departments) ? data.departments : [],
+            modes: Array.isArray(data.modes) ? data.modes : [],
+            journalScopes: Array.isArray(data.journalScopes) ? data.journalScopes : [],
+            officeSubscriptions: Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []
+          };
+          setGlobalSettings(sanitizedData);
           // Set defaults for new employee form
           setNewEmployee(prev => ({
             ...prev,
-            modeOfWorking: data.modes?.[0] || 'Office',
-            department: data.departments?.[0] || ''
+            modeOfWorking: prev.modeOfWorking || sanitizedData.modes?.[0] || 'Office',
+            department: prev.department || sanitizedData.departments?.[0] || ''
           }));
         }
-      } catch (error) {
-        console.error('Error fetching global settings:', error);
-      }
+      });
+      return unsubscribeSettings;
     };
-    fetchSettings();
+    const unsubSettings = fetchSettings();
 
     const q = query(
       collection(db, 'users'), 
@@ -183,12 +204,25 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       })) as CRMUser[];
       setEmployees(empData);
       setLoading(false);
+
+      // Keep selected employee in sync
+      setSelectedEmployee(prev => {
+        if (!prev) return null;
+        const updated = empData.find(e => e.id === prev.id);
+        return updated || null;
+      });
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (isModalOpen && !newEmployee.employeeId && newEmployee.joiningDate) {
+      generateEmployeeId(newEmployee.joiningDate);
+    }
+  }, [isModalOpen]);
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -202,12 +236,74 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     }
   };
 
+  const handleDeleteEmployee = async (employee: CRMUser) => {
+    try {
+      await moveToTrash('users', employee.id, employee, currentUser.name);
+      toast.success(`Employee "${employee.name}" moved to trash`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'users');
+      toast.error('Failed to delete employee');
+    }
+  };
+
+  const scanForDuplicates = () => {
+    setIsScanning(true);
+    const nameMap = new Map<string, CRMUser[]>();
+    employees.forEach(emp => {
+      const name = emp.name.toLowerCase().trim();
+      if (!nameMap.has(name)) {
+        nameMap.set(name, []);
+      }
+      nameMap.get(name)!.push(emp);
+    });
+
+    const foundDuplicates: CRMUser[][] = [];
+    nameMap.forEach(group => {
+      if (group.length > 1) {
+        foundDuplicates.push(group);
+      }
+    });
+    setDuplicates(foundDuplicates);
+    setIsScanning(false);
+    if (foundDuplicates.length === 0) {
+      toast.success('No duplicate employee names found');
+    }
+  };
+
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
     setIsSaving(true);
     setError(null);
+
+    // Restriction: Only admin can add employees with gmail address
+    if (newEmployee.email.toLowerCase().endsWith('@gmail.com') && currentUser?.role !== 'Admin') {
+      setError("Only administrators can add employees with @gmail.com addresses.");
+      setIsSaving(false);
+      return;
+    }
+
     try {
+      // Check for unique Employee ID
+      const idQuery = query(collection(db, 'users'), where('employeeId', '==', newEmployee.employeeId));
+      const idSnapshot = await getDocs(idQuery);
+      if (!idSnapshot.empty) {
+        setError("Employee ID already exists. Please use a unique ID.");
+        setIsSaving(false);
+        return;
+      }
+
+      // Check for unique CNIC if provided
+      if (newEmployee.cnic) {
+        const cnicQuery = query(collection(db, 'users'), where('cnic', '==', newEmployee.cnic));
+        const cnicSnapshot = await getDocs(cnicQuery);
+        if (!cnicSnapshot.empty) {
+          setError("CNIC already exists in the directory.");
+          setIsSaving(false);
+          return;
+        }
+      }
+
       await addDoc(collection(db, 'users'), {
         ...newEmployee,
         createdAt: serverTimestamp()
@@ -222,6 +318,29 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       } catch (e) {}
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const generateEmployeeId = async (joiningDate: string) => {
+    if (!joiningDate) return;
+    
+    const dateStr = joiningDate.replace(/-/g, ''); // YYYYMMDD
+    const prefix = `EMP-${dateStr}-`;
+    
+    try {
+      // Find all employees joined on this date to get the next sequence
+      const q = query(
+        collection(db, 'users'), 
+        where('employeeId', '>=', prefix),
+        where('employeeId', '<=', prefix + '\uf8ff')
+      );
+      const snapshot = await getDocs(q);
+      const count = snapshot.size + 1;
+      const newId = `${prefix}${count.toString().padStart(3, '0')}`;
+      
+      setNewEmployee(prev => ({ ...prev, employeeId: newId }));
+    } catch (error) {
+      console.error("Error generating Employee ID:", error);
     }
   };
 
@@ -248,24 +367,11 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       endingDate: '',
       experience: '',
       officialMailPassword: '',
+      portalEnabled: false,
       pcAllotted: '',
       pcUsername: '',
       pcPassword: '',
-      permissions: {
-        approvalRequests: true,
-        journals: true,
-        indexingAgencies: true,
-        publishers: true,
-        hecApplications: true,
-        issnRequests: true,
-        doiManagement: true,
-        dataTools: true,
-        invoices: true,
-        expenses: true,
-        resources: true,
-        notifications: true,
-        trash: true
-      } as UserPermissions,
+      permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
       attachments: {
         cv: '',
         photo: '',
@@ -299,24 +405,11 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       endingDate: emp.endingDate || '',
       experience: emp.experience || '',
       officialMailPassword: emp.officialMailPassword || '',
+      portalEnabled: emp.portalEnabled ?? false,
       pcAllotted: emp.pcAllotted || '',
       pcUsername: emp.pcUsername || '',
       pcPassword: emp.pcPassword || '',
-      permissions: emp.permissions || {
-        approvalRequests: true,
-        journals: true,
-        indexingAgencies: true,
-        publishers: true,
-        hecApplications: true,
-        issnRequests: true,
-        doiManagement: true,
-        dataTools: true,
-        invoices: true,
-        expenses: true,
-        resources: true,
-        notifications: true,
-        trash: true
-      } as UserPermissions,
+      permissions: emp.permissions || DEFAULT_EMPLOYEE_PERMISSIONS,
       attachments: emp.attachments || {
         cv: '',
         photo: '',
@@ -364,10 +457,17 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     reader.readAsDataURL(file);
   };
 
-  const filteredEmployees = employees.filter(emp => 
-    emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    emp.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredEmployees = employees.filter(emp => {
+    const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         emp.email.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const isActive = !emp.endingDate;
+    const matchesStatus = statusFilter === 'all' || 
+                         (statusFilter === 'active' && isActive) || 
+                         (statusFilter === 'inactive' && !isActive);
+    
+    return matchesSearch && matchesStatus;
+  });
 
   if (selectedEmployee) {
     return <EmployeeDetail employee={selectedEmployee} onBack={() => setSelectedEmployee(null)} currentUser={currentUser} onImpersonate={onImpersonate} />;
@@ -375,39 +475,162 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
   return (
     <div className="p-8 space-y-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Employee Directory</h2>
-          <p className="text-slate-500 mt-1">Monitor employee performance, points, and assigned tasks.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+            {activeTab === 'list' ? 'Employee Directory' : 'Access Control Dashboard'}
+          </h2>
+          <p className="text-slate-500 mt-1">
+            {activeTab === 'list' 
+              ? 'Monitor employee performance, points, and assigned tasks.' 
+              : 'Manage granular permissions and view-only access for staff.'}
+          </p>
         </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={() => setIsBulkModalOpen(true)}
-            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-          >
-            <Upload size={20} className="text-indigo-600" />
-            Bulk Add
-          </button>
-          <ColumnSelector 
-            availableColumns={AVAILABLE_COLUMNS}
-            selectedColumns={selectedColumns}
-            onChange={handleColumnChange}
-          />
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-          >
-            <Plus size={20} />
-            Add Employee
-          </button>
-          <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl border border-indigo-100">
-            <Trophy size={18} />
-            <span className="text-sm font-bold uppercase tracking-wider">Leaderboard</span>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl mr-2">
+            <button
+              onClick={() => setActiveTab('list')}
+              className={cn(
+                "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+                activeTab === 'list' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              <Users size={18} />
+              List
+            </button>
+            {(currentUser.role === 'Admin' || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email)) && (
+              <button
+                onClick={() => setActiveTab('permissions')}
+                className={cn(
+                  "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+                  activeTab === 'permissions' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                )}
+              >
+                <Shield size={18} />
+                Permissions
+              </button>
+            )}
           </div>
+
+          {activeTab === 'list' && (
+            <div className="flex flex-wrap items-center gap-3">
+              {(currentUser.role === 'Admin' || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email)) && (
+                <div className="flex gap-2 mr-2">
+                  <button 
+                    onClick={() => setIsDeptConfigOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure Departments"
+                  >
+                    <Settings2 size={20} />
+                  </button>
+                  <button 
+                    onClick={() => setIsModeConfigOpen(true)}
+                    className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                    title="Configure Modes of Working"
+                  >
+                    <Settings size={20} />
+                  </button>
+                </div>
+              )}
+              <ColumnSelector 
+                availableColumns={AVAILABLE_COLUMNS}
+                selectedColumns={selectedColumns}
+                onChange={handleColumnChange}
+                maxSelection={12}
+              />
+              {(isAdmin || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email)) && (
+                <button
+                  onClick={scanForDuplicates}
+                  disabled={isScanning}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+                  title="Scan for duplicate names"
+                >
+                  {isScanning ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
+                  Scan Duplicates
+                </button>
+              )}
+              {check('employees', 'add') && (
+                <>
+                  <button 
+                    onClick={() => setIsBulkModalOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <Upload size={18} />
+                    Bulk Add
+                  </button>
+                  <button 
+                    onClick={() => setIsModalOpen(true)}
+                    className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                  >
+                    <Plus size={20} />
+                    Add Employee
+                  </button>
+                </>
+              )}
+              <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl border border-indigo-100">
+                <Trophy size={18} />
+                <span className="text-sm font-bold uppercase tracking-wider">Leaderboard</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {duplicates.length > 0 && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-800">
+                <AlertCircle size={20} />
+                <h4 className="font-bold">Duplicate Names Found ({duplicates.length} groups)</h4>
+              </div>
+              <button 
+                onClick={() => setDuplicates([])}
+                className="text-xs font-bold text-amber-600 hover:text-amber-700"
+              >
+                Dismiss
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {duplicates.map((group, idx) => (
+                <div key={idx} className="bg-white p-3 rounded-xl border border-amber-100 shadow-sm space-y-3">
+                  <p className="text-sm font-bold text-slate-900">{group[0].name}</p>
+                  <div className="space-y-2">
+                    {group.map(emp => (
+                      <div key={emp.id} className="flex items-center justify-between text-xs p-2 bg-slate-50 rounded-lg">
+                        <div className="truncate mr-2">
+                          <p className="font-medium text-slate-700 truncate">{emp.email}</p>
+                          <p className="text-[10px] text-slate-400">{emp.employeeId || 'No ID'}</p>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setMergeSource(emp);
+                            setIsMergeModalOpen(true);
+                          }}
+                          className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-md font-bold hover:bg-indigo-100 transition-all shrink-0"
+                        >
+                          Merge
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {activeTab === 'permissions' ? (
+        <PermissionsDashboard />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
             <Users size={24} />
@@ -453,16 +676,35 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/30">
-          <div className="relative w-full max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-            <input 
-              type="text" 
-              placeholder="Search employees..."
-              className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
+        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50/30">
+          <div className="flex flex-col md:flex-row items-center gap-4 w-full max-w-2xl">
+            <div className="relative w-full md:max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Search employees..."
+                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+              />
+            </div>
+
+            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 w-full md:w-auto">
+              {(['active', 'inactive', 'all'] as const).map((status) => (
+                <button
+                  key={status}
+                  onClick={() => setStatusFilter(status)}
+                  className={cn(
+                    "flex-1 md:flex-none px-4 py-1.5 rounded-lg text-xs font-bold capitalize transition-all",
+                    statusFilter === status 
+                      ? "bg-indigo-600 text-white shadow-sm" 
+                      : "text-slate-500 hover:bg-slate-50"
+                  )}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button className="p-2 text-slate-400 hover:bg-slate-100 rounded-lg transition-all">
@@ -471,7 +713,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-400px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -479,9 +721,11 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('employee') && <th className="px-6 py-4">Employee</th>}
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400">#</th>
+                  {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
                   {selectedColumns.includes('employeeId') && <th className="px-6 py-4">Employee ID</th>}
                   {selectedColumns.includes('joiningDate') && <th className="px-6 py-4">Joining Date</th>}
                   {selectedColumns.includes('modeOfWorking') && <th className="px-6 py-4">Mode</th>}
@@ -523,7 +767,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                           <div className="flex items-center gap-3">
                             <div className="relative">
                               <img 
-                                src={emp.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.name}`} 
+                                src={emp.photoURL || emp.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.name}`} 
                                 className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 object-cover" 
                                 alt="" 
                               />
@@ -560,6 +804,17 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                               </p>
                             </div>
                           </div>
+                        </td>
+                      )}
+                      <td className="px-6 py-4 text-xs font-bold text-slate-400">{index + 1}</td>
+                      {selectedColumns.includes('status') && (
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                            !emp.endingDate ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-rose-50 text-rose-700 border border-rose-100"
+                          )}>
+                            {!emp.endingDate ? 'Active' : 'Inactive'}
+                          </span>
                         </td>
                       )}
                       {selectedColumns.includes('employeeId') && (
@@ -681,16 +936,18 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                           >
                             <FileSearch size={16} />
                           </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(emp);
-                            }}
-                            className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
-                            title="Edit Employee"
-                          >
-                            <Edit size={16} />
-                          </button>
+                          {check('employees', 'edit') && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditModal(emp);
+                              }}
+                              className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
+                              title="Edit Employee"
+                            >
+                              <Edit size={16} />
+                            </button>
+                          )}
                           {onImpersonate && currentUser?.role === 'Admin' && emp.role !== 'Admin' && (
                             <button 
                               onClick={(e) => {
@@ -713,6 +970,19 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                           >
                             <MoreHorizontal size={16} />
                           </button>
+                          {check('employees', 'delete') && emp.id !== currentUser.id && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEmployeeToDelete(emp);
+                                setIsDeleteConfirmOpen(true);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                              title="Delete Employee"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
@@ -723,11 +993,45 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           )}
         </div>
       </div>
+      </>
+      )}
+
       <BulkEmployeeAddModal 
         isOpen={isBulkModalOpen}
         onClose={() => setIsBulkModalOpen(false)}
         onSuccess={() => {
           // Success notification or refresh logic if needed
+        }}
+      />
+
+      <ConfirmModal
+        isOpen={isDeleteConfirmOpen}
+        onClose={() => {
+          setIsDeleteConfirmOpen(false);
+          setEmployeeToDelete(null);
+        }}
+        onConfirm={() => {
+          if (employeeToDelete) {
+            handleDeleteEmployee(employeeToDelete);
+          }
+        }}
+        title="Delete Employee"
+        message={`Are you sure you want to move "${employeeToDelete?.name}" to trash? This will remove their access to the portal.`}
+        confirmText="Move to Trash"
+        variant="danger"
+      />
+
+      <MergeModal
+        isOpen={isMergeModalOpen}
+        onClose={() => {
+          setIsMergeModalOpen(false);
+          setMergeSource(null);
+        }}
+        type="employees"
+        initialSourceItem={mergeSource}
+        onSuccess={() => {
+          setDuplicates([]);
+          scanForDuplicates();
         }}
       />
 
@@ -751,6 +1055,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         {isEditModalOpen && employeeToEdit ? (
           <EmployeeEditForm 
             employee={employeeToEdit} 
+            currentUser={currentUser}
             onClose={() => {
               setIsEditModalOpen(false);
               setEmployeeToEdit(null);
@@ -760,7 +1065,19 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
           <form onSubmit={handleAddEmployee} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Employee ID</label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-slate-700 flex items-center">
+                  Employee ID
+                  <HelpIcon policyTitle="Employee ID Policy" />
+                </label>
+                <button 
+                  type="button"
+                  onClick={() => generateEmployeeId(newEmployee.joiningDate)}
+                  className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+                >
+                  Regenerate
+                </button>
+              </div>
               <input 
                 required
                 type="text" 
@@ -777,7 +1094,11 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                 type="date" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                 value={newEmployee.joiningDate}
-                onChange={e => setNewEmployee(prev => ({ ...prev, joiningDate: e.target.value }))}
+                onChange={e => {
+                  const date = e.target.value;
+                  setNewEmployee(prev => ({ ...prev, joiningDate: date }));
+                  generateEmployeeId(date);
+                }}
               />
             </div>
             <div className="space-y-2">
@@ -860,6 +1181,29 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                 onChange={e => setNewEmployee(prev => ({ ...prev, assignments: e.target.value }))}
               />
             </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Portal Access</label>
+              <div className="flex items-center gap-3 h-[42px]">
+                <button
+                  type="button"
+                  onClick={() => setNewEmployee(prev => ({ ...prev, portalEnabled: !prev.portalEnabled }))}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                    newEmployee.portalEnabled ? "bg-indigo-600" : "bg-slate-200"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                      newEmployee.portalEnabled ? "translate-x-6" : "translate-x-1"
+                    )}
+                  />
+                </button>
+                <span className="text-sm font-medium text-slate-600">
+                  {newEmployee.portalEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -931,7 +1275,10 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">CNIC</label>
+              <label className="text-sm font-bold text-slate-700 flex items-center">
+                CNIC
+                <HelpIcon policyTitle="CNIC Verification Policy" />
+              </label>
               <input 
                 type="text" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
@@ -1214,6 +1561,28 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         </form>
         )}
       </Modal>
+
+      {isDeptConfigOpen && (
+        <ConfigModal
+          isOpen={isDeptConfigOpen}
+          onClose={() => setIsDeptConfigOpen(false)}
+          title="Configure Departments"
+          fieldName="departments"
+          type="string-list"
+          initialItems={globalSettings?.departments || []}
+        />
+      )}
+
+      {isModeConfigOpen && (
+        <ConfigModal
+          isOpen={isModeConfigOpen}
+          onClose={() => setIsModeConfigOpen(false)}
+          title="Configure Modes of Working"
+          fieldName="modes"
+          type="string-list"
+          initialItems={globalSettings?.modes || []}
+        />
+      )}
     </div>
   );
 };

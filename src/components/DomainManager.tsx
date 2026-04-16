@@ -50,6 +50,8 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
   const [newRenewal, setNewRenewal] = useState({ date: new Date().toISOString().split('T')[0], costPrice: 0, salePrice: 0, notes: '' });
   const [credentials, setCredentials] = useState(domain.hostingCredentials || { panelUrl: '', username: '', password: '' });
   const [eppCode, setEppCode] = useState(domain.eppCode || '');
+  const [isDomainSubscribedFromUs, setIsDomainSubscribedFromUs] = useState(domain.isDomainSubscribedFromUs ?? domain.isSubscribed ?? true);
+  const [isHostingSubscribedFromUs, setIsHostingSubscribedFromUs] = useState(domain.isHostingSubscribedFromUs ?? domain.isSubscribed ?? true);
 
   React.useEffect(() => {
     if (isEmployee) {
@@ -60,6 +62,24 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
       return () => unsubscribe();
     }
   }, [isEmployee]);
+
+  const handleUpdateSubscription = async (field: 'isDomainSubscribedFromUs' | 'isHostingSubscribedFromUs', value: boolean) => {
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, 'domains', domain.id), {
+        [field]: value,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.name,
+        updatedById: currentUser.id
+      });
+      if (field === 'isDomainSubscribedFromUs') setIsDomainSubscribedFromUs(value);
+      if (field === 'isHostingSubscribedFromUs') setIsHostingSubscribedFromUs(value);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'domains');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleUpdateCredentials = async () => {
     setLoading(true);
@@ -243,19 +263,19 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
 
         {isEmployee && (
           <div className="flex items-center gap-2">
-            {/* Verification Status Badge */}
+            {/* Verification Status */}
             <div className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-bold border transition-all uppercase tracking-wider",
+              "flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-bold border transition-all uppercase tracking-wider",
               domain.isVerified 
                 ? "bg-emerald-50 text-emerald-700 border-emerald-100" 
                 : "bg-amber-50 text-amber-700 border-amber-100"
             )}>
-              {domain.isVerified ? <CheckCircle2 size={12} /> : <Clock size={12} />}
+              {domain.isVerified ? <ShieldCheck size={12} /> : <Clock size={12} />}
               {domain.isVerified ? 'Verified' : 'Pending'}
             </div>
 
-            {/* Action Icons */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            {/* Danger Zone / Actions */}
+            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
               {!domain.isVerified && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
                 <button 
                   onClick={async () => {
@@ -270,28 +290,57 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       handleFirestoreError(error, OperationType.UPDATE, 'domains');
                     }
                   }}
-                  className="p-2 text-amber-600 hover:bg-white rounded-lg transition-all"
+                  className="p-1.5 text-amber-600 hover:bg-white hover:shadow-sm rounded-lg transition-all"
                   title="Verify Domain"
                 >
-                  <Shield size={18} />
+                  <Shield size={16} />
                 </button>
               )}
               <button 
                 onClick={handleDeleteDomain}
                 disabled={loading || (domain.isVerified && currentUser.role !== 'Admin')}
                 className={cn(
-                  "p-2 rounded-lg transition-all",
+                  "p-1.5 rounded-lg transition-all",
                   domain.isVerified && currentUser.role !== 'Admin'
                     ? "text-slate-300 cursor-not-allowed"
-                    : "text-rose-600 hover:bg-white"
+                    : "text-rose-600 hover:bg-white hover:shadow-sm"
                 )}
                 title="Move to Trash"
               >
-                <Trash2 size={18} />
+                <Trash2 size={16} />
               </button>
             </div>
           </div>
         )}
+      </div>
+
+      <div className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100 space-y-4 mb-8">
+        <h3 className="text-sm font-bold text-amber-900 flex items-center gap-2">
+          <Shield size={18} />
+          Subscription Awareness
+        </h3>
+        <p className="text-xs text-amber-700">Identify which services are subscribed through us to enable billing and support features.</p>
+        
+        <div className="grid grid-cols-2 gap-4">
+          <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+            <input 
+              type="checkbox"
+              className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              checked={isDomainSubscribedFromUs}
+              onChange={e => handleUpdateSubscription('isDomainSubscribedFromUs', e.target.checked)}
+            />
+            <span className="text-xs font-bold text-slate-700">Domain (Us)</span>
+          </label>
+          <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
+            <input 
+              type="checkbox"
+              className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+              checked={isHostingSubscribedFromUs}
+              onChange={e => handleUpdateSubscription('isHostingSubscribedFromUs', e.target.checked)}
+            />
+            <span className="text-xs font-bold text-slate-700">Hosting (Us)</span>
+          </label>
+        </div>
       </div>
 
       <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit">
@@ -563,80 +612,106 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
 
         {activeTab === 'credentials' && (
           <div className="space-y-6">
-            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 space-y-6">
-              <div className="space-y-4">
-                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Lock size={16} className="text-indigo-600" />
-                  Hosting Access Credentials
-                </h4>
-                <div className="grid grid-cols-1 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Panel URL</label>
-                    <input 
-                      disabled={!isEmployee}
-                      type="text" 
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                      placeholder="https://cpanel.domain.com"
-                      value={credentials.panelUrl}
-                      onChange={e => setCredentials(prev => ({ ...prev, panelUrl: e.target.value }))}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Username</label>
-                      <input 
-                        disabled={!isEmployee}
-                        type="text" 
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                        value={credentials.username}
-                        onChange={e => setCredentials(prev => ({ ...prev, username: e.target.value }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
-                      <input 
-                        disabled={!isEmployee}
-                        type="text" 
-                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                        value={credentials.password}
-                        onChange={e => setCredentials(prev => ({ ...prev, password: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-                </div>
+            {!isHostingSubscribedFromUs && !isDomainSubscribedFromUs ? (
+              <div className="p-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                <Lock size={48} className="mx-auto text-slate-300 mb-4" />
+                <h3 className="text-lg font-bold text-slate-900 mb-2">External Service</h3>
+                <p className="text-slate-500 max-w-md mx-auto">
+                  This domain and hosting are managed externally. Credentials and invoice details are hidden for external services.
+                </p>
+                {isEmployee && (
+                  <button
+                    onClick={() => handleUpdateSubscription('isHostingSubscribedFromUs', true)}
+                    className="mt-6 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all"
+                  >
+                    Convert to Subscribed (Us)
+                  </button>
+                )}
               </div>
-
-              <div className="pt-4 border-t border-slate-200 space-y-4">
-                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Shield size={16} className="text-indigo-600" />
-                  EPP / Authorization Code
-                </h4>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">EPP Code</label>
-                  <div className="relative">
-                    <input 
-                      disabled={!isEmployee}
-                      type="text" 
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500 font-mono"
-                      placeholder="Enter EPP code for transfer"
-                      value={eppCode}
-                      onChange={e => setEppCode(e.target.value)}
-                    />
-                  </div>
+            ) : (
+              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 space-y-6">
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Lock size={16} className="text-indigo-600" />
+                    Hosting Access Credentials
+                  </h4>
+                  {isHostingSubscribedFromUs ? (
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Panel URL</label>
+                        <input 
+                          disabled={!isEmployee}
+                          type="text" 
+                          className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                          placeholder="https://cpanel.domain.com"
+                          value={credentials.panelUrl}
+                          onChange={e => setCredentials(prev => ({ ...prev, panelUrl: e.target.value }))}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Username</label>
+                          <input 
+                            disabled={!isEmployee}
+                            type="text" 
+                            className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                            value={credentials.username}
+                            onChange={e => setCredentials(prev => ({ ...prev, username: e.target.value }))}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
+                          <input 
+                            disabled={!isEmployee}
+                            type="text" 
+                            className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                            value={credentials.password}
+                            onChange={e => setCredentials(prev => ({ ...prev, password: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">Hosting is managed externally. Credentials hidden.</p>
+                  )}
                 </div>
-              </div>
 
-              {isEmployee && (
-                <button 
-                  onClick={handleUpdateCredentials}
-                  disabled={loading}
-                  className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
-                >
-                  {loading ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
-                  Save Access Details
-                </button>
-              )}
-            </div>
+                <div className="pt-4 border-t border-slate-200 space-y-4">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Shield size={16} className="text-indigo-600" />
+                    EPP / Authorization Code
+                  </h4>
+                  {isDomainSubscribedFromUs ? (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">EPP Code</label>
+                      <div className="relative">
+                        <input 
+                          disabled={!isEmployee}
+                          type="text" 
+                          className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500 font-mono"
+                          placeholder="Enter EPP code for transfer"
+                          value={eppCode}
+                          onChange={e => setEppCode(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">Domain is managed externally. EPP code hidden.</p>
+                  )}
+                </div>
+
+                {isEmployee && (
+                  <button 
+                    onClick={handleUpdateCredentials}
+                    disabled={loading}
+                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
+                    Save Access Details
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 

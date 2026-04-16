@@ -27,6 +27,9 @@ import { doc, onSnapshot, updateDoc, serverTimestamp, collection, query, where, 
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
 
+import { FloatingActionBar } from './FloatingActionBar';
+import { toast } from 'react-hot-toast';
+
 interface PublisherDetailProps {
   publisherId: string;
   onBack: () => void;
@@ -39,9 +42,37 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
   const [doiApplications, setDoiApplications] = useState<DOIApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isDoiModalOpen, setIsDoiModalOpen] = useState(false);
   const [editData, setEditData] = useState<Partial<Publisher>>({});
   const [uploading, setUploading] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditing) return;
+      
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditData(publisher || {});
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editData, publisher]);
+
+  useEffect(() => {
+    if (isEditing) {
+      const firstInput = document.querySelector('input, select, textarea');
+      if (firstInput) {
+        (firstInput as HTMLElement).focus();
+      }
+    }
+  }, [isEditing]);
 
   const [newDoi, setNewDoi] = useState({
     memberName: '',
@@ -155,14 +186,19 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
 
   const handleSave = async () => {
     if (!publisher) return;
+    setIsSaving(true);
     try {
       await updateDoc(doc(db, 'publishers', publisherId), {
         ...editData,
         updatedAt: serverTimestamp()
       });
       setIsEditing(false);
+      toast.success('Publisher updated successfully');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'publishers');
+      toast.error('Failed to update publisher');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -241,33 +277,24 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
           Back to Publishers
         </button>
         <div className="flex gap-3">
-          {isEditing ? (
-            <>
-              <button 
-                onClick={() => setIsEditing(false)}
-                className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleSave}
-                className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
-              >
-                Save Changes
-              </button>
-            </>
-          ) : (
-            <button 
-              onClick={() => setIsEditing(true)}
-              className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              Edit Details
-            </button>
-          )}
+          <button 
+            onClick={() => setIsEditing(!isEditing)}
+            disabled={isSaving}
+            className={cn(
+              "px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2",
+              isEditing && "border-indigo-200 text-indigo-600 bg-indigo-50"
+            )}
+          >
+            <Settings2 size={18} />
+            {isEditing ? 'Editing Mode' : 'Edit Details'}
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className={cn(
+        "grid grid-cols-1 lg:grid-cols-3 gap-8 transition-all",
+        isEditing && "opacity-90"
+      )}>
         {/* Left Column: Basic Info */}
         <div className="lg:col-span-1 space-y-8">
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
@@ -617,6 +644,16 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
           </div>
         </div>
       </div>
+
+      <FloatingActionBar 
+        isVisible={isEditing}
+        onSave={handleSave}
+        onCancel={() => {
+          setIsEditing(false);
+          setEditData(publisher || {});
+        }}
+        isSaving={isSaving}
+      />
 
       <Modal 
         isOpen={isDoiModalOpen} 

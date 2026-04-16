@@ -14,7 +14,9 @@ import {
   Printer,
   Download,
   History,
-  Plus
+  Plus,
+  Edit,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ISSNRequest, User as UserType } from '../types';
@@ -22,6 +24,9 @@ import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
 import { Shield, CheckCircle2, AlertTriangle, Trash2 } from 'lucide-react';
+import { FloatingActionBar } from './FloatingActionBar';
+import { toast } from 'react-hot-toast';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface ISSNDetailProps {
   request: ISSNRequest;
@@ -30,6 +35,7 @@ interface ISSNDetailProps {
 }
 
 export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [isAddingInvoice, setIsAddingInvoice] = useState(false);
   const [newInvoice, setNewInvoice] = useState({
     invoiceNo: '',
@@ -39,6 +45,49 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
     status: 'unpaid' as const
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editData, setEditData] = useState<ISSNRequest>(request);
+
+  React.useEffect(() => {
+    setEditData(request);
+  }, [request]);
+
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditing) return;
+      
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditData(request);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editData, request]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await updateDoc(doc(db, 'issn_requests', request.id), {
+        ...editData,
+        updatedAt: serverTimestamp(),
+        updatedBy: currentUser.name
+      });
+      setIsEditing(false);
+      toast.success('Request updated successfully');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'issn_requests');
+      toast.error('Failed to update request');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleCreateInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,6 +146,21 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
           Back to List
         </button>
         <div className="flex gap-3">
+          {check('issnRequests', 'edit') && (
+            <button 
+              onClick={() => setIsEditing(!isEditing)}
+              disabled={isSaving}
+              className={cn(
+                "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg",
+                isEditing 
+                  ? "bg-indigo-50 text-indigo-600 border border-indigo-200" 
+                  : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/20"
+              )}
+            >
+              <Edit size={18} />
+              {isEditing ? 'Editing Mode' : 'Edit Request'}
+            </button>
+          )}
           <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm">
             <Printer size={18} />
             Print Detail
@@ -108,7 +172,10 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className={cn(
+        "grid grid-cols-1 lg:grid-cols-3 gap-8 transition-all",
+        isEditing && "opacity-90"
+      )}>
         <div className="lg:col-span-2 space-y-8">
           {/* Audit & Verification Section */}
           <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100 space-y-4">
@@ -175,25 +242,69 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
           {/* Header Card */}
           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8">
-              {getStatusBadge(request.status)}
+              {isEditing ? (
+                <select 
+                  className="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider bg-slate-50 border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={editData.status}
+                  onChange={e => setEditData(prev => ({ ...prev, status: e.target.value as any }))}
+                >
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              ) : (
+                getStatusBadge(request.status)
+              )}
             </div>
             <div className="space-y-4">
               <div className="flex items-center gap-3 text-indigo-600 font-mono text-sm font-bold tracking-widest uppercase">
                 <Hash size={16} />
                 ISSN Request #: {request.requestNo}
               </div>
-              <h1 className="text-4xl font-black text-slate-900 tracking-tight">
-                {request.journalTitle || 'Journal Title Not Set'}
-              </h1>
+              {isEditing ? (
+                <input 
+                  type="text"
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-2xl font-black"
+                  value={editData.journalTitle}
+                  onChange={e => setEditData(prev => ({ ...prev, journalTitle: e.target.value }))}
+                  placeholder="Journal Title"
+                />
+              ) : (
+                <h1 className="text-4xl font-black text-slate-900 tracking-tight">
+                  {request.journalTitle || 'Journal Title Not Set'}
+                </h1>
+              )}
               <div className="flex flex-wrap gap-4 pt-2">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium">
-                  <Globe size={16} className="text-slate-400" />
-                  {request.requestType}
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium">
-                  <Clock size={16} className="text-slate-400" />
-                  Frequency_ISSN: {request.frequency}
-                </div>
+                {isEditing ? (
+                  <select 
+                    className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={editData.requestType}
+                    onChange={e => setEditData(prev => ({ ...prev, requestType: e.target.value as any }))}
+                  >
+                    <option value="Print">Print</option>
+                    <option value="Online">Online</option>
+                    <option value="Both">Both</option>
+                  </select>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium">
+                    <Globe size={16} className="text-slate-400" />
+                    {request.requestType}
+                  </div>
+                )}
+                {isEditing ? (
+                  <input 
+                    type="text"
+                    className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={editData.frequency}
+                    onChange={e => setEditData(prev => ({ ...prev, frequency: e.target.value }))}
+                    placeholder="Frequency"
+                  />
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium">
+                    <Clock size={16} className="text-slate-400" />
+                    Frequency_ISSN: {request.frequency}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -208,35 +319,89 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
               <div className="space-y-4">
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">P-ISSN</span>
-                  <span className="text-sm font-bold text-slate-900">{request.printIssn || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.printIssn}
+                      onChange={e => setEditData(prev => ({ ...prev, printIssn: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.printIssn || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">E-ISSN</span>
-                  <span className="text-sm font-bold text-slate-900">{request.onlineIssn || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.onlineIssn}
+                      onChange={e => setEditData(prev => ({ ...prev, onlineIssn: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.onlineIssn || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">Language</span>
-                  <span className="text-sm font-bold text-slate-900">{request.language || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.language}
+                      onChange={e => setEditData(prev => ({ ...prev, language: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.language || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">Country</span>
-                  <span className="text-sm font-bold text-slate-900">{request.country || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.country}
+                      onChange={e => setEditData(prev => ({ ...prev, country: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.country || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">Subject</span>
-                  <span className="text-sm font-bold text-slate-900">{request.subject || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.subject}
+                      onChange={e => setEditData(prev => ({ ...prev, subject: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.subject || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="pt-2">
                   <p className="text-xs text-slate-400 font-bold uppercase mb-2">Journal URL</p>
-                  <a 
-                    href={request.journalUrl} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-sm text-indigo-600 font-bold hover:underline flex items-center gap-1"
-                  >
-                    {request.journalUrl || 'No URL provided'}
-                    <ExternalLink size={12} />
-                  </a>
+                  {isEditing ? (
+                    <input 
+                      type="url"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                      value={editData.journalUrl}
+                      onChange={e => setEditData(prev => ({ ...prev, journalUrl: e.target.value }))}
+                    />
+                  ) : (
+                    <a 
+                      href={request.journalUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-sm text-indigo-600 font-bold hover:underline flex items-center gap-1"
+                    >
+                      {request.journalUrl || 'No URL provided'}
+                      <ExternalLink size={12} />
+                    </a>
+                  )}
                 </div>
               </div>
             </div>
@@ -249,13 +414,30 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
               <div className="space-y-4">
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">Name of Publisher (ISSN)</span>
-                  <span className="text-sm font-bold text-slate-900">{request.publisherName || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                      value={editData.publisherName}
+                      onChange={e => setEditData(prev => ({ ...prev, publisherName: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.publisherName || 'N/A'}</span>
+                  )}
                 </div>
                 <div className="pt-2">
                   <p className="text-xs text-slate-400 font-bold uppercase mb-2">Publisher Address (ISSN)</p>
-                  <p className="text-sm text-slate-600 leading-relaxed">
-                    {request.publisherAddress || 'No address provided'}
-                  </p>
+                  {isEditing ? (
+                    <textarea 
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
+                      value={editData.publisherAddress}
+                      onChange={e => setEditData(prev => ({ ...prev, publisherAddress: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      {request.publisherAddress || 'No address provided'}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -270,11 +452,29 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div className="space-y-1">
                 <p className="text-xs text-slate-500 font-bold uppercase">Login ID</p>
-                <p className="text-lg font-mono tracking-wider">{request.issnLogin || 'Not Set'}</p>
+                {isEditing ? (
+                  <input 
+                    type="text"
+                    className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-mono tracking-wider text-white"
+                    value={editData.issnLogin}
+                    onChange={e => setEditData(prev => ({ ...prev, issnLogin: e.target.value }))}
+                  />
+                ) : (
+                  <p className="text-lg font-mono tracking-wider">{request.issnLogin || 'Not Set'}</p>
+                )}
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-slate-500 font-bold uppercase">Password</p>
-                <p className="text-lg font-mono tracking-wider">••••••••••••</p>
+                {isEditing ? (
+                  <input 
+                    type="text"
+                    className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-mono tracking-wider text-white"
+                    value={editData.issnPassword}
+                    onChange={e => setEditData(prev => ({ ...prev, issnPassword: e.target.value }))}
+                  />
+                ) : (
+                  <p className="text-lg font-mono tracking-wider">••••••••••••</p>
+                )}
               </div>
             </div>
           </div>
@@ -289,18 +489,36 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                 <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
                   <User size={20} />
                 </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">{request.contactName || 'N/A'}</p>
-                  <p className="text-xs text-slate-500">Primary Contact</p>
+                <div className="flex-1">
+                  <p className="text-xs text-slate-500 font-bold uppercase">Contact name (ISSN)</p>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                      value={editData.contactName}
+                      onChange={e => setEditData(prev => ({ ...prev, contactName: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-900">{request.contactName || 'N/A'}</p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
                   <Mail size={20} />
                 </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">{request.emailAddress || 'N/A'}</p>
-                  <p className="text-xs text-slate-500">Email Address (ISSN)</p>
+                <div className="flex-1">
+                  <p className="text-xs text-slate-500 font-bold uppercase">Email Address (ISSN)</p>
+                  {isEditing ? (
+                    <input 
+                      type="email"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                      value={editData.emailAddress}
+                      onChange={e => setEditData(prev => ({ ...prev, emailAddress: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-900">{request.emailAddress || 'N/A'}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -312,12 +530,30 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <span className="text-sm text-emerald-700">Payment Made</span>
-                <span className="text-xl font-black text-emerald-800">PKR {request.paymentAmountPkr?.toLocaleString()}</span>
+                {isEditing ? (
+                  <input 
+                    type="number"
+                    className="w-32 px-2 py-1 bg-white border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-right"
+                    value={editData.paymentAmountPkr}
+                    onChange={e => setEditData(prev => ({ ...prev, paymentAmountPkr: Number(e.target.value) }))}
+                  />
+                ) : (
+                  <span className="text-xl font-black text-emerald-800">PKR {request.paymentAmountPkr?.toLocaleString()}</span>
+                )}
               </div>
               <div className="pt-4 border-t border-emerald-200 space-y-3">
                 <div className="flex justify-between text-xs">
                   <span className="text-emerald-600">Invoice Number</span>
-                  <span className="font-bold text-emerald-800">{request.legacyInvoiceNumber || 'N/A'}</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-white border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-xs font-bold text-right"
+                      value={editData.legacyInvoiceNumber}
+                      onChange={e => setEditData(prev => ({ ...prev, legacyInvoiceNumber: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="font-bold text-emerald-800">{request.legacyInvoiceNumber || 'N/A'}</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -331,18 +567,36 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                 <div className="w-8 h-8 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center">
                   <Calendar size={16} />
                 </div>
-                <div>
+                <div className="flex-1">
                   <p className="text-xs text-slate-500">ISSN Sent Date</p>
-                  <p className="text-sm font-bold text-slate-900">{request.sentDate || 'N/A'}</p>
+                  {isEditing ? (
+                    <input 
+                      type="date"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                      value={editData.sentDate}
+                      onChange={e => setEditData(prev => ({ ...prev, sentDate: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-900">{request.sentDate || 'N/A'}</p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center">
                   <Clock size={16} />
                 </div>
-                <div>
+                <div className="flex-1">
                   <p className="text-xs text-slate-500">ISSN Modified Date</p>
-                  <p className="text-sm font-bold text-slate-900">{request.modifiedDate || 'N/A'}</p>
+                  {isEditing ? (
+                    <input 
+                      type="date"
+                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                      value={editData.modifiedDate}
+                      onChange={e => setEditData(prev => ({ ...prev, modifiedDate: e.target.value }))}
+                    />
+                  ) : (
+                    <p className="text-sm font-bold text-slate-900">{request.modifiedDate || 'N/A'}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -491,6 +745,15 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
           </div>
         </div>
       </div>
+      <FloatingActionBar 
+        isVisible={isEditing}
+        onSave={handleSave}
+        onCancel={() => {
+          setIsEditing(false);
+          setEditData(request);
+        }}
+        isSaving={isSaving}
+      />
     </motion.div>
   );
 };

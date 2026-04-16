@@ -18,23 +18,23 @@ export const StatCard: React.FC<StatCardProps> = ({ label, value, change, icon: 
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow"
+      className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow"
     >
       <div className="flex justify-between items-start">
         <div>
-          <p className="text-sm font-medium text-slate-500">{label}</p>
-          <h3 className="text-2xl font-bold text-slate-900 mt-1">{value}</h3>
+          <p className="text-xs font-medium text-slate-500">{label}</p>
+          <h3 className="text-xl font-bold text-slate-900 mt-0.5">{value}</h3>
           <div className={cn(
-            "flex items-center gap-1 mt-2 text-sm font-semibold",
+            "flex items-center gap-1 mt-1.5 text-[10px] font-semibold",
             isPositive ? "text-emerald-600" : "text-rose-600"
           )}>
-            {isPositive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
+            {isPositive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
             <span>{Math.abs(change)}%</span>
-            <span className="text-slate-400 font-normal ml-1">vs last month</span>
+            <span className="text-slate-400 font-normal ml-0.5">vs last month</span>
           </div>
         </div>
-        <div className={cn("p-3 rounded-xl", color)}>
-          <Icon size={24} className="text-white" />
+        <div className={cn("p-2 rounded-lg", color)}>
+          <Icon size={20} className="text-white" />
         </div>
       </div>
     </motion.div>

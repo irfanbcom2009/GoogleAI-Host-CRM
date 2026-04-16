@@ -17,7 +17,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { Policy, User as UserType } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, query, orderBy, getDocs, where } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { ConfirmModal } from './ConfirmModal';
 import { cn } from '../lib/utils';
@@ -84,6 +84,28 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
     setIsAiGenerating(false);
   };
 
+  const handleSeedPolicies = async () => {
+    const defaultPolicies = [
+      { title: 'Employee ID Policy', content: 'Employee IDs are automatically generated based on the joining date in the format EMP-YYYYMMDD-XXX. This ID is unique and used for all internal tracking.', category: 'General' },
+      { title: 'CNIC Verification Policy', content: 'CNIC must be a valid 13-digit number (format: XXXXX-XXXXXXX-X). It is required for payroll and legal compliance. Each CNIC must be unique in the directory.', category: 'General' },
+      { title: 'Client Registration Policy', content: 'All clients must be registered with their full legal name or business name. This ensures accurate invoicing and communication.', category: 'General' },
+      { title: 'Client Communication Policy', content: 'Official communication with clients should primarily happen via the registered email address. Ensure the email is active and monitored.', category: 'General' }
+    ];
+
+    for (const p of defaultPolicies) {
+      const q = query(collection(db, 'policies'), where('title', '==', p.title));
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) {
+        await addDoc(collection(db, 'policies'), {
+          ...p,
+          lastUpdated: serverTimestamp(),
+          updatedBy: 'System Seed'
+        });
+      }
+    }
+    alert('Help policies seeded successfully!');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -138,17 +160,26 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
           <p className="text-slate-500 mt-1">Access company handbook, CRM policies, and internal updates.</p>
         </div>
         {activeTab === 'updates' && canManage && (
-          <button 
-            onClick={() => {
-              setEditingPolicy(null);
-              setFormData({ title: '', content: '', category: 'General' });
-              setIsModalOpen(true);
-            }}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-          >
-            <Plus size={20} />
-            Add Policy
-          </button>
+          <div className="flex gap-2">
+            <button 
+              onClick={handleSeedPolicies}
+              className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20"
+            >
+              <Sparkles size={20} />
+              Seed Help Policies
+            </button>
+            <button 
+              onClick={() => {
+                setEditingPolicy(null);
+                setFormData({ title: '', content: '', category: 'General' });
+                setIsModalOpen(true);
+              }}
+              className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+            >
+              <Plus size={20} />
+              Add Policy
+            </button>
+          </div>
         )}
       </div>
 

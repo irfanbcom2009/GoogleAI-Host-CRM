@@ -27,17 +27,23 @@ import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/fir
 import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { ConfirmModal } from './ConfirmModal';
+import { ClientEditForm } from './ClientEditForm';
+import { InvoiceDetail } from './InvoiceDetail';
 import { ServiceType, JournalStatus, TaskStatus, TaskPriority } from '../types';
 
+import { SmartRecommendations } from './SmartRecommendations';
+import { recommendationService } from '../services/recommendationService';
 import { JournalDetail } from './JournalDetail';
 import { Publishers } from './Publishers';
 import { Domains } from './Domains';
+import { HierarchyWorkflow } from './HierarchyWorkflow';
+import { generateTasksForService } from '../lib/taskUtils';
 import { Subscription } from '../types';
 import { geminiService } from '../services/geminiService';
 import { Sparkles, Monitor } from 'lucide-react';
 
-import { ClientEditForm } from './ClientEditForm';
-import { InvoiceDetail } from './InvoiceDetail';
+import { FloatingActionBar } from './FloatingActionBar';
+import { toast } from 'react-hot-toast';
 
 interface ClientDetailProps {
   client: Client;
@@ -57,11 +63,75 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'journals' | 'publishers' | 'domains' | 'hierarchy' | 'tasks' | 'invoices'>('journals');
-  const [isEditModalOpen, setIsEditModalOpen] = useState(initialEdit);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isUpdatingPortal, setIsUpdatingPortal] = useState(false);
+  const [isEditing, setIsEditing] = useState(initialEdit);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editedClient, setEditedClient] = useState<Client>(client);
+
+  useEffect(() => {
+    setEditedClient(client);
+  }, [client]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditing) return;
+      
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSaveInline();
+      }
+      if (e.key === 'Escape') {
+        handleCancelInline();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editedClient]);
+
+  useEffect(() => {
+    if (isEditing) {
+      const firstInput = document.querySelector('input, select, textarea');
+      if (firstInput) {
+        (firstInput as HTMLElement).focus();
+        firstInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [isEditing]);
+
+  const handleSaveInline = async () => {
+    setIsSaving(true);
+    try {
+      const clientRef = doc(db, 'users', client.id);
+      await updateDoc(clientRef, {
+        salutation: editedClient.salutation || '',
+        name: editedClient.name,
+        careOf: editedClient.careOf || '',
+        email: editedClient.email,
+        phone: editedClient.phone || '',
+        address: editedClient.address || '',
+        status: editedClient.status,
+        updatedAt: serverTimestamp()
+      });
+      setIsEditing(false);
+      toast.success('Profile updated successfully');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+      toast.error('Failed to update profile');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCancelInline = () => {
+    setEditedClient(client);
+    setIsEditing(false);
+  };
 
   const handleTogglePortal = async () => {
+    if (currentUser?.role !== 'Admin') return;
     setIsUpdatingPortal(true);
     try {
       await updateDoc(doc(db, 'users', client.id), {
@@ -104,15 +174,18 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
   const [serviceToActivate, setServiceToActivate] = useState<ServiceType | ''>('');
   const [activationData, setActivationData] = useState({
     invoiceNumber: '',
+    invoiceId: '',
     startDate: '',
     expiryDate: '',
     subscriptionType: 'annual' as 'one-time' | 'annual' | 'monthly'
   });
   const [employees, setEmployees] = useState<UserType[]>([]);
   const [selectedJournalId, setSelectedJournalId] = useState<{ id: string, editMode?: boolean } | null>(null);
-  const [viewingInvoiceId, setViewingInvoiceId] = useState<string | null>(null);
+  const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
   const [viewingJournalId, setViewingJournalId] = useState<string | null>(null);
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null);
+
+  const recommendations = recommendationService.getRecommendations(client, publishers, domains, journals);
 
   const [newJournal, setNewJournal] = useState({
     title: '',
@@ -255,6 +328,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         expiryDate: activationData.expiryDate,
         status: 'active',
         invoiceNumber: activationData.invoiceNumber,
+        invoiceId: activationData.invoiceId,
         subscriptionType: activationData.subscriptionType
       };
 
@@ -264,10 +338,14 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         subscriptions: updatedSubscriptions
       });
 
+      // Automatically generate tasks
+      await generateTasksForService(client.id, client.name, serviceToActivate as ServiceType);
+
       setIsActivateServiceModalOpen(false);
       setServiceToActivate('');
       setActivationData({
         invoiceNumber: '',
+        invoiceId: '',
         startDate: '',
         expiryDate: '',
         subscriptionType: 'annual'
@@ -295,13 +373,12 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
     );
   }
 
-  if (viewingInvoiceId) {
+  if (viewingInvoice) {
     return (
       <InvoiceDetail 
-        invoiceId={viewingInvoiceId} 
-        onBack={() => setViewingInvoiceId(null)} 
-        onViewJournal={(id) => setViewingJournalId(id)}
-        onViewTask={(id) => setViewingTaskId(id)}
+        invoice={viewingInvoice} 
+        onClose={() => setViewingInvoice(null)} 
+        currentUser={currentUser}
       />
     );
   }
@@ -321,15 +398,23 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         </button>
         <div className="flex gap-3">
           <button 
-            onClick={() => setIsEditModalOpen(true)}
-            className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2"
+            onClick={() => setIsEditing(true)}
+            disabled={isEditing}
+            className={cn(
+              "px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm flex items-center gap-2",
+              isEditing && "opacity-50 cursor-not-allowed"
+            )}
           >
             <Edit size={18} />
             Edit Profile
           </button>
           <button 
             onClick={() => setIsDeleteModalOpen(true)}
-            className="px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 flex items-center gap-2"
+            disabled={isEditing}
+            className={cn(
+              "px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 flex items-center gap-2",
+              isEditing && "opacity-50 cursor-not-allowed"
+            )}
           >
             <Trash2 size={18} />
             Delete Client
@@ -338,60 +423,131 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
       </div>
 
       {/* Profile Card */}
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className={cn(
+        "bg-white rounded-3xl border shadow-sm overflow-hidden transition-all",
+        isEditing ? "border-indigo-300 ring-4 ring-indigo-50 shadow-xl" : "border-slate-100"
+      )}>
         <div className="h-32 bg-gradient-to-r from-indigo-600 to-purple-600"></div>
         <div className="px-8 pb-8">
           <div className="relative flex items-end justify-between -mt-12 mb-6">
-            <div className="flex items-end gap-6">
-              <div className="w-32 h-32 rounded-3xl bg-white p-2 shadow-xl">
+            <div className="flex items-end gap-6 w-full">
+              <div className="w-32 h-32 rounded-3xl bg-white p-2 shadow-xl shrink-0">
                 <div className="w-full h-full rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 text-4xl font-black">
                   {client.name.charAt(0)}
                 </div>
               </div>
               <div className="pb-2 min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
-                    {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
-                    {client.name}
-                  </h1>
+                  {isEditing ? (
+                    <div className="flex items-center gap-2 w-full max-w-2xl">
+                      <select
+                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                        value={editedClient.salutation}
+                        onChange={e => setEditedClient(prev => ({ ...prev, salutation: e.target.value }))}
+                      >
+                        <option value="">None</option>
+                        {SALUTATIONS.map(sal => (
+                          <option key={sal} value={sal}>{sal}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-2xl font-black text-slate-900"
+                        value={editedClient.name}
+                        onChange={e => setEditedClient(prev => ({ ...prev, name: e.target.value }))}
+                        placeholder="Full Name"
+                      />
+                    </div>
+                  ) : (
+                    <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
+                      {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
+                      {client.name}
+                    </h1>
+                  )}
                   <div className="flex items-center gap-2">
-                    {client.careOf && (
-                      <span className="text-xs font-bold px-2 py-1 bg-slate-100 text-slate-500 rounded-lg border border-slate-200 uppercase tracking-tight whitespace-nowrap">
-                        C/O {client.careOf}
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        className="px-3 py-1 text-xs font-bold bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-500 uppercase tracking-tight"
+                        value={editedClient.careOf}
+                        onChange={e => setEditedClient(prev => ({ ...prev, careOf: e.target.value }))}
+                        placeholder="C/O / Referred by"
+                      />
+                    ) : (
+                      client.careOf && (
+                        <span className="text-xs font-bold px-2 py-1 bg-slate-100 text-slate-500 rounded-lg border border-slate-200 uppercase tracking-tight whitespace-nowrap">
+                          C/O {client.careOf}
+                        </span>
+                      )
+                    )}
+                    {isEditing ? (
+                      <select
+                        className="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider bg-slate-50 border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        value={editedClient.status}
+                        onChange={e => setEditedClient(prev => ({ ...prev, status: e.target.value as any }))}
+                      >
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                      </select>
+                    ) : (
+                      <span className={cn(
+                        "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider whitespace-nowrap",
+                        client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
+                      )}>
+                        {client.status}
                       </span>
                     )}
-                    <span className={cn(
-                      "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider whitespace-nowrap",
-                      client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
-                    )}>
-                      {client.status}
-                    </span>
                   </div>
                 </div>
-                <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
-                  <Mail size={16} className="flex-shrink-0" /> {client.email}
-                </p>
+                {isEditing ? (
+                  <div className="flex items-center gap-2 mt-2">
+                    <Mail size={16} className="text-slate-400" />
+                    <input
+                      type="email"
+                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm text-slate-600"
+                      value={editedClient.email}
+                      onChange={e => setEditedClient(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="Email Address"
+                    />
+                  </div>
+                ) : (
+                  <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
+                    <Mail size={16} className="flex-shrink-0" /> {client.email}
+                  </p>
+                )}
               </div>
             </div>
 
             <div className="flex items-center gap-3 pb-2">
               <button 
                 onClick={handleGetAiInsights}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl font-bold hover:bg-indigo-100 transition-all shadow-sm"
+                disabled={isEditing}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl font-bold hover:bg-indigo-100 transition-all shadow-sm",
+                  isEditing && "opacity-50 cursor-not-allowed"
+                )}
               >
                 <Sparkles size={18} />
                 AI Insights
               </button>
               <button 
-                onClick={() => setIsEditModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm"
+                onClick={() => setIsEditing(true)}
+                disabled={isEditing}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm",
+                  isEditing && "opacity-50 cursor-not-allowed"
+                )}
               >
                 <Edit size={18} />
                 Edit Profile
               </button>
               <button 
                 onClick={() => setIsDeleteModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-red-50 hover:text-red-600 transition-all shadow-sm"
+                disabled={isEditing}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-red-50 hover:text-red-600 transition-all shadow-sm",
+                  isEditing && "opacity-50 cursor-not-allowed"
+                )}
               >
                 <Trash2 size={18} />
                 Delete Client
@@ -405,20 +561,51 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
               <div className="space-y-3">
                 <div className="flex items-center gap-3 text-slate-600">
                   <div className="p-2 bg-slate-50 rounded-lg"><Phone size={18} /></div>
-                  <span className="font-medium">{client.phone || 'No phone provided'}</span>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium"
+                      value={editedClient.phone}
+                      onChange={e => setEditedClient(prev => ({ ...prev, phone: e.target.value }))}
+                      placeholder="Phone Number"
+                    />
+                  ) : (
+                    <span className="font-medium">{client.phone || 'No phone provided'}</span>
+                  )}
                 </div>
                 <div className="flex items-start gap-3 text-slate-600 min-w-0">
                   <div className="p-2 bg-slate-50 rounded-lg flex-shrink-0"><MapPin size={18} /></div>
-                  <span className="font-medium break-words flex-1">{client.address || 'No address provided'}</span>
+                  {isEditing ? (
+                    <textarea
+                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-medium h-20"
+                      value={editedClient.address}
+                      onChange={e => setEditedClient(prev => ({ ...prev, address: e.target.value }))}
+                      placeholder="Address"
+                    />
+                  ) : (
+                    <span className="font-medium break-words flex-1">{client.address || 'No address provided'}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 text-slate-600">
                   <div className="p-2 bg-slate-50 rounded-lg"><Calendar size={18} /></div>
                   <span className="font-medium">Joined {client.createdAt ? (typeof client.createdAt === 'string' ? new Date(client.createdAt).toLocaleDateString() : new Date(client.createdAt.seconds * 1000).toLocaleDateString()) : 'Recently'}</span>
                 </div>
-                {client.endingDate && (
-                  <div className="flex items-center gap-3 text-rose-600">
-                    <div className="p-2 bg-rose-50 rounded-lg"><XCircle size={18} /></div>
-                    <span className="font-bold">Ended {new Date(client.endingDate).toLocaleDateString()}</span>
+                {(client.endingDate || isEditing) && (
+                  <div className={cn("flex items-center gap-3", isEditing ? "text-indigo-600" : "text-rose-600")}>
+                    <div className={cn("p-2 rounded-lg", isEditing ? "bg-indigo-50" : "bg-rose-50")}><Calendar size={18} /></div>
+                    {isEditing ? (
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold uppercase tracking-widest block mb-1">Ending Date</label>
+                        <input
+                          type="date"
+                          className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm font-bold"
+                          value={editedClient.endingDate}
+                          onChange={e => setEditedClient(prev => ({ ...prev, endingDate: e.target.value }))}
+                        />
+                      </div>
+                    ) : (
+                      <span className="font-bold">Ended {new Date(client.endingDate!).toLocaleDateString()}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -451,9 +638,13 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                             </p>
                           )}
                           <div className="flex items-center gap-2 mt-0.5">
-                            {sub.invoiceNumber && (
+                            {sub.invoiceNumber ? (
                               <p className="text-[8px] bg-white px-1.5 py-0.5 rounded border border-indigo-100 text-indigo-600 font-bold">
                                 {sub.invoiceNumber}
+                              </p>
+                            ) : (
+                              <p className="text-[8px] bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100 text-rose-600 font-bold">
+                                Subscribed بدون Invoice
                               </p>
                             )}
                             {sub.subscriptionType && (
@@ -497,10 +688,11 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                   </div>
                   <button 
                     onClick={handleTogglePortal}
-                    disabled={isUpdatingPortal}
+                    disabled={isUpdatingPortal || currentUser?.role !== 'Admin'}
                     className={cn(
                       "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none",
-                      client.portalEnabled ? "bg-indigo-600" : "bg-slate-200"
+                      client.portalEnabled ? "bg-indigo-600" : "bg-slate-200",
+                      currentUser?.role !== 'Admin' && "opacity-50 cursor-not-allowed"
                     )}
                   >
                     <span className={cn(
@@ -552,6 +744,21 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         </div>
       </div>
 
+      {/* Smart Recommendations */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mb-8"
+      >
+        <SmartRecommendations 
+          recommendations={recommendations}
+          onSelectService={(service) => {
+            setServiceToActivate(service);
+            setIsActivateServiceModalOpen(true);
+          }}
+        />
+      </motion.div>
+
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
         {stats.map((stat, i) => (
@@ -567,10 +774,17 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         ))}
       </div>
 
+      <FloatingActionBar 
+        isVisible={isEditing}
+        onSave={handleSaveInline}
+        onCancel={handleCancelInline}
+        isSaving={isSaving}
+      />
+
       {/* Tabs Section */}
       <div className="space-y-6">
         <div className="flex items-center gap-2 p-1 bg-slate-100 w-fit rounded-2xl border border-slate-200">
-          {(['journals', 'publishers', 'domains', 'hierarchy', 'tasks', 'invoices'] as const).map((tab) => (
+          {(['hierarchy', 'journals', 'publishers', 'domains', 'tasks', 'invoices'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -579,7 +793,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                 activeTab === tab ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-900"
               )}
             >
-              {tab}
+              {tab === 'hierarchy' ? 'Workflow Hierarchy' : tab}
             </button>
           ))}
         </div>
@@ -593,84 +807,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
           ) : (
             <div className="p-6">
               {activeTab === 'hierarchy' && (
-                <div className="space-y-8">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-                      <Building2 size={24} />
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-900">Data Hierarchy</h3>
-                      <p className="text-sm text-slate-500">Publisher &gt; Domain &gt; Journal structure.</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-8">
-                    {publishers.length === 0 ? (
-                      <div className="py-12 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-                        <Building2 className="mx-auto text-slate-300 mb-2" size={32} />
-                        <p className="text-sm text-slate-500">No publishers found for this client.</p>
-                      </div>
-                    ) : (
-                      publishers.map(pub => (
-                        <div key={pub.id} className="space-y-4">
-                          <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                            <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-indigo-600 font-bold">
-                              {pub.name.charAt(0)}
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-slate-900">{pub.name}</p>
-                              <p className="text-[10px] text-slate-500 uppercase tracking-widest">Publisher</p>
-                            </div>
-                          </div>
-
-                          <div className="ml-8 space-y-4 border-l-2 border-slate-100 pl-8">
-                            {domains.filter(d => d.publisherId === pub.id).length === 0 ? (
-                              <p className="text-xs text-slate-400 italic">No domains under this publisher.</p>
-                            ) : (
-                              domains.filter(d => d.publisherId === pub.id).map(dom => (
-                                <div key={dom.id} className="space-y-4">
-                                  <div className="flex items-center gap-3 p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
-                                    <Globe2 size={16} className="text-emerald-600" />
-                                    <div>
-                                      <p className="text-xs font-bold text-slate-800">{dom.domainName}</p>
-                                      <p className="text-[10px] text-slate-500 uppercase tracking-widest">Domain</p>
-                                    </div>
-                                  </div>
-
-                                  <div className="ml-6 space-y-2 border-l-2 border-emerald-100 pl-6">
-                                    {journals.filter(j => j.domainId === dom.id).length === 0 ? (
-                                      <p className="text-[10px] text-slate-400 italic">No journals on this domain.</p>
-                                    ) : (
-                                      journals.filter(j => j.domainId === dom.id).map(jrnl => (
-                                        <div key={jrnl.id} className="flex items-center gap-3 p-2 bg-indigo-50/30 rounded-lg border border-indigo-100/50">
-                                          <BookOpen size={14} className="text-indigo-600" />
-                                          <p className="text-xs font-medium text-slate-700">{jrnl.title}</p>
-                                        </div>
-                                      ))
-                                    )}
-                                  </div>
-                                </div>
-                              ))
-                            )}
-                            
-                            {/* Journals with publisher but NO domain (direct journals) */}
-                            {journals.filter(j => j.publisherId === pub.id && !j.domainId).length > 0 && (
-                              <div className="space-y-2">
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Direct Journals</p>
-                                {journals.filter(j => j.publisherId === pub.id && !j.domainId).map(jrnl => (
-                                  <div key={jrnl.id} className="flex items-center gap-3 p-2 bg-indigo-50/30 rounded-lg border border-indigo-100/50">
-                                    <BookOpen size={14} className="text-indigo-600" />
-                                    <p className="text-xs font-medium text-slate-700">{jrnl.title}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
+                <HierarchyWorkflow client={client} currentUser={currentUser!} />
               )}
 
               {activeTab === 'publishers' && (
@@ -678,7 +815,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
               )}
 
               {activeTab === 'domains' && (
-                <Domains searchQuery="" currentUser={currentUser!} />
+                <Domains searchQuery="" currentUser={currentUser!} clientId={client.id} />
               )}
 
               {activeTab === 'journals' && (
@@ -706,26 +843,54 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                                 <p className="text-xs text-slate-500">{journal.category} • OJS {journal.ojsVersion}</p>
                               </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                              {journal.credentials?.password && (
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigator.clipboard.writeText(journal.credentials?.password || '');
-                                  }}
-                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                  title="Copy Password"
-                                >
-                                  <Copy size={16} />
-                                </button>
-                              )}
-                              <span className={cn(
-                                "px-2 py-1 rounded-lg text-[10px] font-bold uppercase",
-                                journal.status === 'complete' ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
-                              )}>
-                                {journal.status.replace('_', ' ')}
-                              </span>
-                            </div>
+                              <div className="flex items-center gap-3">
+                                {journal.credentials?.password && (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard.writeText(journal.credentials?.password || '');
+                                    }}
+                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                    title="Copy Password"
+                                  >
+                                    <Copy size={16} />
+                                  </button>
+                                )}
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className={cn(
+                                    "px-2 py-1 rounded-lg text-[10px] font-bold uppercase",
+                                    journal.status === 'complete' ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
+                                  )}>
+                                    {journal.status.replace('_', ' ')}
+                                  </span>
+                                  <div className="flex flex-col gap-1 items-end">
+                                    {journal.isOjsSubscribedFromUs ? (
+                                      <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-600 border-emerald-100">
+                                        OJS (Us)
+                                      </span>
+                                    ) : (
+                                      <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-amber-50 text-amber-600 border-amber-100">
+                                        OJS (External)
+                                      </span>
+                                    )}
+                                    {journal.issnOnline || journal.issnPrint ? (
+                                      journal.isIssnSubscribedFromUs ? (
+                                        <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-600 border-emerald-100">
+                                          ISSN (Us)
+                                        </span>
+                                      ) : (
+                                        <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-amber-50 text-amber-600 border-amber-100">
+                                          ISSN (External)
+                                        </span>
+                                      )
+                                    ) : (
+                                      <span className="text-[8px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded border bg-slate-50 text-slate-400 border-slate-100">
+                                        ISSN (Not Added)
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
                           </div>
                         </div>
                       ))}
@@ -790,14 +955,14 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                               <DollarSign size={20} />
                             </div>
                             <div>
-                              <h4 className="font-bold text-slate-900">{invoice.invoiceNumber || `INV-${invoice.id.substring(0, 8).toUpperCase()}`}</h4>
-                              <p className="text-xs text-slate-500">{invoice.date || (invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : 'N/A')}</p>
+                              <h4 className="font-bold text-slate-900">{invoice.invoiceNumber}</h4>
+                              <p className="text-xs text-slate-500">{invoice.issueDate}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-8">
                             <div className="text-right">
                               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Amount</p>
-                              <p className="text-lg font-black text-slate-900">${(invoice.amount || invoice.total || 0).toLocaleString()}</p>
+                              <p className="text-lg font-black text-slate-900">${(invoice.total || 0).toLocaleString()}</p>
                             </div>
                             <span className={cn(
                               "px-3 py-1 rounded-full text-xs font-bold border uppercase",
@@ -806,7 +971,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                               {invoice.status}
                             </span>
                             <button 
-                              onClick={() => setViewingInvoiceId(invoice.id)}
+                              onClick={() => setViewingInvoice(invoice)}
                               className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
                               title="View Details"
                             >
@@ -872,7 +1037,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         title="Edit Client Profile"
         maxWidth="2xl"
       >
-        <ClientEditForm client={client} onClose={() => setIsEditModalOpen(false)} />
+        <ClientEditForm client={client} currentUser={currentUser} onClose={() => setIsEditModalOpen(false)} />
       </Modal>
 
       <ConfirmModal 
@@ -1078,10 +1243,30 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">Invoice Number*</label>
+            <label className="text-sm font-bold text-slate-700">Link Invoice (Optional)</label>
+            <select 
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              value={activationData.invoiceId}
+              onChange={(e) => {
+                const inv = invoices.find(i => i.id === e.target.value);
+                setActivationData({ 
+                  ...activationData, 
+                  invoiceId: e.target.value,
+                  invoiceNumber: inv?.invoiceNumber || ''
+                });
+              }}
+            >
+              <option value="">Select Invoice</option>
+              {invoices.map(inv => (
+                <option key={inv.id} value={inv.id}>{inv.invoiceNumber} - {inv.total} {inv.status}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Manual Invoice Number (If no invoice linked)</label>
             <input 
               type="text"
-              required
               placeholder="e.g. INV-2024-001"
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
               value={activationData.invoiceNumber}

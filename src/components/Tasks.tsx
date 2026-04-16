@@ -16,24 +16,26 @@ import {
   EyeOff,
   Flag,
   ChevronRight,
+  Trash2,
   X,
   Send,
   Download,
   FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Task, Client, User as CRMUser, TaskStatus, TaskPriority, TaskComment } from '../types';
+import { Task, Client, User as CRMUser, TaskStatus, TaskPriority, TaskComment, Domain, Journal } from '../types';
 import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, auth, moveToTrash } from '../lib/firebase';
 import { geminiService } from '../services/geminiService';
 import { Sparkles } from 'lucide-react';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, updateDoc, doc, getDoc, where } from 'firebase/firestore';
 import { Modal } from './Modal';
-import { Importer } from './Importer';
 import { ClientDetail } from './ClientDetail';
 import { EmployeeDetail } from './EmployeeDetail';
 
 import { ColumnSelector } from './ColumnSelector';
+
+import { usePermissions } from '../hooks/usePermissions';
 
 interface TasksProps {
   searchQuery: string;
@@ -43,12 +45,14 @@ interface TasksProps {
 const AVAILABLE_COLUMNS = [
   { id: 'title', label: 'Task & Service' },
   { id: 'client', label: 'Client' },
+  { id: 'department', label: 'Department' },
   { id: 'assignedTo', label: 'Assigned To' },
   { id: 'priority', label: 'Priority' },
   { id: 'status', label: 'Status' },
 ];
 
 export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [users, setUsers] = useState<CRMUser[]>([]);
@@ -56,10 +60,36 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [isImporterOpen, setIsImporterOpen] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [viewingEmployee, setViewingEmployee] = useState<CRMUser | null>(null);
+  const [clientServices, setClientServices] = useState<{ domains: Domain[], journals: Journal[] }>({ domains: [], journals: [] });
+
+  useEffect(() => {
+    if (currentUser.role !== 'Client') return;
+
+    const unsubDomains = onSnapshot(
+      query(collection(db, 'domains'), where('clientId', '==', currentUser.id)),
+      (snapshot) => {
+        const domains = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain));
+        setClientServices(prev => ({ ...prev, domains }));
+      }
+    );
+
+    const unsubJournals = onSnapshot(
+      query(collection(db, 'journals'), where('clientId', '==', currentUser.id)),
+      (snapshot) => {
+        const journals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal));
+        setClientServices(prev => ({ ...prev, journals }));
+      }
+    );
+
+    return () => {
+      unsubDomains();
+      unsubJournals();
+    };
+  }, [currentUser.id, currentUser.role]);
+
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser.columnPreferences?.['tasks'] || ['title', 'client', 'assignedTo', 'priority', 'status']
   );
@@ -82,6 +112,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
     serviceType: 'Hosting' as any,
     title: '',
     description: '',
+    department: 'General' as any,
     assignedTo: '',
     status: 'pending' as TaskStatus,
     priority: 'medium' as TaskPriority,
@@ -176,8 +207,39 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
            assignedUser?.name.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
+  const handleDeleteTask = async (task: Task) => {
+    if (!confirm(`Are you sure you want to move this task to trash?`)) return;
+    try {
+      await moveToTrash('tasks', task.id, task, currentUser.name);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'tasks');
+    }
+  };
+
   const handleAssignTask = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (currentUser.role === 'Client') {
+      const isSubscribed = (type: string) => {
+        if (type === 'Domain') {
+          return clientServices.domains.some(d => d.isSubscribed);
+        }
+        if (['ISSN', 'OJS', 'Editorial', 'Indexing', 'Plagiarism'].includes(type)) {
+          return clientServices.journals.some(j => j.isSubscribed);
+        }
+        if (type === 'Hosting' || type === 'DOI') {
+          // These are usually linked to journals or domains
+          return clientServices.journals.some(j => j.isSubscribed) || clientServices.domains.some(d => d.isSubscribed);
+        }
+        return false;
+      };
+
+      if (!isSubscribed(newTask.serviceType)) {
+        alert(`You are not officially subscribed to ${newTask.serviceType} services. Please subscribe to enable support tickets for this service.`);
+        return;
+      }
+    }
+
     try {
       await addDoc(collection(db, 'tasks'), {
         ...newTask,
@@ -190,6 +252,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
         serviceType: 'Hosting',
         title: '',
         description: '',
+        department: 'General',
         assignedTo: '',
         status: 'pending',
         priority: 'medium',
@@ -283,10 +346,6 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
     setIsDetailsModalOpen(true);
   };
 
-  const handleImportData = () => {
-    setIsImporterOpen(true);
-  };
-
   return (
     <div className="p-8 space-y-6">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -300,20 +359,15 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
             selectedColumns={selectedColumns}
             onChange={handleColumnChange}
           />
-          <button 
-            onClick={handleImportData}
-            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-          >
-            <FileSpreadsheet size={20} className="text-emerald-600" />
-            Import Data
-          </button>
-          <button 
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
-          >
-            <Plus size={20} />
-            Assign Task
-          </button>
+          {check('tasks', 'add') && (
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+            >
+              <Plus size={20} />
+              Assign Task
+            </button>
+          )}
         </div>
       </div>
 
@@ -349,7 +403,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
           {loading ? (
             <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
               <Loader2 className="animate-spin" size={32} />
@@ -357,8 +411,8 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
                   {selectedColumns.includes('title') && <th className="px-6 py-4">Task & Service</th>}
                   {selectedColumns.includes('client') && <th className="px-6 py-4">Client</th>}
                   {selectedColumns.includes('assignedTo') && <th className="px-6 py-4">Assigned To</th>}
@@ -411,6 +465,19 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                           </button>
                         </td>
                       )}
+                      {selectedColumns.includes('department') && (
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2 py-1 rounded-lg text-[10px] font-bold uppercase",
+                            task.department === 'Technical' ? "bg-indigo-50 text-indigo-600" :
+                            task.department === 'Accounts' ? "bg-emerald-50 text-emerald-600" :
+                            task.department === 'Editorial' ? "bg-amber-50 text-amber-600" :
+                            "bg-slate-50 text-slate-600"
+                          )}>
+                            {task.department || 'General'}
+                          </span>
+                        </td>
+                      )}
                       {selectedColumns.includes('assignedTo') && (
                         <td className="px-6 py-4">
                           <button 
@@ -459,6 +526,18 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                           >
                             <ChevronRight size={16} />
                           </button>
+                          {check('tasks', 'delete') && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteTask(task);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                              title="Delete Task"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
@@ -506,6 +585,20 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                 <option value="OJS">OJS Setup</option>
                 <option value="Editorial">Editorial</option>
                 <option value="Domain">Domain</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Department</label>
+              <select 
+                required
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                value={newTask.department}
+                onChange={e => setNewTask(prev => ({ ...prev, department: e.target.value as any }))}
+              >
+                <option value="General">General</option>
+                <option value="Technical">Technical</option>
+                <option value="Accounts">Accounts</option>
+                <option value="Editorial">Editorial</option>
               </select>
             </div>
           </div>
@@ -769,11 +862,6 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
           </div>
         )}
       </AnimatePresence>
-      <Importer 
-        isOpen={isImporterOpen} 
-        onClose={() => setIsImporterOpen(false)} 
-        type="tasks" 
-      />
 
       {viewingClient && (
         <ClientDetail 

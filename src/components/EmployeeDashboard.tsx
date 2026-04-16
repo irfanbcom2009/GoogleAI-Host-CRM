@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StatCard } from './StatCard';
+import { HelpIcon } from './HelpIcon';
 import { 
   Briefcase, 
   CheckCircle2, 
@@ -65,6 +66,9 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
     const unsubActivities = onSnapshot(qActivities, (snapshot) => {
       setActivities(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ActivityLog)));
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'activity_logs');
+      setLoading(false);
     });
 
     return () => {
@@ -97,7 +101,10 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
       {/* Welcome Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Welcome back, {user?.name}</h2>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+            Welcome back, {user?.name}
+            <HelpIcon policyTitle="Employee Portal Policy" />
+          </h2>
           <p className="text-slate-500 mt-1 flex items-center gap-2">
             <Calendar size={14} />
             {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}

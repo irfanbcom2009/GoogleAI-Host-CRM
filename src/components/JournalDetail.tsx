@@ -9,6 +9,7 @@ import {
   ExternalLink, 
   Copy, 
   Check,
+  Settings2,
   BookOpen,
   Edit,
   Trash2,
@@ -20,17 +21,38 @@ import {
   Clock,
   User as UserIcon,
   Activity,
-  DollarSign
+  DollarSign,
+  Database
 } from 'lucide-react';
-import { Journal, User as UserType, JournalIndexing, IndexingAgency, Client, Publisher } from '../types';
+import { 
+  Journal, 
+  User as UserType, 
+  JournalIndexing, 
+  IndexingAgency, 
+  Client, 
+  Publisher,
+  Invoice,
+  ServiceType,
+  Subscription,
+  HECCategory
+} from '../types';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { doc, updateDoc, onSnapshot, serverTimestamp, collection, query, where, addDoc, orderBy, limit } from 'firebase/firestore';
 import { cn } from '../lib/utils';
+import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/geminiService';
+import { ConfigModal } from './ConfigModal';
+import { toast } from 'react-hot-toast';
 import { Sparkles, Loader2 } from 'lucide-react';
 
+import { SmartRecommendations } from './SmartRecommendations';
+import { recommendationService } from '../services/recommendationService';
 import { JournalIndexingManager } from './JournalIndexingManager';
+import { generateTasksForService } from '../lib/taskUtils';
 import { Modal } from './Modal';
+
+import { FloatingActionBar } from './FloatingActionBar';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface JournalDetailProps {
   journalId: string;
@@ -45,6 +67,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   currentUser,
   initialEditMode = false
 }) => {
+  const { check, isAdmin } = usePermissions(currentUser);
   const [journal, setJournal] = useState<Journal | null>(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(initialEditMode);
@@ -55,18 +78,103 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   const [isIndexingModalOpen, setIsIndexingModalOpen] = useState(false);
   const [activities, setActivities] = useState<any[]>([]);
   const [scholarHistory, setScholarHistory] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [employees, setEmployees] = useState<UserType[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [domains, setDomains] = useState<any[]>([]);
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [globalSettings, setGlobalSettings] = useState<any>(null);
+  const [hecCategories, setHecCategories] = useState<HECCategory[]>([]);
   const [newScholarLog, setNewScholarLog] = useState({ status: 'Indexed', tagOptimization: '' });
   const [isScholarModalOpen, setIsScholarModalOpen] = useState(false);
+  const [isActivateServiceModalOpen, setIsActivateServiceModalOpen] = useState(false);
+  const [serviceToActivate, setServiceToActivate] = useState<ServiceType | ''>('');
+  const [activationData, setActivationData] = useState({
+    invoiceNumber: '',
+    invoiceId: '',
+    startDate: new Date().toISOString().split('T')[0],
+    expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    subscriptionType: 'annual' as 'one-time' | 'annual' | 'monthly'
+  });
+
+  const journalClient = clients.find(c => c.id === journal?.clientId);
+  const recommendations = journalClient && journal 
+    ? recommendationService.getRecommendations(journalClient, publishers, domains, [journal], journal.id)
+    : [];
 
   const [aiHealth, setAiHealth] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
+  const [isScopeConfigOpen, setIsScopeConfigOpen] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isEditing) return;
+      
+      if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditData(journal || {});
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, editData, journal]);
+
+  useEffect(() => {
+    if (isEditing) {
+      const firstInput = document.querySelector('input, select, textarea');
+      if (firstInput) {
+        (firstInput as HTMLElement).focus();
+        firstInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [isEditing]);
+
+  const handleActivateService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!journalClient || !serviceToActivate || !journal) return;
+
+    try {
+      const newSubscription: Subscription = {
+        service: serviceToActivate as ServiceType,
+        startDate: activationData.startDate,
+        expiryDate: activationData.expiryDate,
+        status: 'active',
+        invoiceNumber: activationData.invoiceNumber,
+        invoiceId: activationData.invoiceId,
+        subscriptionType: activationData.subscriptionType
+      };
+
+      const updatedSubscriptions = [...(journalClient.subscriptions || []), newSubscription];
+      
+      await updateDoc(doc(db, 'users', journalClient.id), {
+        subscriptions: updatedSubscriptions
+      });
+
+      // Generate tasks for the service
+      await generateTasksForService(journalClient.id, journalClient.name, serviceToActivate as ServiceType, journal.id);
+
+      setIsActivateServiceModalOpen(false);
+      setServiceToActivate('');
+      setActivationData({
+        invoiceNumber: '',
+        invoiceId: '',
+        startDate: new Date().toISOString().split('T')[0],
+        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        subscriptionType: 'annual'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    }
+  };
 
   const handleGetAiHealth = async () => {
     if (!journal) return;
@@ -135,6 +243,13 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       }
     );
 
+    const unsubInvoices = onSnapshot(
+      query(collection(db, 'invoices'), where('journalId', '==', journalId)),
+      (snapshot) => {
+        setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice)));
+      }
+    );
+
     const unsubEmployees = onSnapshot(
       query(collection(db, 'users'), where('role', 'in', ['Admin', 'Manager', 'Employee']), where('status', '==', 'active')),
       (snapshot) => {
@@ -184,9 +299,17 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       }
     );
 
+    const unsubHec = onSnapshot(
+      query(collection(db, 'hec_categories'), where('isActive', '==', true)),
+      (snapshot) => {
+        setHecCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HECCategory)));
+      }
+    );
+
     return () => {
       unsubDomains();
       unsubPublishers();
+      unsubHec();
     };
   }, [journal?.clientId]);
 
@@ -262,6 +385,26 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     }
   };
 
+  const handleSuggestKeywords = async () => {
+    if (!journal?.title) return;
+    setIsSuggestingKeywords(true);
+    try {
+      const prompt = `Suggest 5-8 relevant academic keywords/scopes for a journal titled "${journal.title}". Return ONLY a comma-separated list of keywords.`;
+      const result = await geminiService.generateText(prompt);
+      const suggested = result.split(',').map(s => s.trim()).filter(Boolean);
+      
+      const currentScope = Array.isArray(editData.scope) ? editData.scope : [];
+      const newScope = [...new Set([...currentScope, ...suggested])];
+      setEditData({ ...editData, scope: newScope });
+      toast.success('Keywords suggested by AI');
+    } catch (error) {
+      console.error('Error suggesting keywords:', error);
+      toast.error('Failed to suggest keywords');
+    } finally {
+      setIsSuggestingKeywords(false);
+    }
+  };
+
   const handleCopy = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
     setCopiedField(field);
@@ -270,18 +413,23 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
 
   const handleSave = async () => {
     if (!journal) return;
+    setIsSaving(true);
     try {
       await updateDoc(doc(db, 'journals', journalId), {
         ...editData,
         updatedAt: serverTimestamp()
       });
       setIsSaved(true);
+      toast.success('Journal updated successfully');
       setTimeout(() => {
         setIsSaved(false);
         setIsEditing(false);
-      }, 2000);
+      }, 500);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'journals');
+      toast.error('Failed to update journal');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -326,49 +474,51 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
             </button>
           )}
           {isEditing ? (
-            <>
-              <button 
-                onClick={() => setIsEditing(false)}
-                className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleSave}
-                disabled={isSaved}
-                className={cn(
-                  "px-5 py-2.5 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2",
-                  isSaved 
-                    ? "bg-emerald-600 text-white shadow-emerald-200" 
-                    : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200"
-                )}
-              >
-                {isSaved ? (
-                  <>
-                    <Check size={18} />
-                    Saved!
-                  </>
-                ) : (
-                  <>
-                    <Save size={18} />
-                    Save Changes
-                  </>
-                )}
-              </button>
-            </>
-          ) : (
             <button 
-              onClick={() => setIsEditing(true)}
-              className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center gap-2"
+              onClick={() => {
+                setIsEditing(false);
+                setEditData(journal || {});
+              }}
+              className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all"
             >
-              <Edit size={18} />
-              Edit Journal
+              Cancel
             </button>
+          ) : (
+            check('journals', 'edit') && (
+              <button 
+                onClick={() => setIsEditing(true)}
+                className="px-5 py-2.5 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center gap-2"
+              >
+                <Edit size={18} />
+                Edit Journal
+              </button>
+            )
           )}
         </div>
       </div>
 
       {/* Main Content */}
+      <div className={cn(
+        "transition-all",
+        isEditing && "ring-4 ring-indigo-50 rounded-[2rem] p-2 -m-2 bg-indigo-50/10"
+      )}>
+      {/* Smart Recommendations */}
+      {recommendations.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <SmartRecommendations 
+            recommendations={recommendations}
+            onSelectService={(service) => {
+              setServiceToActivate(service);
+              setIsActivateServiceModalOpen(true);
+            }}
+          />
+        </motion.div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left Column: Basic Info */}
         <div className="lg:col-span-2 space-y-8">
@@ -389,19 +539,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                         placeholder="Journal Title"
                       />
                       
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Database Type</span>
-                          <select 
-                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
-                            value={editData.databaseType || 'HEC'}
-                            onChange={(e) => setEditData({ ...editData, databaseType: e.target.value as any })}
-                          >
-                            <option value="HEC">HEC Journals</option>
-                            <option value="ISSN">ISSN Journals</option>
-                            <option value="DOAJ">DOAJ Journals</option>
-                          </select>
-                        </div>
+                      <div className="grid grid-cols-1 gap-4">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase">License</span>
                           <select 
@@ -422,51 +560,69 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                         </div>
                       </div>
 
-                      {editData.databaseType === 'HEC' ? (
-                        <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-4">
+                        <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs">
+                          <Database size={14} />
+                          HEC Category Management
+                        </div>
+                        
+                        <div className="grid grid-cols-1 gap-4">
                           <div className="space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Main Category</span>
-                            <input 
-                              type="text"
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">HEC Main Category</span>
+                            <select 
                               className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
-                              value={editData.hecMainCategory || ''}
-                              onChange={(e) => setEditData({ ...editData, hecMainCategory: e.target.value })}
-                              placeholder="Main"
-                            />
+                              value={editData.hecMainCategoryId || ''}
+                              onChange={(e) => setEditData({ ...editData, hecMainCategoryId: e.target.value, hecSubCategoryId: '', hecSubjectCategoryId: '' })}
+                            >
+                              <option value="">Select Main Category...</option>
+                              {hecCategories.filter(c => c.type === 'main').map(cat => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              ))}
+                            </select>
                           </div>
+
                           <div className="space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Sub Category</span>
-                            <input 
-                              type="text"
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">HEC Sub Category</span>
+                            <select 
                               className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
-                              value={editData.hecSubCategory || ''}
-                              onChange={(e) => setEditData({ ...editData, hecSubCategory: e.target.value })}
-                              placeholder="Sub"
-                            />
+                              value={editData.hecSubCategoryId || ''}
+                              onChange={(e) => setEditData({ ...editData, hecSubCategoryId: e.target.value, hecSubjectCategoryId: '' })}
+                              disabled={!editData.hecMainCategoryId}
+                            >
+                              <option value="">Select Sub Category...</option>
+                              {hecCategories.filter(c => c.type === 'sub' && c.parentId === editData.hecMainCategoryId).map(cat => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              ))}
+                            </select>
                           </div>
+
                           <div className="space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Third Category</span>
-                            <input 
-                              type="text"
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">HEC Subject Category</span>
+                            <select 
                               className="w-full text-sm font-medium bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
-                              value={editData.hecThirdCategory || ''}
-                              onChange={(e) => setEditData({ ...editData, hecThirdCategory: e.target.value })}
-                              placeholder="Third"
-                            />
+                              value={editData.hecSubjectCategoryId || ''}
+                              onChange={(e) => setEditData({ ...editData, hecSubjectCategoryId: e.target.value })}
+                              disabled={!editData.hecSubCategoryId}
+                            >
+                              <option value="">Select Subject Category...</option>
+                              {hecCategories.filter(c => c.type === 'subject' && c.parentId === editData.hecSubCategoryId).map(cat => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              ))}
+                            </select>
                           </div>
                         </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase">Subject Category</span>
-                          <input 
-                            type="text"
-                            className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
-                            value={editData.subjectCategory || ''}
-                            onChange={(e) => setEditData({ ...editData, subjectCategory: e.target.value })}
-                            placeholder="Subject Category"
-                          />
-                        </div>
-                      )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Subject Category</span>
+                        <input 
+                          type="text"
+                          className="w-full text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500"
+                          value={editData.subjectCategory || ''}
+                          onChange={(e) => setEditData({ ...editData, subjectCategory: e.target.value })}
+                          placeholder="Subject Category"
+                        />
+                      </div>
 
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
@@ -525,25 +681,35 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                     <div>
                       <h1 className="text-2xl font-black text-slate-900">{journal.title}</h1>
                       <div className="flex flex-wrap gap-2 mt-1">
-                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold uppercase">
-                          {journal.databaseType || 'HEC'}
-                        </span>
                         <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold uppercase">
                           {journal.license || 'CC BY'}
                         </span>
                       </div>
                       <div className="mt-2 text-sm">
-                        {journal.databaseType === 'HEC' ? (
-                          <p className="text-slate-500 font-medium">
-                            {journal.hecMainCategory || 'No Main Category'} 
-                            {journal.hecSubCategory && ` • ${journal.hecSubCategory}`}
-                            {journal.hecThirdCategory && ` • ${journal.hecThirdCategory}`}
-                          </p>
-                        ) : (
+                        <div className="flex flex-col gap-1">
                           <p className="text-slate-500 font-medium">
                             Subject: {journal.subjectCategory || 'Not set'}
                           </p>
-                        )}
+                          {(journal.hecMainCategoryId || journal.hecSubCategoryId || journal.hecSubjectCategoryId) && (
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              {journal.hecMainCategoryId && (
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold uppercase">
+                                  {hecCategories.find(c => c.id === journal.hecMainCategoryId)?.name || 'Main'}
+                                </span>
+                              )}
+                              {journal.hecSubCategoryId && (
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[10px] font-bold uppercase">
+                                  {hecCategories.find(c => c.id === journal.hecSubCategoryId)?.name || 'Sub'}
+                                </span>
+                              )}
+                              {journal.hecSubjectCategoryId && (
+                                <span className="px-2 py-0.5 bg-amber-50 text-amber-600 rounded text-[10px] font-bold uppercase">
+                                  {hecCategories.find(c => c.id === journal.hecSubjectCategoryId)?.name || 'Subject'}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         <p className="text-slate-400 text-xs mt-1">
                           {journal.publisherCountry && `Country: ${journal.publisherCountry}`}
                           {journal.languages && ` • Languages: ${journal.languages}`}
@@ -702,17 +868,101 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                       <span className="text-sm font-bold text-slate-700">{journal.invoiceNumber || 'N/A'}</span>
                     )}
                   </div>
-                  {isEditing && (
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase">Scope</span>
-                      <textarea 
-                        className="text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 h-20 resize-none"
-                        value={editData.scope || ''}
-                        onChange={(e) => setEditData({ ...editData, scope: e.target.value })}
-                        placeholder="Journal Scope"
-                      />
+                  <div className="flex flex-col">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Scope (Keywords)</span>
+                      {isEditing && (
+                        <div className="flex items-center gap-2">
+                          {currentUser?.role === 'Admin' && (
+                            <button
+                              type="button"
+                              onClick={() => setIsScopeConfigOpen(true)}
+                              className="text-slate-400 hover:text-indigo-600 transition-all"
+                              title="Configure Global Scopes"
+                            >
+                              <Settings2 size={10} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleSuggestKeywords}
+                            disabled={isSuggestingKeywords}
+                            className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            {isSuggestingKeywords ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                            AI Suggest
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
+                    {isEditing ? (
+                      <div className="space-y-2 mt-1">
+                        <div className="flex flex-wrap gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg min-h-[40px]">
+                          {(Array.isArray(editData.scope) ? editData.scope : []).map((keyword, index) => (
+                            <span 
+                              key={index}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[10px] font-bold"
+                            >
+                              {keyword}
+                              <button 
+                                type="button"
+                                onClick={() => setEditData({ ...editData, scope: (editData.scope as string[]).filter((_, i) => i !== index) })}
+                                className="hover:text-indigo-900"
+                              >
+                                <X size={10} />
+                              </button>
+                            </span>
+                          ))}
+                          <input 
+                            type="text"
+                            className="flex-1 bg-transparent outline-none text-xs min-w-[80px]"
+                            placeholder="Add keyword..."
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const val = e.currentTarget.value.trim();
+                                const currentScope = Array.isArray(editData.scope) ? editData.scope : [];
+                                if (val && !currentScope.includes(val)) {
+                                  setEditData({ ...editData, scope: [...currentScope, val] });
+                                  e.currentTarget.value = '';
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                        {globalSettings?.journalScopes?.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase mr-1">Quick Add:</span>
+                            {globalSettings.journalScopes.filter((s: string) => !(editData.scope || []).includes(s)).slice(0, 10).map((s: string) => (
+                              <button
+                                key={s}
+                                type="button"
+                                onClick={() => setEditData({ ...editData, scope: [...(editData.scope || []), s] })}
+                                className="text-[9px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded hover:bg-slate-200 transition-all"
+                              >
+                                + {s}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {Array.isArray(journal.scope) && journal.scope.length > 0 ? (
+                          journal.scope.map((keyword, index) => (
+                            <span 
+                              key={index}
+                              className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold"
+                            >
+                              {keyword}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm font-bold text-slate-700">No keywords defined</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -725,12 +975,14 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 <Globe className="text-emerald-600" size={20} />
                 <h3 className="text-lg font-bold text-slate-900">Indexing Status</h3>
               </div>
-              <button 
-                onClick={() => setIsIndexingModalOpen(true)}
-                className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg transition-all"
-              >
-                Manage Indexing
-              </button>
+              {check('indexingAgencies', 'edit') && (
+                <button 
+                  onClick={() => setIsIndexingModalOpen(true)}
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg transition-all"
+                >
+                  Manage Indexing
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -962,12 +1214,14 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 <GraduationCap size={18} className="text-indigo-600" />
                 Scholar History
               </h3>
-              <button 
-                onClick={() => setIsScholarModalOpen(true)}
-                className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-all"
-              >
-                <Plus size={14} />
-              </button>
+              {check('indexingAgencies', 'edit') && (
+                <button 
+                  onClick={() => setIsScholarModalOpen(true)}
+                  className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-all"
+                >
+                  <Plus size={14} />
+                </button>
+              )}
             </div>
             <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 scrollbar-hide">
               {scholarHistory.length === 0 ? (
@@ -1235,6 +1489,151 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           </div>
         </form>
       </Modal>
+
+      {/* Activate Service Modal */}
+      <Modal 
+        isOpen={isActivateServiceModalOpen} 
+        onClose={() => setIsActivateServiceModalOpen(false)} 
+        title="Activate Service"
+      >
+        <form onSubmit={handleActivateService} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Service to Activate</label>
+            <select 
+              required
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              value={serviceToActivate}
+              onChange={(e) => setServiceToActivate(e.target.value as ServiceType)}
+            >
+              <option value="">Select Service...</option>
+              <option value="Hosting">Hosting</option>
+              <option value="DOI">DOI</option>
+              <option value="ISSN">ISSN</option>
+              <option value="OJS">OJS Setup</option>
+              <option value="Editorial">Editorial</option>
+              <option value="Indexing">Indexing</option>
+              <option value="Plagiarism">Plagiarism Check</option>
+              <option value="Marketing">Marketing & Boost</option>
+              <option value="Call for Papers">Call for Papers</option>
+              <option value="Editorial Setup">Editorial Team Setup</option>
+              <option value="Reviewer Recruitment">Reviewer Recruitment</option>
+              <option value="HEC Indexing">HEC Indexing</option>
+              <option value="DOAJ Indexing">DOAJ Indexing</option>
+              <option value="Scopus Indexing">Scopus Indexing</option>
+              <option value="Journal Evaluation">Journal Evaluation</option>
+              <option value="Impact Factor">Impact Factor Evaluation</option>
+              <option value="Site Score">Site Score Analysis</option>
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Link Invoice (Optional)</label>
+            <select 
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              value={activationData.invoiceId}
+              onChange={(e) => {
+                const inv = invoices.find(i => i.id === e.target.value);
+                setActivationData({ 
+                  ...activationData, 
+                  invoiceId: e.target.value,
+                  invoiceNumber: inv?.invoiceNumber || ''
+                });
+              }}
+            >
+              <option value="">Select Invoice</option>
+              {invoices.map(inv => (
+                <option key={inv.id} value={inv.id}>{inv.invoiceNumber} - {inv.total} {inv.status}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Manual Invoice Number (If no invoice linked)</label>
+            <input 
+              type="text"
+              placeholder="e.g. INV-2024-001"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              value={activationData.invoiceNumber}
+              onChange={(e) => setActivationData({ ...activationData, invoiceNumber: e.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Start Date</label>
+              <input 
+                type="date"
+                required
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                value={activationData.startDate}
+                onChange={(e) => setActivationData({ ...activationData, startDate: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Expiry Date</label>
+              <input 
+                type="date"
+                required
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                value={activationData.expiryDate}
+                onChange={(e) => setActivationData({ ...activationData, expiryDate: e.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Subscription Type</label>
+            <select 
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+              value={activationData.subscriptionType}
+              onChange={(e) => setActivationData({ ...activationData, subscriptionType: e.target.value as any })}
+            >
+              <option value="one-time">One-time</option>
+              <option value="monthly">Monthly</option>
+              <option value="annual">Annual</option>
+            </select>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <button 
+              type="button"
+              onClick={() => setIsActivateServiceModalOpen(false)}
+              className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            >
+              Activate
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      </div>
+
+      <FloatingActionBar 
+        isVisible={isEditing}
+        onSave={handleSave}
+        onCancel={() => {
+          setIsEditing(false);
+          setEditData(journal || {});
+        }}
+        isSaving={isSaving}
+      />
+
+      {isScopeConfigOpen && (
+        <ConfigModal
+          isOpen={isScopeConfigOpen}
+          onClose={() => setIsScopeConfigOpen(false)}
+          title="Configure Global Scopes"
+          fieldName="journalScopes"
+          type="string-list"
+          initialItems={globalSettings?.journalScopes || []}
+        />
+      )}
     </div>
   );
 };

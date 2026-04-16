@@ -22,6 +22,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, where, updateDoc, doc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
 import { cn, sanitizeUrl } from '../lib/utils';
 import { Modal } from './Modal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface JournalIndexingManagerProps {
   journal: Journal;
@@ -30,6 +31,7 @@ interface JournalIndexingManagerProps {
 }
 
 export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ journal, onClose, currentUser }) => {
+  const { check } = usePermissions(currentUser);
   const [agencies, setAgencies] = useState<IndexingAgency[]>([]);
   const [journalIndexing, setJournalIndexing] = useState<JournalIndexing[]>([]);
   const [loading, setLoading] = useState(true);
@@ -263,13 +265,15 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
                         </a>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => handleRemoveLinkCommand(indexing.id)}
-                      className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                      title="Remove Link"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    {check('indexingAgencies', 'delete') && (
+                      <button 
+                        onClick={() => handleRemoveLinkCommand(indexing.id)}
+                        className="p-2 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                        title="Remove Link"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -312,22 +316,26 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => {
-                            setSelectedIndexing(indexing);
-                            setSelectedAgency(agency!);
-                            setIsApproveModalOpen(true);
-                          }}
-                          className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
-                        >
-                          Approve
-                        </button>
-                        <button 
-                          onClick={() => deleteRecord(indexing.id)}
-                          className="p-2 text-slate-300 hover:text-rose-600 rounded-lg transition-all"
-                        >
-                          <X size={16} />
-                        </button>
+                        {check('indexingAgencies', 'approve') && (
+                          <button 
+                            onClick={() => {
+                              setSelectedIndexing(indexing);
+                              setSelectedAgency(agency!);
+                              setIsApproveModalOpen(true);
+                            }}
+                            className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
+                          >
+                            Approve
+                          </button>
+                        )}
+                        {check('indexingAgencies', 'delete') && (
+                          <button 
+                            onClick={() => deleteRecord(indexing.id)}
+                            className="p-2 text-slate-300 hover:text-rose-600 rounded-lg transition-all"
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))
@@ -351,24 +359,28 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
                       <h4 className="font-bold text-slate-900 text-sm">{agency.name}</h4>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                      <button 
-                        onClick={() => {
-                          setSelectedAgency(agency);
-                          setIsApplyModalOpen(true);
-                        }}
-                        className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-all"
-                      >
-                        Apply
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setSelectedAgency(agency);
-                          setIsLinkModalOpen(true);
-                        }}
-                        className="px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all"
-                      >
-                        Add Link
-                      </button>
+                      {check('indexingAgencies', 'edit') && (
+                        <>
+                          <button 
+                            onClick={() => {
+                              setSelectedAgency(agency);
+                              setIsApplyModalOpen(true);
+                            }}
+                            className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold hover:bg-indigo-100 transition-all"
+                          >
+                            Apply
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setSelectedAgency(agency);
+                              setIsLinkModalOpen(true);
+                            }}
+                            className="px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-bold hover:bg-emerald-100 transition-all"
+                          >
+                            Add Link
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
