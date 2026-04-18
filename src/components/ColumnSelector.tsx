@@ -18,7 +18,7 @@ export const ColumnSelector: React.FC<ColumnSelectorProps> = ({
   availableColumns,
   selectedColumns,
   onChange,
-  maxSelection = 20
+  maxSelection = 50
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);

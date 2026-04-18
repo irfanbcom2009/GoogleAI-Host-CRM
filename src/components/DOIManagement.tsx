@@ -60,7 +60,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [bulkUrls, setBulkUrls] = useState('');
-  const [selectedColumns, setSelectedColumns] = useState<string[]>(['journal', 'prefix', 'member', 'domain', 'status', 'dates']);
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(AVAILABLE_COLUMNS.map(c => c.id));
   
   const [newDOI, setNewDOI] = useState({
     clientId: '',

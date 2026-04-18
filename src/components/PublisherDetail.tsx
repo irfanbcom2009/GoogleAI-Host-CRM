@@ -33,9 +33,10 @@ import { toast } from 'react-hot-toast';
 interface PublisherDetailProps {
   publisherId: string;
   onBack: () => void;
+  onNavigate?: (tab: string, id: string) => void;
 }
 
-export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, onBack }) => {
+export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, onBack, onNavigate }) => {
   const [publisher, setPublisher] = useState<Publisher | null>(null);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -507,7 +508,11 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   </div>
                 ) : (
                   domains.map((domain) => (
-                    <div key={domain.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between group hover:bg-white hover:shadow-md transition-all">
+                    <div 
+                      key={domain.id} 
+                      onClick={() => onNavigate?.('domains', domain.id)}
+                      className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between group hover:bg-white hover:shadow-md transition-all cursor-pointer"
+                    >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-emerald-600 font-bold">
                           {domain.domainName.charAt(0)}
@@ -546,7 +551,11 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   </div>
                 ) : (
                   journals.map((journal) => (
-                    <div key={journal.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between group hover:bg-white hover:shadow-md transition-all">
+                    <div 
+                      key={journal.id} 
+                      onClick={() => onNavigate?.('journals', journal.id)}
+                      className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between group hover:bg-white hover:shadow-md transition-all cursor-pointer"
+                    >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-indigo-600 font-bold">
                           {journal.title.charAt(0)}

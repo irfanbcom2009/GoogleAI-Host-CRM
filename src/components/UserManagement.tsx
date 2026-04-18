@@ -19,6 +19,7 @@ import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
+import { SearchableSelect } from './ui/SearchableSelect';
 import { ColumnSelector } from './ColumnSelector';
 
 import { usePermissions } from '../hooks/usePermissions';
@@ -41,7 +42,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['users'] || ['info', 'role', 'points', 'status']
+    currentUser.columnPreferences?.['users'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
 
   // Form state
@@ -181,9 +182,10 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
                             <img 
-                              src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`} 
-                              className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200" 
+                              src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`} 
+                              className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 object-cover" 
                               alt="" 
+                              referrerPolicy="no-referrer"
                             />
                             <div>
                               <p className="font-bold text-sm text-slate-900">{user.name}</p>
@@ -279,18 +281,18 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Role</label>
-              <select 
+              <SearchableSelect
+                label="Role"
                 required
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newUser.role}
-                onChange={e => setNewUser(prev => ({ ...prev, role: e.target.value as any }))}
-              >
-                <option value="Employee">Employee</option>
-                <option value="Manager">Manager</option>
-                <option value="Admin">Admin</option>
-                <option value="Client">Client</option>
-              </select>
+                options={[
+                  { label: "Employee", value: "Employee" },
+                  { label: "Manager", value: "Manager" },
+                  { label: "Admin", value: "Admin" },
+                  { label: "Client", value: "Client" }
+                ]}
+                value={newUser.role || ''}
+                onChange={value => setNewUser(prev => ({ ...prev, role: value as any }))}
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">Initial Points</label>

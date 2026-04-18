@@ -20,7 +20,12 @@ import {
   X,
   Send,
   Download,
-  FileSpreadsheet
+  FileSpreadsheet,
+  LayoutList,
+  LayoutGrid,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Task, Client, User as CRMUser, TaskStatus, TaskPriority, TaskComment, Domain, Journal } from '../types';
@@ -34,8 +39,8 @@ import { ClientDetail } from './ClientDetail';
 import { EmployeeDetail } from './EmployeeDetail';
 
 import { ColumnSelector } from './ColumnSelector';
-
 import { usePermissions } from '../hooks/usePermissions';
+import { KanbanBoard } from './KanbanBoard';
 
 interface TasksProps {
   searchQuery: string;
@@ -44,19 +49,28 @@ interface TasksProps {
 
 const AVAILABLE_COLUMNS = [
   { id: 'title', label: 'Task & Service' },
+  { id: 'serviceType', label: 'Service Type' },
   { id: 'client', label: 'Client' },
   { id: 'department', label: 'Department' },
   { id: 'assignedTo', label: 'Assigned To' },
   { id: 'priority', label: 'Priority' },
   { id: 'status', label: 'Status' },
+  { id: 'points', label: 'Points' },
+  { id: 'dueDate', label: 'Due Date' },
+  { id: 'isClientVisible', label: 'Client Visible' },
+  { id: 'createdAt', label: 'Created At' },
+  { id: 'completedAt', label: 'Completed At' },
 ];
 
 export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
   const { check } = usePermissions(currentUser);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [journals, setJournals] = useState<Journal[]>([]);
+  const [domains, setDomains] = useState<Domain[]>([]);
   const [users, setUsers] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
@@ -91,8 +105,9 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
   }, [currentUser.id, currentUser.role]);
 
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['tasks'] || ['title', 'client', 'assignedTo', 'priority', 'status']
+    currentUser.columnPreferences?.['tasks'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'createdAt', direction: 'desc' });
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -109,6 +124,8 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
   // Form state
   const [newTask, setNewTask] = useState({
     clientId: '',
+    journalId: '',
+    domainId: '',
     serviceType: 'Hosting' as any,
     title: '',
     description: '',
@@ -180,10 +197,20 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
+    const unsubscribeJournals = onSnapshot(collection(db, 'journals'), (snapshot) => {
+      setJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Journal)));
+    });
+
+    const unsubscribeDomains = onSnapshot(collection(db, 'domains'), (snapshot) => {
+      setDomains(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Domain)));
+    });
+
     return () => {
       unsubscribeTasks();
       unsubscribeClients();
       unsubscribeUsers();
+      unsubscribeJournals();
+      unsubscribeDomains();
     };
   }, []);
 
@@ -206,6 +233,52 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
            client?.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
            assignedUser?.name.toLowerCase().includes(searchQuery.toLowerCase());
   });
+
+  const sortedTasks = [...filteredTasks].sort((a, b) => {
+    if (!sortConfig.key || !sortConfig.direction) return 0;
+    
+    let aValue: any = a[sortConfig.key as keyof Task];
+    let bValue: any = b[sortConfig.key as keyof Task];
+
+    if (sortConfig.key === 'client') {
+      const clientA = clients.find(c => c.id === a.clientId);
+      const clientB = clients.find(c => c.id === b.clientId);
+      aValue = clientA?.name || '';
+      bValue = clientB?.name || '';
+    }
+
+    if (sortConfig.key === 'assignedTo') {
+      const userA = users.find(u => u.id === a.assignedTo);
+      const userB = users.find(u => u.id === b.assignedTo);
+      aValue = userA?.name || '';
+      bValue = userB?.name || '';
+    }
+
+    if (aValue === bValue) return 0;
+    if (aValue === undefined || aValue === null) return 1;
+    if (bValue === undefined || bValue === null) return -1;
+
+    const modifier = sortConfig.direction === 'asc' ? 1 : -1;
+    if (typeof aValue === 'string') {
+      return aValue.localeCompare(bValue) * modifier;
+    }
+    return (aValue > bValue ? 1 : -1) * modifier;
+  });
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: string }) => {
+    if (sortConfig.key !== columnKey || !sortConfig.direction) return <ArrowUpDown size={12} className="opacity-0 group-hover:opacity-100 transition-opacity ml-1" />;
+    return sortConfig.direction === 'asc' ? <ChevronUp size={12} className="ml-1 text-indigo-600" /> : <ChevronDown size={12} className="ml-1 text-indigo-600" />;
+  };
 
   const handleDeleteTask = async (task: Task) => {
     if (!confirm(`Are you sure you want to move this task to trash?`)) return;
@@ -249,6 +322,8 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
       setIsModalOpen(false);
       setNewTask({
         clientId: '',
+        journalId: '',
+        domainId: '',
         serviceType: 'Hosting',
         title: '',
         description: '',
@@ -294,6 +369,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
         taskId: selectedTask.id,
         userId: auth.currentUser.uid,
         userName: currentUser?.name || 'Unknown User',
+        userPhotoURL: currentUser?.photoURL || undefined,
         text: newComment,
         createdAt: new Date().toISOString()
       };
@@ -319,6 +395,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
     switch (status) {
       case 'completed': return 'bg-emerald-50 text-emerald-700 border-emerald-100';
       case 'review': return 'bg-purple-50 text-purple-700 border-purple-100';
+      case 'rework': return 'bg-rose-50 text-rose-700 border-rose-100';
       case 'in_progress': return 'bg-blue-50 text-blue-700 border-blue-100';
       case 'pending': return 'bg-amber-50 text-amber-700 border-amber-100';
       case 'overdue': return 'bg-rose-50 text-rose-700 border-rose-100';
@@ -338,6 +415,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
     pending: tasks.filter(t => t.status === 'pending').length,
     inProgress: tasks.filter(t => t.status === 'in_progress').length,
     review: tasks.filter(t => t.status === 'review').length,
+    rework: tasks.filter(t => t.status === 'rework').length,
     completed: tasks.filter(t => t.status === 'completed').length,
   };
 
@@ -354,6 +432,28 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
           <p className="text-slate-500 mt-1">Manage employee tasks and client service delivery.</p>
         </div>
         <div className="flex gap-3">
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl mr-2">
+            <button
+              onClick={() => setViewMode('table')}
+              className={cn(
+                "p-1.5 rounded-lg transition-all",
+                viewMode === 'table' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+              title="Table View"
+            >
+              <LayoutList size={18} />
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={cn(
+                "p-1.5 rounded-lg transition-all",
+                viewMode === 'kanban' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+              )}
+              title="Kanban Board"
+            >
+              <LayoutGrid size={18} />
+            </button>
+          </div>
           <ColumnSelector 
             availableColumns={AVAILABLE_COLUMNS}
             selectedColumns={selectedColumns}
@@ -371,7 +471,7 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <p className="text-sm text-slate-500 font-medium">Pending</p>
           <div className="flex items-end justify-between mt-2">
@@ -394,6 +494,13 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+          <p className="text-sm text-slate-500 font-medium">Rework</p>
+          <div className="flex items-end justify-between mt-2">
+            <h4 className="text-2xl font-bold text-rose-600">{stats.rework}</h4>
+            <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded-md uppercase">Fixing</span>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
           <p className="text-sm text-slate-500 font-medium">Completed</p>
           <div className="flex items-end justify-between mt-2">
             <h4 className="text-2xl font-bold text-slate-900">{stats.completed}</h4>
@@ -402,152 +509,319 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
-          {loading ? (
-            <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
-              <Loader2 className="animate-spin" size={32} />
-              <p className="text-sm font-medium">Loading tasks...</p>
-            </div>
-          ) : (
-            <table className="w-full text-left border-collapse">
-              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
-                  {selectedColumns.includes('title') && <th className="px-6 py-4">Task & Service</th>}
-                  {selectedColumns.includes('client') && <th className="px-6 py-4">Client</th>}
-                  {selectedColumns.includes('assignedTo') && <th className="px-6 py-4">Assigned To</th>}
-                  {selectedColumns.includes('priority') && <th className="px-6 py-4">Priority</th>}
-                  {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                <AnimatePresence mode="popLayout">
-                  {filteredTasks.map((task) => (
-                    <motion.tr 
-                      layout
-                      key={task.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="hover:bg-slate-50/50 transition-all group cursor-pointer"
-                      onClick={() => openTaskDetails(task)}
-                    >
-                      {selectedColumns.includes('title') && (
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
-                              <Briefcase size={20} />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <p className="font-bold text-sm text-slate-900">{task.title}</p>
-                                {task.isClientVisible ? <span title="Visible to Client"><Eye size={12} className="text-slate-400" /></span> : <span title="Hidden from Client"><EyeOff size={12} className="text-slate-300" /></span>}
+      {viewMode === 'table' ? (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
+            {loading ? (
+              <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
+                <Loader2 className="animate-spin" size={32} />
+                <p className="text-sm font-medium">Loading tasks...</p>
+              </div>
+            ) : (
+              <table className="w-full text-left border-collapse font-sans">
+                <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm border-b border-slate-100">
+                  <tr className="text-slate-500 text-[10px] uppercase tracking-widest font-black">
+                    {selectedColumns.includes('title') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('title')}
+                      >
+                        <div className="flex items-center">
+                          Task & Service
+                          <SortIcon columnKey="title" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('serviceType') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('serviceType')}
+                      >
+                        <div className="flex items-center">
+                          Service
+                          <SortIcon columnKey="serviceType" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('client') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('client')}
+                      >
+                        <div className="flex items-center">
+                          Client
+                          <SortIcon columnKey="client" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('department') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('department')}
+                      >
+                        <div className="flex items-center">
+                          Department
+                          <SortIcon columnKey="department" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('assignedTo') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('assignedTo')}
+                      >
+                        <div className="flex items-center">
+                          Assigned To
+                          <SortIcon columnKey="assignedTo" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('priority') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('priority')}
+                      >
+                        <div className="flex items-center">
+                          Priority
+                          <SortIcon columnKey="priority" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('status') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('status')}
+                      >
+                        <div className="flex items-center">
+                          Status
+                          <SortIcon columnKey="status" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('points') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('points')}
+                      >
+                        <div className="flex items-center">
+                          Points
+                          <SortIcon columnKey="points" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('dueDate') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('dueDate')}
+                      >
+                        <div className="flex items-center">
+                          Due Date
+                          <SortIcon columnKey="dueDate" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('isClientVisible') && <th className="px-6 py-4">Visible</th>}
+                    {selectedColumns.includes('createdAt') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('createdAt')}
+                      >
+                        <div className="flex items-center">
+                          Created
+                          <SortIcon columnKey="createdAt" />
+                        </div>
+                      </th>
+                    )}
+                    {selectedColumns.includes('completedAt') && (
+                      <th 
+                        className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                        onClick={() => requestSort('completedAt')}
+                      >
+                        <div className="flex items-center">
+                          Completed
+                          <SortIcon columnKey="completedAt" />
+                        </div>
+                      </th>
+                    )}
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  <AnimatePresence mode="popLayout">
+                    {sortedTasks.map((task) => (
+                      <motion.tr 
+                        layout
+                        key={task.id}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="hover:bg-slate-50/50 transition-all group cursor-pointer"
+                        onClick={() => openTaskDetails(task)}
+                      >
+                        {selectedColumns.includes('title') && (
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
+                                <Briefcase size={20} />
                               </div>
-                              <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md border border-indigo-100 uppercase">
-                                {task.serviceType}
-                              </span>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-bold text-sm text-slate-900">{task.title}</p>
+                                  {task.isClientVisible ? <span title="Visible to Client"><Eye size={12} className="text-slate-400" /></span> : <span title="Hidden from Client"><EyeOff size={12} className="text-slate-300" /></span>}
+                                </div>
+                                <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md border border-indigo-100 uppercase">
+                                  {task.serviceType}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                      )}
-                      {selectedColumns.includes('client') && (
-                        <td className="px-6 py-4">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const client = clients.find(c => c.id === task.clientId);
-                              if (client) setViewingClient(client);
-                            }}
-                            className="text-sm font-medium text-slate-700 hover:text-indigo-600 hover:underline text-left"
-                          >
-                            {clients.find(c => c.id === task.clientId)?.name || 'Unknown Client'}
-                          </button>
-                        </td>
-                      )}
-                      {selectedColumns.includes('department') && (
-                        <td className="px-6 py-4">
-                          <span className={cn(
-                            "px-2 py-1 rounded-lg text-[10px] font-bold uppercase",
-                            task.department === 'Technical' ? "bg-indigo-50 text-indigo-600" :
-                            task.department === 'Accounts' ? "bg-emerald-50 text-emerald-600" :
-                            task.department === 'Editorial' ? "bg-amber-50 text-amber-600" :
-                            "bg-slate-50 text-slate-600"
-                          )}>
-                            {task.department || 'General'}
-                          </span>
-                        </td>
-                      )}
-                      {selectedColumns.includes('assignedTo') && (
-                        <td className="px-6 py-4">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const user = users.find(u => u.id === task.assignedTo);
-                              if (user) setViewingEmployee(user);
-                            }}
-                            className="flex items-center gap-2 hover:text-indigo-600 group/emp"
-                          >
-                            <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-slate-200 shrink-0">
-                              {users.find(u => u.id === task.assignedTo)?.name.charAt(0) || '?'}
-                            </div>
-                            <span className="text-sm text-slate-600 group-hover/emp:underline">{users.find(u => u.id === task.assignedTo)?.name || 'Unassigned'}</span>
-                          </button>
-                        </td>
-                      )}
-                      {selectedColumns.includes('priority') && (
-                        <td className="px-6 py-4">
-                          <div className={cn("flex items-center gap-1.5 text-[10px] font-bold uppercase", getPriorityColor(task.priority))}>
-                            <Flag size={12} fill="currentColor" />
-                            {task.priority}
-                          </div>
-                        </td>
-                      )}
-                      {selectedColumns.includes('status') && (
-                        <td className="px-6 py-4">
-                          <span className={cn(
-                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
-                            getStatusColor(task.status)
-                          )}>
-                            {task.status === 'completed' ? <CheckCircle2 size={14} /> : task.status === 'in_progress' ? <Clock size={14} /> : <AlertCircle size={14} />}
-                            {task.status.replace('_', ' ')}
-                          </span>
-                        </td>
-                      )}
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTask(task);
-                            }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="View Details"
-                          >
-                            <ChevronRight size={16} />
-                          </button>
-                          {check('tasks', 'delete') && (
+                          </td>
+                        )}
+                        {selectedColumns.includes('serviceType') && (
+                          <td className="px-6 py-4">
+                            <span className="text-xs font-bold text-slate-600">{task.serviceType}</span>
+                          </td>
+                        )}
+                        {selectedColumns.includes('client') && (
+                          <td className="px-6 py-4">
                             <button 
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDeleteTask(task);
+                                const client = clients.find(c => c.id === task.clientId);
+                                if (client) setViewingClient(client);
                               }}
-                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                              title="Delete Task"
+                              className="text-sm font-medium text-slate-700 hover:text-indigo-600 hover:underline text-left"
                             >
-                              <Trash2 size={16} />
+                              {clients.find(c => c.id === task.clientId)?.name || 'Unknown Client'}
                             </button>
-                          )}
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))}
-                </AnimatePresence>
-              </tbody>
-            </table>
-          )}
+                          </td>
+                        )}
+                        {selectedColumns.includes('department') && (
+                          <td className="px-6 py-4">
+                            <span className={cn(
+                              "px-2 py-1 rounded-lg text-[10px] font-bold uppercase",
+                              task.department === 'Technical' ? "bg-indigo-50 text-indigo-600" :
+                              task.department === 'Accounts' ? "bg-emerald-50 text-emerald-600" :
+                              task.department === 'Editorial' ? "bg-amber-50 text-amber-600" :
+                              "bg-slate-50 text-slate-600"
+                            )}>
+                              {task.department || 'General'}
+                            </span>
+                          </td>
+                        )}
+                        {selectedColumns.includes('assignedTo') && (
+                          <td className="px-6 py-4">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const user = users.find(u => u.id === task.assignedTo);
+                                if (user) setViewingEmployee(user);
+                              }}
+                              className="flex items-center gap-2 hover:text-indigo-600 group/emp"
+                            >
+                              <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-slate-200 shrink-0 overflow-hidden">
+                                {users.find(u => u.id === task.assignedTo)?.photoURL ? (
+                                  <img 
+                                    src={users.find(u => u.id === task.assignedTo)?.photoURL} 
+                                    alt="" 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  users.find(u => u.id === task.assignedTo)?.name.charAt(0) || '?'
+                                )}
+                              </div>
+                              <span className="text-sm text-slate-600 group-hover/emp:underline">{users.find(u => u.id === task.assignedTo)?.name || 'Unassigned'}</span>
+                            </button>
+                          </td>
+                        )}
+                        {selectedColumns.includes('priority') && (
+                          <td className="px-6 py-4">
+                            <div className={cn("flex items-center gap-1.5 text-[10px] font-bold uppercase", getPriorityColor(task.priority))}>
+                              <Flag size={12} fill="currentColor" />
+                              {task.priority}
+                            </div>
+                          </td>
+                        )}
+                        {selectedColumns.includes('status') && (
+                          <td className="px-6 py-4">
+                            <span className={cn(
+                              "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+                              getStatusColor(task.status)
+                            )}>
+                              {task.status === 'completed' ? <CheckCircle2 size={14} /> : task.status === 'in_progress' ? <Clock size={14} /> : <AlertCircle size={14} />}
+                              {task.status.replace('_', ' ')}
+                            </span>
+                          </td>
+                        )}
+                        {selectedColumns.includes('points') && (
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-1 text-sm font-bold text-slate-700">
+                              <Trophy size={14} className="text-amber-500" />
+                              {task.points}
+                            </div>
+                          </td>
+                        )}
+                        {selectedColumns.includes('dueDate') && (
+                          <td className="px-6 py-4 text-xs font-bold text-slate-600">
+                            {task.dueDate}
+                          </td>
+                        )}
+                        {selectedColumns.includes('isClientVisible') && (
+                          <td className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">
+                            {task.isClientVisible ? 'Visible' : 'Hidden'}
+                          </td>
+                        )}
+                        {selectedColumns.includes('createdAt') && (
+                          <td className="px-6 py-4 text-xs text-slate-400">
+                             {task.createdAt && (task.createdAt as any).toDate ? (task.createdAt as any).toDate().toLocaleDateString() : 'N/A'}
+                          </td>
+                        )}
+                        {selectedColumns.includes('completedAt') && (
+                          <td className="px-6 py-4 text-xs text-slate-400">
+                            {task.completedAt ? new Date(task.completedAt).toLocaleDateString() : '-'}
+                          </td>
+                        )}
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedTask(task);
+                              }}
+                              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                              title="View Details"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                            {check('tasks', 'delete') && (
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteTask(task);
+                                }}
+                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                title="Delete Task"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </motion.tr>
+                    ))}
+                  </AnimatePresence>
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <KanbanBoard 
+          tasks={filteredTasks} 
+          onTaskClick={(task) => openTaskDetails(task)} 
+          onStatusChange={handleUpdateStatus}
+        />
+      )}
 
       {/* Assign Task Modal */}
       <Modal 
@@ -563,7 +837,16 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                 required
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                 value={newTask.clientId}
-                onChange={e => setNewTask(prev => ({ ...prev, clientId: e.target.value }))}
+                onChange={e => {
+                  const client = clients.find(c => c.id === e.target.value);
+                  setNewTask(prev => ({ 
+                    ...prev, 
+                    clientId: e.target.value,
+                    clientName: client?.name,
+                    journalId: '',
+                    domainId: ''
+                  }));
+                }}
               >
                 <option value="">Choose client...</option>
                 {clients.map(client => (
@@ -571,6 +854,54 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                 ))}
               </select>
             </div>
+            
+            {(newTask.serviceType === 'OJS' || newTask.serviceType === 'ISSN' || newTask.serviceType === 'DOI' || newTask.serviceType === 'Editorial') && (
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Relates to Journal</label>
+                <select 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newTask.journalId}
+                  onChange={e => {
+                    const journal = journals.find(j => j.id === e.target.value);
+                    setNewTask(prev => ({ 
+                      ...prev, 
+                      journalId: e.target.value,
+                      journalTitle: journal?.title
+                    }));
+                  }}
+                  disabled={!newTask.clientId}
+                >
+                  <option value="">Select journal (optional)...</option>
+                  {journals.filter(j => j.clientId === newTask.clientId).map(journal => (
+                    <option key={journal.id} value={journal.id}>{journal.title}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {(newTask.serviceType === 'Hosting' || newTask.serviceType === 'Domain') && (
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Relates to Domain</label>
+                <select 
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={newTask.domainId}
+                  onChange={e => {
+                    const domain = domains.find(d => d.id === e.target.value);
+                    setNewTask(prev => ({ 
+                      ...prev, 
+                      domainId: e.target.value,
+                      domainName: domain?.domainName
+                    }));
+                  }}
+                  disabled={!newTask.clientId}
+                >
+                  <option value="">Select domain (optional)...</option>
+                  {domains.filter(d => d.clientId === newTask.clientId).map(domain => (
+                    <option key={domain.id} value={domain.id}>{domain.domainName}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">Service Type</label>
               <select 
@@ -755,8 +1086,12 @@ export const Tasks: React.FC<TasksProps> = ({ searchQuery, currentUser }) => {
                     <div className="space-y-4">
                       {(selectedTask.comments || []).map((comment) => (
                         <div key={comment.id} className="flex gap-3">
-                          <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-slate-200 shrink-0">
-                            {comment.userName.charAt(0)}
+                          <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-400 border border-slate-200 shrink-0 overflow-hidden">
+                            {comment.userPhotoURL ? (
+                              <img src={comment.userPhotoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            ) : (
+                              comment.userName.charAt(0)
+                            )}
                           </div>
                           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex-1">
                             <div className="flex justify-between items-center mb-1">

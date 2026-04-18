@@ -17,7 +17,7 @@ import {
   Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../lib/utils';
+import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { HECEntry, Journal, Client, User as UserType } from '../types';
@@ -26,8 +26,9 @@ import { JournalDetail } from './JournalDetail';
 import { ClientDetail } from './ClientDetail';
 import { moveToTrash } from '../lib/firebase';
 import { HECCategorySettings } from './HECCategorySettings';
-import { Settings2, Shield } from 'lucide-react';
+import { Settings2, Shield, Workflow } from 'lucide-react';
 import { Modal } from './Modal';
+import { HECWorkflowTracker } from './HECWorkflowTracker';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface HECProps {
@@ -37,9 +38,15 @@ interface HECProps {
 
 const AVAILABLE_COLUMNS = [
   { id: 'journal', label: 'Journal' },
+  { id: 'client', label: 'Client' },
+  { id: 'discipline', label: 'Discipline' },
+  { id: 'category', label: 'Category' },
   { id: 'app_psid', label: 'App No / PSID' },
+  { id: 'applicationDate', label: 'App Date' },
   { id: 'year_freq', label: 'Year / Freq' },
   { id: 'status', label: 'Status' },
+  { id: 'points', label: 'Points' },
+  { id: 'fees', label: 'Fees Paid' },
   { id: 'expiration', label: 'Expiration' },
 ];
 
@@ -76,8 +83,9 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
   const [clients, setClients] = useState<Client[]>([]);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'workflows'>('list');
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['hec'] || ['journal', 'app_psid', 'year_freq', 'status', 'expiration']
+    currentUser.columnPreferences?.['hec'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
   const [newEntry, setNewEntry] = useState({
     journalId: '',
@@ -105,9 +113,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
         return {
           id: doc.id,
           ...data,
-          expirationDate: data.expirationDate instanceof Timestamp 
-            ? data.expirationDate.toDate().toISOString().split('T')[0]
-            : data.expirationDate
+          expirationDate: formatDateForInput(data.expirationDate)
         };
       }) as HECEntry[];
       setEntries(entryData);
@@ -258,45 +264,82 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
     <div className="p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">HEC Applications</h2>
-          <p className="text-slate-500 mt-1">Track HEC approvals, credentials, and compliance for journals.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+            {viewMode === 'list' ? 'HEC Applications' : 'Workflow Tracker'}
+          </h2>
+          <p className="text-slate-500 mt-1">
+            {viewMode === 'list' 
+              ? 'Track HEC approvals, credentials, and compliance for journals.'
+              : 'Multi-stage HEC application management system.'}
+          </p>
         </div>
         <div className="flex gap-3">
-          <ColumnSelector 
-            availableColumns={AVAILABLE_COLUMNS}
-            selectedColumns={selectedColumns}
-            onChange={handleColumnChange}
-          />
-          {currentUser.role === 'Admin' && (
+          <div className="flex bg-slate-100 p-1 rounded-xl items-center mr-2 h-fit self-center">
             <button 
-              onClick={() => setIsConfigOpen(true)}
-              className="p-3 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
-              title="Configure HEC Categories"
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                viewMode === 'list' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-indigo-600"
+              )}
             >
-              <Settings2 size={20} />
+              List View
             </button>
-          )}
-          {check('hecApplications', 'add') && (
             <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+              onClick={() => setViewMode('workflows')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
+                viewMode === 'workflows' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-indigo-600"
+              )}
             >
-              <Plus size={20} />
-              New HEC Application
+              <Workflow size={14} /> Workflows
             </button>
+          </div>
+          {viewMode === 'list' && (
+            <>
+              <ColumnSelector 
+                availableColumns={AVAILABLE_COLUMNS}
+                selectedColumns={selectedColumns}
+                onChange={handleColumnChange}
+              />
+              {currentUser.role === 'Admin' && (
+                <button 
+                  onClick={() => setIsConfigOpen(true)}
+                  className="p-3 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm h-[46px]"
+                  title="Configure HEC Categories"
+                >
+                  <Settings2 size={20} />
+                </button>
+              )}
+              {check('hecApplications', 'add') && (
+                <button 
+                  onClick={() => setIsModalOpen(true)}
+                  className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 h-[46px]"
+                >
+                  <Plus size={20} />
+                  New Application
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
-          <table className="w-full text-left border-collapse">
+      {viewMode === 'list' ? (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
+            <table className="w-full text-left border-collapse">
             <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
               <tr className="border-b border-slate-200">
                 {selectedColumns.includes('journal') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Journal</th>}
+                {selectedColumns.includes('client') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Client</th>}
+                {selectedColumns.includes('discipline') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Discipline</th>}
+                {selectedColumns.includes('category') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>}
                 {selectedColumns.includes('app_psid') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App No / PSID</th>}
+                {selectedColumns.includes('applicationDate') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App Date</th>}
                 {selectedColumns.includes('year_freq') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Year / Freq</th>}
                 {selectedColumns.includes('status') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>}
+                {selectedColumns.includes('points') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Points</th>}
+                {selectedColumns.includes('fees') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Fees</th>}
                 {selectedColumns.includes('expiration') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Expiration</th>}
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Actions</th>
               </tr>
@@ -339,18 +382,42 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                               <span title="Verified"><CheckCircle2 size={14} className="text-emerald-500" /></span>
                             )}
                           </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const journal = journals.find(j => j.id === entry.journalId);
-                              const client = clients.find(c => c.id === journal?.clientId);
-                              if (client) setViewingClient(client);
-                            }}
-                            className="text-xs text-slate-500 hover:text-indigo-600 hover:underline text-left"
-                          >
-                            {journals.find(j => j.id === entry.journalId)?.clientName || 'Unknown Client'}
-                          </button>
                         </div>
+                      </td>
+                    )}
+                    {selectedColumns.includes('client') && (
+                      <td className="px-6 py-4">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const journal = journals.find(j => j.id === entry.journalId);
+                            const client = clients.find(c => c.id === journal?.clientId);
+                            if (client) setViewingClient(client);
+                          }}
+                          className="text-sm font-bold text-slate-700 hover:text-indigo-600 hover:underline text-left"
+                        >
+                          {journals.find(j => j.id === entry.journalId)?.clientName || 'Unknown Client'}
+                        </button>
+                      </td>
+                    )}
+                    {selectedColumns.includes('discipline') && (
+                      <td className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-tighter">
+                        {entry.discipline || 'N/A'}
+                      </td>
+                    )}
+                    {selectedColumns.includes('category') && (
+                      <td className="px-6 py-4">
+                        {entry.category ? (
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-lg text-[10px] font-black border uppercase shadow-sm",
+                            entry.category === 'W' ? "bg-indigo-50 text-indigo-700 border-indigo-100" :
+                            entry.category === 'X' ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                            entry.category === 'Y' ? "bg-amber-50 text-amber-700 border-amber-100" :
+                            "bg-rose-50 text-rose-700 border-rose-100"
+                          )}>
+                            {entry.category}
+                          </span>
+                        ) : '-'}
                       </td>
                     )}
                     {selectedColumns.includes('app_psid') && (
@@ -378,6 +445,16 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                     {selectedColumns.includes('status') && (
                       <td className="px-6 py-4">
                         {getStatusBadge(entry.status)}
+                      </td>
+                    )}
+                    {selectedColumns.includes('points') && (
+                      <td className="px-6 py-4">
+                        <span className="text-sm font-bold text-slate-700">{entry.points || 0}</span>
+                      </td>
+                    )}
+                    {selectedColumns.includes('fees') && (
+                      <td className="px-6 py-4 text-sm font-bold text-slate-900 italic">
+                        {entry.fees ? `$${entry.fees.toLocaleString()}` : '-'}
                       </td>
                     )}
                     {selectedColumns.includes('expiration') && (
@@ -432,6 +509,9 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
           </table>
         </div>
       </div>
+      ) : (
+        <HECWorkflowTracker currentUser={currentUser} />
+      )}
 
       {/* Add HEC Entry Modal */}
       <AnimatePresence>

@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Invoice, InvoiceStatus, Client } from '../types';
 import { db } from '../lib/firebase';
 import { collection, query, orderBy, onSnapshot, where } from 'firebase/firestore';
-import { cn } from '../lib/utils';
+import { cn, formatDateForInput } from '../lib/utils';
 
 interface InvoiceListProps {
   onView: (invoice: Invoice) => void;
@@ -33,12 +33,21 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({ onView, onEdit, onDele
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'subscription'>('all');
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'invoices'), orderBy('createdAt', 'desc'));
     const unsub = onSnapshot(q, (snapshot) => {
-      setInvoices(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Invoice)));
+      setInvoices(snapshot.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          issueDate: formatDateForInput(data.issueDate),
+          dueDate: formatDateForInput(data.dueDate)
+        } as Invoice;
+      }));
       setLoading(false);
     });
     return () => unsub();
@@ -59,10 +68,11 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({ onView, onEdit, onDele
 
   const filteredInvoices = invoices.filter(inv => {
     const matchesSearch = 
-      inv.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      inv.clientName?.toLowerCase().includes(searchTerm.toLowerCase());
+      (inv.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (inv.clientName || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || inv.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesSource = sourceFilter === 'all' || inv.subscription_source === 'Journal';
+    return matchesSearch && matchesStatus && matchesSource;
   });
 
   return (
@@ -94,6 +104,15 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({ onView, onEdit, onDele
               <option value="partially_paid">Partially Paid</option>
               <option value="paid">Paid</option>
               <option value="overdue">Overdue</option>
+            </select>
+
+            <select 
+              className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as any)}
+            >
+              <option value="all">All Sources</option>
+              <option value="subscription">Subscriptions Only</option>
             </select>
           </div>
         </div>
@@ -160,14 +179,19 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({ onView, onEdit, onDele
                       </div>
                     </td>
                     <td className="p-6">
-                      <span className="font-black text-slate-900">PKR {inv.total.toLocaleString()}</span>
+                      <span className={cn(
+                        "font-black text-slate-900",
+                        (inv.currency === 'USD' ? "text-indigo-600" : "text-slate-900")
+                      )}>
+                        {inv.currency || 'PKR'} {(Number(inv.total) || 0).toLocaleString()}
+                      </span>
                     </td>
                     <td className="p-6">
                       <span className={cn(
                         "font-black",
-                        inv.balance > 0 ? "text-rose-500" : "text-emerald-500"
+                        (Number(inv.balance) || 0) > 0 ? "text-rose-500" : "text-emerald-500"
                       )}>
-                        PKR {inv.balance.toLocaleString()}
+                        {inv.currency || 'PKR'} {(Number(inv.balance) || 0).toLocaleString()}
                       </span>
                     </td>
                     <td className="p-6">

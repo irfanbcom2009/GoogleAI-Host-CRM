@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer, addDoc, collection, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 // Import the Firebase configuration from the root
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -8,6 +9,7 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Test connection
 async function testConnection() {
@@ -72,11 +74,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-export async function logActivity(userId: string, userName: string, action: string, details: string) {
+export async function logActivity(userId: string, userName: string, action: string, details: string, userPhotoURL?: string) {
   try {
     await addDoc(collection(db, 'activity_logs'), {
       userId,
       userName,
+      userPhotoURL: userPhotoURL || null,
       action,
       details,
       timestamp: serverTimestamp()

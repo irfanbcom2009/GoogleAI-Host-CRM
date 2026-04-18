@@ -28,6 +28,7 @@ import { Login } from './components/Login';
 import { FAQ } from './components/FAQ';
 import { ClientDashboard } from './components/ClientDashboard';
 import { ChatBoard } from './components/ChatBoard';
+import { ServiceCatalog } from './components/ServiceCatalog';
 import { Services } from './components/Services';
 import { CatalogManager } from './components/CatalogManager';
 import { OrderManagement } from './components/OrderManagement';
@@ -38,8 +39,11 @@ import { StandaloneChat } from './components/StandaloneChat';
 import { RegistrationFlow } from './components/RegistrationFlow';
 import { RegistrationRequests } from './components/RegistrationRequests';
 import { AccessLogs } from './components/AccessLogs';
+import { ActivityHistory } from './components/ActivityHistory';
 import { PermissionDenied } from './components/PermissionDenied';
-import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck, MessageSquare, UserPlus, ShieldAlert } from 'lucide-react';
+import { CommandPalette } from './components/CommandPalette';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
+import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck, MessageSquare, UserPlus, ShieldAlert, Command, Keyboard } from 'lucide-react';
 import { cn } from './lib/utils';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
@@ -48,6 +52,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { UserRole, User as CRMUser, UserPermissions } from './types';
 import { geminiService } from './services/geminiService';
 import { FULL_MODULE_PERMISSIONS } from './lib/permissions';
+
+import { PerformanceLeaderboard } from './components/PerformanceLeaderboard';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -58,8 +64,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [impersonatedUser, setImpersonatedUser] = useState<{ id: string, role: UserRole, name: string, email: string } | null>(null);
   const [selectedChatClientId, setSelectedChatClientId] = useState<string | null>(null);
+  const [selectedPublisherId, setSelectedPublisherId] = useState<string | null>(null);
+  const [selectedJournalId, setSelectedJournalId] = useState<string | null>(null);
+  const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [aiAssistantQuery, setAiAssistantQuery] = useState('');
   const [aiAssistantResponse, setAiAssistantResponse] = useState<string | null>(null);
@@ -69,8 +80,16 @@ export default function App() {
   const [isStandaloneChat, setIsStandaloneChat] = useState(false);
   const [isUnauthorized, setIsUnauthorized] = useState(false);
   const [unauthorizedUser, setUnauthorizedUser] = useState<User | null>(null);
+  const [branding, setBranding] = useState<{ name: string, logoUrl?: string, primaryColor?: string }>({ name: 'Host A Journal' });
 
   useEffect(() => {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'chat') {
       setIsStandaloneChat(true);
@@ -100,9 +119,12 @@ export default function App() {
           if (docSnap.exists()) {
             const userData = docSnap.data() as CRMUser;
             
-            // Check if portal access is enabled
-            if (userData.portalEnabled === false) {
-              setLoginError("Your portal access has been disabled. Please contact your administrator.");
+            // Check if portal access is enabled or user is inactive/hidden
+            if (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true) {
+              const reason = userData.isHidden === true ? "access has been restricted" : 
+                            userData.isActive === false ? "account is inactive" : 
+                            "portal access has been disabled";
+              setLoginError(`Your ${reason}. Please contact your administrator.`);
               await signOut(auth);
               setUser(null);
               setCurrentUserDoc(null);
@@ -113,26 +135,43 @@ export default function App() {
             setUserRole(userData.role as UserRole);
             setUser(user);
 
-            // Special handling for Ayesha Tariq - ensure full employee access
+            // Special handling for Ayesha Tariq - ensure full employee and client access
             const ayeshaEmails = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
             if (ayeshaEmails.includes(user.email || '')) {
               const currentPerms = (userData.permissions || {}) as any;
               const needsUpdate = !currentPerms.employees || 
                                  !currentPerms.employees.view || 
                                  !currentPerms.employees.edit || 
-                                 !currentPerms.employees.delete;
+                                 !currentPerms.employees.add || 
+                                 !currentPerms.employees.delete ||
+                                 !currentPerms.clients ||
+                                 !currentPerms.clients.add ||
+                                 !currentPerms.clients.edit ||
+                                 !currentPerms.approvalRequests ||
+                                 !currentPerms.resources;
               
               if (needsUpdate) {
                 const updatedPerms: UserPermissions = {
                   ...(userData.permissions || {} as any),
-                  employees: FULL_MODULE_PERMISSIONS
+                  employees: FULL_MODULE_PERMISSIONS,
+                  clients: FULL_MODULE_PERMISSIONS,
+                  approvalRequests: FULL_MODULE_PERMISSIONS,
+                  resources: FULL_MODULE_PERMISSIONS,
+                  registrars: FULL_MODULE_PERMISSIONS,
+                  journals: FULL_MODULE_PERMISSIONS,
+                  domains: FULL_MODULE_PERMISSIONS,
+                  tasks: FULL_MODULE_PERMISSIONS,
+                  invoices: FULL_MODULE_PERMISSIONS,
+                  expenses: FULL_MODULE_PERMISSIONS,
+                  publishers: FULL_MODULE_PERMISSIONS
                 };
                 await updateDoc(userRef, { 
                   permissions: updatedPerms,
+                  role: 'Admin', // Also upgrade her role to Admin to bypass all restrictions
                   updatedAt: serverTimestamp()
                 });
                 // Update local state as well
-                setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
+                setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms, role: 'Admin' } : null);
               }
             }
 
@@ -147,8 +186,12 @@ export default function App() {
               const userDoc = querySnapshot.docs[0];
               const userData = { ...userDoc.data() as CRMUser, id: userDoc.id };
               
-              if (userData.portalEnabled === false) {
-                setLoginError("Your portal access has been disabled. Please contact your administrator.");
+              // Check status for legacy users found by email
+              if (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true) {
+                const reason = userData.isHidden === true ? "access has been restricted" : 
+                              userData.isActive === false ? "account is inactive" : 
+                              "portal access has been disabled";
+                setLoginError(`Your ${reason}. Please contact your administrator.`);
                 await signOut(auth);
                 setUser(null);
                 setCurrentUserDoc(null);
@@ -169,26 +212,43 @@ export default function App() {
               setUserRole(userData.role as UserRole);
               setUser(user);
 
-              // Special handling for Ayesha Tariq - ensure full employee access
+              // Special handling for Ayesha Tariq - ensure full employee and client access
               const ayeshaEmails = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
               if (ayeshaEmails.includes(user.email || '')) {
                 const currentPerms = (userData.permissions || {}) as any;
                 const needsUpdate = !currentPerms.employees || 
                                    !currentPerms.employees.view || 
                                    !currentPerms.employees.edit || 
-                                   !currentPerms.employees.delete;
+                                   !currentPerms.employees.add ||
+                                   !currentPerms.employees.delete ||
+                                   !currentPerms.clients ||
+                                   !currentPerms.clients.add ||
+                                   !currentPerms.clients.edit ||
+                                   !currentPerms.approvalRequests ||
+                                   !currentPerms.resources;
                 
                 if (needsUpdate) {
                   const updatedPerms: UserPermissions = {
                     ...(userData.permissions || {} as any),
-                    employees: FULL_MODULE_PERMISSIONS
+                    employees: FULL_MODULE_PERMISSIONS,
+                    clients: FULL_MODULE_PERMISSIONS,
+                    approvalRequests: FULL_MODULE_PERMISSIONS,
+                    resources: FULL_MODULE_PERMISSIONS,
+                    registrars: FULL_MODULE_PERMISSIONS,
+                    journals: FULL_MODULE_PERMISSIONS,
+                    domains: FULL_MODULE_PERMISSIONS,
+                    tasks: FULL_MODULE_PERMISSIONS,
+                    invoices: FULL_MODULE_PERMISSIONS,
+                    expenses: FULL_MODULE_PERMISSIONS,
+                    publishers: FULL_MODULE_PERMISSIONS
                   };
                   await updateDoc(doc(db, 'users', userData.id), { 
                     permissions: updatedPerms,
+                    role: 'Admin', // Upgrade her role to Admin
                     updatedAt: serverTimestamp()
                   });
                   // Update local state as well
-                  setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
+                  setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms, role: 'Admin' } : null);
                 }
               }
 
@@ -250,6 +310,81 @@ export default function App() {
       }
     });
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const fetchBranding = async () => {
+      try {
+        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          if (data.branding) {
+            setBranding(data.branding);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching branding:", error);
+      }
+    };
+    fetchBranding();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Command Palette (⌘+K / Ctrl+K)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen(prev => !prev);
+      }
+      
+      // Keyboard Shortcuts (?)
+      if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+        setIsKeyboardShortcutsOpen(prev => !prev);
+      }
+
+      // Navigation Shortcuts (Alt + Key)
+      if (e.altKey) {
+        switch (e.key.toLowerCase()) {
+          case 'd':
+            e.preventDefault();
+            setActiveTab('dashboard');
+            break;
+          case 'c':
+            e.preventDefault();
+            setActiveTab('clients');
+            break;
+          case 'j':
+            e.preventDefault();
+            setActiveTab('journals');
+            break;
+          case 't':
+            e.preventDefault();
+            setActiveTab('tasks');
+            break;
+          case 'i':
+            e.preventDefault();
+            setActiveTab('invoices');
+            break;
+          case 's':
+            e.preventDefault();
+            setActiveTab('settings');
+            break;
+          case 'n':
+            e.preventDefault();
+            // Trigger some quick add logic if needed, or just let users use the menu
+            // For now, we'll just log or show a hint
+            break;
+        }
+      }
+
+      // Search focus (/)
+      if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+        e.preventDefault();
+        setIsCommandPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   useEffect(() => {
@@ -390,8 +525,8 @@ export default function App() {
       'employees': 'employees',
       'clients': 'clients',
       'tasks': 'tasks',
-      'catalog': 'dataTools',
-      'catalog-manager': 'dataTools',
+      'catalog': 'serviceCatalog',
+      'catalog-manager': 'serviceCatalog',
       'registration-requests': 'approvalRequests',
       'access-logs': 'approvalRequests',
       'orders': 'invoices',
@@ -437,9 +572,39 @@ export default function App() {
           }}
         />
       );
-      case 'domains': return <Domains searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'journals': return <Journals searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'publishers': return <Publishers searchQuery={searchQuery} currentUser={currentUser} />;
+      case 'domains': return (
+        <Domains 
+          searchQuery={searchQuery} 
+          currentUser={currentUser} 
+          initialDomainId={selectedDomainId || undefined}
+          onClearInitialId={() => setSelectedDomainId(null)}
+        />
+      );
+      case 'journals': return (
+        <Journals 
+          searchQuery={searchQuery} 
+          currentUser={currentUser} 
+          initialJournalId={selectedJournalId || undefined}
+          onClearInitialId={() => setSelectedJournalId(null)}
+          onNavigateToPublisher={(id) => {
+            setSelectedPublisherId(id);
+            setActiveTab('publishers');
+          }}
+        />
+      );
+      case 'publishers': return (
+        <Publishers 
+          searchQuery={searchQuery} 
+          currentUser={currentUser} 
+          initialPublisherId={selectedPublisherId || undefined}
+          onClearInitialId={() => setSelectedPublisherId(null)}
+          onNavigate={(tab, id) => {
+            if (tab === 'journals') setSelectedJournalId(id);
+            if (tab === 'domains') setSelectedDomainId(id);
+            setActiveTab(tab as any);
+          }}
+        />
+      );
       case 'hec': return <HEC searchQuery={searchQuery} currentUser={currentUser} />;
       case 'doaj': return <DOAJApplications searchQuery={searchQuery} currentUser={currentUser} />;
       case 'issn': return <ISSNRequests searchQuery={searchQuery} currentUser={currentUser} />;
@@ -449,13 +614,14 @@ export default function App() {
       case 'files': return <FileManager searchQuery={searchQuery} />;
       case 'file-requests': return <FileRequests searchQuery={searchQuery} />;
       case 'tasks': return <Tasks searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'catalog': return <Services currentUser={currentUser} />;
+      case 'catalog': return <ServiceCatalog currentUser={currentUser} />;
       case 'catalog-manager': return <CatalogManager currentUser={currentUser} />;
       case 'registration-requests': return <RegistrationRequests />;
       case 'access-logs': return <AccessLogs />;
       case 'orders': return <OrderManagement currentUser={currentUser} />;
       case 'finance-dashboard': return <FinanceDashboard currentUser={currentUser} />;
       case 'points': return <Points />;
+      case 'leaderboard': return <PerformanceLeaderboard />;
       case 'policies': return <Policies currentUser={currentUser} />;
       case 'employees': return (
         <Employees 
@@ -468,6 +634,7 @@ export default function App() {
         />
       );
       case 'notifications': return <Notifications />;
+      case 'activity-history': return <ActivityHistory currentUser={currentUser} />;
       case 'trash': return <TrashManagement />;
       case 'settings': return <Settings currentUser={currentUser} onImpersonate={handleImpersonate} setActiveTab={setActiveTab} />;
       case 'faq': return <FAQ />;
@@ -482,11 +649,14 @@ export default function App() {
         setActiveTab={setActiveTab} 
         userRole={currentUser.role} 
         userPermissions={currentUser.permissions}
+        userEmail={currentUser.email}
+        userPhotoURL={currentUser.photoURL}
         userDepartment={currentUser.department}
         onLogout={handleLogout}
         isImpersonating={!!impersonatedUser}
         onStopImpersonating={() => setImpersonatedUser(null)}
         pendingApprovalsCount={pendingApprovalsCount}
+        branding={branding}
       />
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -507,21 +677,33 @@ export default function App() {
         )}
 
         {/* Header */}
-        <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between shrink-0 z-10">
-          <div className="flex items-center gap-4 flex-1 max-w-xl">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search everything..."
-                className="w-full pl-10 pr-4 py-2 bg-slate-100 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
+        <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between shrink-0 z-10 gap-8">
+          <div className="flex items-center gap-4 flex-1">
+            <button 
+              onClick={() => setIsCommandPaletteOpen(true)}
+              className="relative w-full group transition-all"
+            >
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-indigo-500 transition-colors" size={20} />
+              <div className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-slate-500 group-hover:bg-white group-hover:border-indigo-300 group-hover:shadow-md transition-all cursor-text">
+                <span className="text-sm font-medium tracking-tight">Search for anything... (Employee, Journal, ISSN, Domain, Client)</span>
+                <div className="flex items-center gap-1.5 px-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-2">Quick Search</span>
+                  <kbd className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold shadow-sm">⌘ K</kbd>
+                  <kbd className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold shadow-sm">/</kbd>
+                </div>
+              </div>
+            </button>
           </div>
 
           <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsKeyboardShortcutsOpen(true)}
+              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-xl transition-all group relative"
+              title="Keyboard Shortcuts (?)"
+            >
+              <Keyboard size={20} />
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-slate-200 text-slate-600 text-[8px] font-black rounded flex items-center justify-center border border-white">?</span>
+            </button>
             <button 
               onClick={() => setIsAiAssistantOpen(true)}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
@@ -625,7 +807,8 @@ export default function App() {
                 <img 
                   src={currentUser.photoURL || user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`} 
                   alt="Avatar" 
-                  className="w-10 h-10 rounded-full bg-indigo-100 border border-slate-200 cursor-pointer"
+                  className="w-10 h-10 rounded-full bg-indigo-100 border border-slate-200 cursor-pointer object-cover"
+                  referrerPolicy="no-referrer"
                 />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 p-2">
                   <button 
@@ -662,6 +845,19 @@ export default function App() {
       )}
 
       {/* AI Assistant Modal */}
+      <CommandPalette 
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        setActiveTab={setActiveTab}
+        onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
+        userRole={currentUser.role}
+      />
+
+      <KeyboardShortcutsModal 
+        isOpen={isKeyboardShortcutsOpen}
+        onClose={() => setIsKeyboardShortcutsOpen(false)}
+      />
+
       <AnimatePresence>
         {isAiAssistantOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">

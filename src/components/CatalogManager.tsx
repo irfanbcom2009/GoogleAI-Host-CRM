@@ -17,7 +17,8 @@ import {
   Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import toast from 'react-hot-toast';
+import { db, handleFirestoreError, OperationType, logActivity } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, addDoc, updateDoc, doc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { CatalogItem, CatalogRequirement, PricingTier, User as UserType } from '../types';
 import { cn } from '../lib/utils';
@@ -53,6 +54,7 @@ export const CatalogManager: React.FC<CatalogManagerProps> = ({ currentUser }) =
       setItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as CatalogItem));
       setLoading(false);
     }, (error) => {
+      console.error("Error fetching catalog:", error);
       handleFirestoreError(error, OperationType.LIST, 'catalog');
       setLoading(false);
     });
@@ -61,29 +63,79 @@ export const CatalogManager: React.FC<CatalogManagerProps> = ({ currentUser }) =
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.name?.trim()) {
+      toast.error('Service name is required');
+      return;
+    }
+    if (!formData.category?.trim()) {
+      toast.error('Category is required');
+      return;
+    }
+
     setLoading(true);
     try {
-      const data = {
+      const timestamp = new Date().toISOString();
+      
+      // Map requirements to compatibility format if needed, but here requirements are top-level
+      // For compatibility with ServiceCatalog, we can also store them inside tiers if we want
+      // but let's just make sure we save the essentials.
+      
+      const baseData = {
         ...formData,
-        updatedAt: new Date().toISOString(),
+        updatedAt: timestamp,
         updatedBy: currentUser.name,
-        updatedById: currentUser.id
+        updatedById: currentUser.id,
+        // Compatibility field for ServiceCatalog
+        tiers: formData.pricingTiers?.map(tier => ({
+          id: tier.priority.toLowerCase().replace(/\s+/g, '-'),
+          name: tier.priority,
+          description: formData.description,
+          price: tier.price,
+          currency: 'USD',
+          clientChecklist: formData.requirements?.map(r => ({
+            id: r.id,
+            label: r.label,
+            type: r.type === 'file' ? 'document' : (r.type === 'date' ? 'step' : 'input'),
+            required: r.required
+          })) || [],
+          employeeChecklist: [],
+          options: [],
+          employeeSharePercentage: 0
+        }))
       };
 
       if (editingItem) {
-        await updateDoc(doc(db, 'catalog', editingItem.id), data);
+        await updateDoc(doc(db, 'catalog', editingItem.id), baseData);
+        await logActivity(
+          currentUser.id,
+          currentUser.name,
+          'Update Service',
+          `Updated service: ${formData.name}`,
+          currentUser.photoURL
+        );
+        toast.success('Service updated successfully');
       } else {
         await addDoc(collection(db, 'catalog'), {
-          ...data,
-          createdAt: new Date().toISOString(),
+          ...baseData,
+          createdAt: timestamp,
           createdBy: currentUser.name,
           createdById: currentUser.id
         });
+        await logActivity(
+          currentUser.id,
+          currentUser.name,
+          'Create Service',
+          `Created new service: ${formData.name}`,
+          currentUser.photoURL
+        );
+        toast.success('Service created successfully');
       }
       setIsModalOpen(false);
       resetForm();
     } catch (error) {
+      console.error("Error saving service:", error);
       handleFirestoreError(error, editingItem ? OperationType.UPDATE : OperationType.CREATE, 'catalog');
+      toast.error('Failed to save service. Check console for details.');
     } finally {
       setLoading(false);
     }

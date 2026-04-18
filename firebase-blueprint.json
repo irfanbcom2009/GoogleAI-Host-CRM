@@ -53,35 +53,8 @@
         "issnOnline": { "type": "string" },
         "invoiceNumber": { "type": "string" },
         "status": { "type": "string", "enum": ["complete", "pending_issn"] },
-        "chiefEditorName": { "type": "string" },
-        "contactPersonName": { "type": "string" },
-        "transferHistory": { "type": "array", "items": { "type": "object" } },
-        "category": { "type": "string" },
-        "subCategory": { "type": "string" },
-        "scope": { "type": "array", "items": { "type": "string" } },
-        "apcAmount": { "type": "number" },
-        "costPrice": { "type": "number" },
-        "salePrice": { "type": "number" },
-        "editorEmail": { "type": "string" },
-        "credentials": {
-          "type": "object",
-          "properties": {
-            "email": { "type": "string" },
-            "password": { "type": "string" },
-            "loginLink": { "type": "string" }
-          }
-        },
-        "assignedEmployeeId": { "type": "string" },
-        "assignedEmployeeName": { "type": "string" },
-        "subjectCategory": { "type": "string" },
-        "publisherCountry": { "type": "string" },
-        "languages": { "type": "string" },
-        "license": { "type": "string" },
-        "isSubscribed": { "type": "boolean" },
-        "isOjsSubscribedFromUs": { "type": "boolean" },
-        "isIssnSubscribedFromUs": { "type": "boolean" },
-        "isHecSubscribedFromUs": { "type": "boolean" },
-        "isDoiSubscribedFromUs": { "type": "boolean" },
+        "healthScore": { "type": "object" },
+        "credentialVaultIds": { "type": "array", "items": { "type": "string" } },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["clientId", "title", "status"]
@@ -106,20 +79,24 @@
       "type": "object",
       "properties": {
         "clientId": { "type": "string" },
-        "serviceType": { "type": "string", "enum": ["Hosting", "DOI", "ISSN", "OJS", "Editorial", "Indexing", "Plagiarism"] },
+        "serviceType": { "type": "string" },
+        "linkedOrderId": { "type": "string" },
+        "linkedServiceId": { "type": "string" },
         "title": { "type": "string" },
         "description": { "type": "string" },
         "assignedTo": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "in_progress", "review", "completed", "overdue"] },
+        "assignedRole": { "type": "string" },
+        "reviewerId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "review", "completed", "overdue", "rework"] },
         "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
-        "points": { "type": "number" },
-        "dueDate": { "type": "string", "format": "date-time" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" },
+        "basePoints": { "type": "number" },
+        "complexityMultiplier": { "type": "number" },
+        "startedAt": { "type": "string", "format": "date-time" },
         "completedAt": { "type": "string", "format": "date-time" },
-        "isClientVisible": { "type": "boolean" }
+        "deadline": { "type": "string", "format": "date-time" },
+        "activityLogs": { "type": "array" }
       },
-      "required": ["clientId", "serviceType", "title", "assignedTo", "status", "priority", "points", "dueDate"]
+      "required": ["clientId", "title", "status", "priority", "deadline"]
     },
     "User": {
       "title": "User",
@@ -458,9 +435,15 @@
         "clientId": { "type": "string" },
         "catalogItemId": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "processing", "completed", "cancelled"] },
+        "serviceStatus": { "type": "string" },
+        "progressPercentage": { "type": "number" },
+        "slaDeadline": { "type": "string", "format": "date-time" },
         "paymentStatus": { "type": "string", "enum": ["unpaid", "partially_paid", "paid"] },
         "totalAmount": { "type": "number" },
-        "paidAmount": { "type": "number" }
+        "paidAmount": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "profit": { "type": "number" },
+        "requirementsData": { "type": "object" }
       },
       "required": ["clientId", "catalogItemId", "status", "paymentStatus", "totalAmount"]
     },
@@ -503,6 +486,23 @@
       },
       "required": ["name", "type", "isActive"]
     },
+    "HECApplicationWorkflow": {
+      "title": "HEC Application Workflow",
+      "description": "A multi-stage HEC journal application tracker",
+      "type": "object",
+      "properties": {
+        "journalId": { "type": "string" },
+        "journalTitle": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "currentStage": { "type": "number" },
+        "status": { "type": "string", "enum": ["Incomplete", "Completed"] },
+        "stages": { "type": "array" },
+        "payment": { "type": "object" },
+        "loginCredentials": { "type": "object" }
+      },
+      "required": ["journalId", "clientId", "currentStage", "status", "stages"]
+    },
     "RegistrationRequest": {
       "title": "Registration Request",
       "description": "A request for account creation from an unregistered user",
@@ -532,6 +532,79 @@
         "status": { "type": "string", "enum": ["unauthorized", "authorized"] }
       },
       "required": ["email", "timestamp", "status"]
+    },
+    "EmploymentHistory": {
+      "title": "Employment History",
+      "description": "Historical record of an employee's joining and leaving cycles",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "joinDate": { "type": "string", "format": "date" },
+        "leaveDate": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["Active", "Closed"] },
+        "reason": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["employeeId", "joinDate", "status", "reason"]
+    },
+    "EmployeeFieldPermission": {
+      "title": "Employee Field Permission",
+      "description": "Field-level access control for an employee",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "moduleName": { "type": "string" },
+        "fieldName": { "type": "string" },
+        "canView": { "type": "boolean" },
+        "canEdit": { "type": "boolean" },
+        "canDelete": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["employeeId", "moduleName", "fieldName", "canView", "canEdit", "canDelete"]
+    },
+    "WorkflowTemplate": {
+      "title": "Workflow Template",
+      "description": "Template for service-specific workflows",
+      "type": "object",
+      "properties": {
+        "serviceId": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "name": { "type": "string" },
+        "stages": { "type": "array" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["serviceId", "name", "stages"]
+    },
+    "CredentialVaultRecord": {
+      "title": "Credential Vault",
+      "description": "Secure storage for client credentials",
+      "type": "object",
+      "properties": {
+        "journalId": { "type": "string" },
+        "label": { "type": "string" },
+        "vaultType": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "accessLogs": { "type": "array" }
+      },
+      "required": ["label", "vaultType", "username", "password"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Real-time user notification",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "link": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "isRead"]
     }
   },
   "firestore": {
@@ -560,10 +633,16 @@
     "/journal_activities": { "schema": "ActivityLog", "description": "Collection of journal-specific activity logs" },
     "/catalog": { "schema": "CatalogItem", "description": "Collection of catalog services" },
     "/orders": { "schema": "Order", "description": "Collection of service orders" },
+    "/workflows": { "schema": "WorkflowTemplate", "description": "Collection of workflow templates" },
+    "/vault": { "schema": "CredentialVaultRecord", "description": "Collection of encrypted credentials" },
+    "/notifications": { "schema": "Notification", "description": "Collection of user notifications" },
     "/point_history": { "schema": "PointHistory", "description": "Collection of point history records" },
     "/profile_update_requests": { "schema": "ProfileUpdateRequest", "description": "Collection of profile update requests" },
     "/hec_categories": { "schema": "HECCategory", "description": "Collection of HEC managed categories" },
+    "/hec_workflows": { "schema": "HECApplicationWorkflow", "description": "Collection of HEC workflow trackers" },
     "/registration_requests": { "schema": "RegistrationRequest", "description": "Collection of registration requests" },
-    "/access_logs": { "schema": "AccessLog", "description": "Collection of access logs" }
+    "/access_logs": { "schema": "AccessLog", "description": "Collection of access logs" },
+    "/employment_history": { "schema": "EmploymentHistory", "description": "Collection of employee career history events" },
+    "/field_permissions": { "schema": "EmployeeFieldPermission", "description": "Collection of field-level permissions" }
   }
 }

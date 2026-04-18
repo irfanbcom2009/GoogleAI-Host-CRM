@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, 
   Plus, 
@@ -22,8 +22,22 @@ import {
   X,
   ShieldCheck,
   Settings2,
-  Settings
+  Settings,
+  BarChart2,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell 
+} from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { User as CRMUser, UserRole, User as UserType, GlobalSettings, UserPermissions } from '../types';
 import { cn } from '../lib/utils';
@@ -41,6 +55,7 @@ import { DEFAULT_EMPLOYEE_PERMISSIONS } from '../lib/permissions';
 import { ConfigModal } from './ConfigModal';
 import { ConfirmModal } from './ConfirmModal';
 import { MergeModal } from './MergeModal';
+import { SearchableSelect } from './ui/SearchableSelect';
 import { toast } from 'react-hot-toast';
 import { GitMerge, AlertCircle } from 'lucide-react';
 
@@ -61,9 +76,11 @@ const AVAILABLE_COLUMNS = [
   { id: 'assignedTasks', label: 'Assigned Tasks' },
   { id: 'latestCompletedTask', label: 'Latest Completed Task' },
   { id: 'officialMail', label: 'Official Mail' },
+  { id: 'officialMailPassword', label: 'Email Password' },
   { id: 'personalEmail', label: 'Personal Email' },
   { id: 'cnic', label: 'CNIC' },
   { id: 'whatsappPersonal', label: 'WhatsApp' },
+  { id: 'phone', label: 'Phone' },
   { id: 'homePhone', label: 'Home Phone' },
   { id: 'address', label: 'Address' },
   { id: 'qualification', label: 'Qualification' },
@@ -74,6 +91,11 @@ const AVAILABLE_COLUMNS = [
   { id: 'role', label: 'Role' },
   { id: 'performance', label: 'Performance' },
   { id: 'points', label: 'Points' },
+  { id: 'pcAllotted', label: 'PC Allotted' },
+  { id: 'pcUsername', label: 'PC Username' },
+  { id: 'pcPassword', label: 'PC Password' },
+  { id: 'portalEnabled', label: 'Portal Access' },
+  { id: 'createdAt', label: 'Created At' },
 ];
 
 export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate, onOpenChat }) => {
@@ -91,7 +113,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<CRMUser | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['employees'] || ['employee', 'status', 'role', 'performance', 'points', 'assignedTasks']
+    currentUser.columnPreferences?.['employees'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [allTasks, setAllTasks] = useState<any[]>([]);
@@ -103,6 +125,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
   const [mergeSource, setMergeSource] = useState<CRMUser | null>(null);
   const [duplicates, setDuplicates] = useState<CRMUser[][]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'createdAt', direction: 'desc' });
 
   useEffect(() => {
     const q = query(collection(db, 'tasks'));
@@ -149,6 +172,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     experience: '',
     officialMailPassword: '',
     portalEnabled: false,
+    isActive: true,
+    isHidden: false,
     pcAllotted: '',
     pcUsername: '',
     pcPassword: '',
@@ -193,7 +218,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
     const q = query(
       collection(db, 'users'), 
-      where('role', 'in', ['Employee', 'Manager']),
+      where('role', 'in', ['Employee', 'Manager', 'Admin']),
       orderBy('points', 'desc')
     );
     
@@ -219,8 +244,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
   }, []);
 
   useEffect(() => {
-    if (isModalOpen && !newEmployee.employeeId && newEmployee.joiningDate) {
-      generateEmployeeId(newEmployee.joiningDate);
+    if (isModalOpen && !newEmployee.employeeId) {
+      generateEmployeeId();
     }
   }, [isModalOpen]);
 
@@ -248,25 +273,51 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
   const scanForDuplicates = () => {
     setIsScanning(true);
-    const nameMap = new Map<string, CRMUser[]>();
-    employees.forEach(emp => {
+    const groups: CRMUser[][] = [];
+    const processedIds = new Set<string>();
+
+    employees.forEach((emp, index) => {
+      if (processedIds.has(emp.id)) return;
+
+      const group: CRMUser[] = [emp];
       const name = emp.name.toLowerCase().trim();
-      if (!nameMap.has(name)) {
-        nameMap.set(name, []);
+      const email = emp.email?.toLowerCase().trim();
+      const personalEmail = emp.personalEmail?.toLowerCase().trim();
+      const cnic = emp.cnic?.trim();
+      
+      employees.forEach((other, otherIndex) => {
+        if (index === otherIndex || processedIds.has(other.id)) return;
+
+        const otherName = other.name.toLowerCase().trim();
+        const otherEmail = other.email?.toLowerCase().trim();
+        const otherPersonalEmail = other.personalEmail?.toLowerCase().trim();
+        const otherCnic = other.cnic?.trim();
+
+        const nameMatch = name && otherName && name === otherName;
+        const emailMatch = (email && otherEmail && email === otherEmail) || 
+                          (email && otherPersonalEmail && email === otherPersonalEmail) ||
+                          (personalEmail && otherEmail && personalEmail === otherEmail) ||
+                          (personalEmail && otherPersonalEmail && personalEmail === otherPersonalEmail);
+        const cnicMatch = cnic && otherCnic && cnic === otherCnic;
+
+        if (nameMatch || emailMatch || cnicMatch) {
+          group.push(other);
+          processedIds.add(other.id);
+        }
+      });
+
+      if (group.length > 1) {
+        groups.push(group);
+        processedIds.add(emp.id);
       }
-      nameMap.get(name)!.push(emp);
     });
 
-    const foundDuplicates: CRMUser[][] = [];
-    nameMap.forEach(group => {
-      if (group.length > 1) {
-        foundDuplicates.push(group);
-      }
-    });
-    setDuplicates(foundDuplicates);
+    setDuplicates(groups);
     setIsScanning(false);
-    if (foundDuplicates.length === 0) {
-      toast.success('No duplicate employee names found');
+    if (groups.length === 0) {
+      toast.success('No duplicate employees found');
+    } else {
+      toast.error(`Found ${groups.length} potential duplicate groups`);
     }
   };
 
@@ -277,7 +328,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     setError(null);
 
     // Restriction: Only admin can add employees with gmail address
-    if (newEmployee.email.toLowerCase().endsWith('@gmail.com') && currentUser?.role !== 'Admin') {
+    const isSystemAdmin = currentUser?.role === 'Admin' || ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser?.email || '');
+    if (newEmployee.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
       setError("Only administrators can add employees with @gmail.com addresses.");
       setIsSaving(false);
       return;
@@ -304,10 +356,22 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         }
       }
 
-      await addDoc(collection(db, 'users'), {
+      const docRef = await addDoc(collection(db, 'users'), {
         ...newEmployee,
         createdAt: serverTimestamp()
       });
+
+      // Create initial employment history record
+      await addDoc(collection(db, 'employment_history'), {
+        employeeId: docRef.id,
+        joinDate: newEmployee.joiningDate || new Date().toISOString().split('T')[0],
+        leaveDate: null,
+        status: 'Active',
+        reason: 'First Join',
+        notes: 'Initial joining record created automatically.',
+        createdAt: serverTimestamp()
+      });
+
       setIsModalOpen(false);
       resetForm();
     } catch (err: any) {
@@ -321,22 +385,32 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     }
   };
 
-  const generateEmployeeId = async (joiningDate: string) => {
-    if (!joiningDate) return;
-    
-    const dateStr = joiningDate.replace(/-/g, ''); // YYYYMMDD
-    const prefix = `EMP-${dateStr}-`;
-    
+  const generateEmployeeId = async () => {
     try {
-      // Find all employees joined on this date to get the next sequence
+      // Get all employees to determine the next sequence number by finding the highest ID
       const q = query(
         collection(db, 'users'), 
-        where('employeeId', '>=', prefix),
-        where('employeeId', '<=', prefix + '\uf8ff')
+        where('role', 'in', ['Employee', 'Manager'])
       );
       const snapshot = await getDocs(q);
-      const count = snapshot.size + 1;
-      const newId = `${prefix}${count.toString().padStart(3, '0')}`;
+      
+      let nextNumber = 1;
+      const existingIds = snapshot.docs
+        .map(doc => {
+          const id = doc.data().employeeId as string;
+          if (id && id.startsWith('Emp-')) {
+            const numPart = id.replace('Emp-', '');
+            return parseInt(numPart, 10);
+          }
+          return null;
+        })
+        .filter((num): num is number => num !== null && !isNaN(num));
+
+      if (existingIds.length > 0) {
+        nextNumber = Math.max(...existingIds) + 1;
+      }
+      
+      const newId = `Emp-${nextNumber.toString().padStart(3, '0')}`;
       
       setNewEmployee(prev => ({ ...prev, employeeId: newId }));
     } catch (error) {
@@ -368,6 +442,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       experience: '',
       officialMailPassword: '',
       portalEnabled: false,
+      isActive: true,
+      isHidden: false,
       pcAllotted: '',
       pcUsername: '',
       pcPassword: '',
@@ -406,6 +482,8 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
       experience: emp.experience || '',
       officialMailPassword: emp.officialMailPassword || '',
       portalEnabled: emp.portalEnabled ?? false,
+      isActive: emp.isActive ?? true,
+      isHidden: emp.isHidden ?? false,
       pcAllotted: emp.pcAllotted || '',
       pcUsername: emp.pcUsername || '',
       pcPassword: emp.pcPassword || '',
@@ -457,17 +535,80 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
     reader.readAsDataURL(file);
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         emp.email.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const isActive = !emp.endingDate;
-    const matchesStatus = statusFilter === 'all' || 
-                         (statusFilter === 'active' && isActive) || 
-                         (statusFilter === 'inactive' && !isActive);
-    
-    return matchesSearch && matchesStatus;
-  });
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(emp => {
+      const name = (emp.name || '').toLowerCase();
+      const email = (emp.email || '').toLowerCase();
+      const search = searchQuery.toLowerCase();
+
+      const matchesSearch = name.includes(search) || email.includes(search);
+      
+      const isActive = !emp.endingDate && emp.isActive !== false;
+      const isHidden = emp.isHidden === true;
+      const canSeeHidden = currentUser.role === 'Admin';
+      
+      if (isHidden && !canSeeHidden) return false;
+
+      const matchesStatus = statusFilter === 'all' || 
+                           (statusFilter === 'active' && isActive) || 
+                           (statusFilter === 'inactive' && !isActive);
+      
+      return matchesSearch && matchesStatus;
+    });
+  }, [employees, searchQuery, statusFilter, currentUser.role]);
+
+  const sortedEmployees = useMemo(() => {
+    let sortableItems = [...filteredEmployees];
+    if (sortConfig.key !== null && sortConfig.direction !== null) {
+      sortableItems.sort((a, b) => {
+        let aValue: any = a[sortConfig.key as keyof CRMUser];
+        let bValue: any = b[sortConfig.key as keyof CRMUser];
+
+        // Handle points separately as they are numbers
+        if (sortConfig.key === 'points') {
+          aValue = a.points || 0;
+          bValue = b.points || 0;
+        }
+
+        if (aValue === bValue) return 0;
+        if (aValue === undefined || aValue === null) return 1;
+        if (bValue === undefined || bValue === null) return -1;
+
+        const modifier = sortConfig.direction === 'asc' ? 1 : -1;
+        if (typeof aValue === 'string') {
+          return aValue.localeCompare(bValue) * modifier;
+        }
+        return (aValue > bValue ? 1 : -1) * modifier;
+      });
+    }
+    return sortableItems;
+  }, [filteredEmployees, sortConfig]);
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: string }) => {
+    if (sortConfig.key !== columnKey || !sortConfig.direction) return <ArrowUpDown size={12} className="opacity-0 group-hover:opacity-100 transition-opacity ml-1" />;
+    return sortConfig.direction === 'asc' ? <ChevronUp size={12} className="ml-1 text-indigo-600" /> : <ChevronDown size={12} className="ml-1 text-indigo-600" />;
+  };
+
+  const performanceData = useMemo(() => {
+    return employees
+      .sort((a, b) => (b.points || 0) - (a.points || 0))
+      .slice(0, 10)
+      .map(emp => ({
+        name: emp.name.split(' ')[0],
+        points: emp.points || 0,
+        fullName: emp.name
+      }));
+  }, [employees]);
 
   if (selectedEmployee) {
     return <EmployeeDetail employee={selectedEmployee} onBack={() => setSelectedEmployee(null)} currentUser={currentUser} onImpersonate={onImpersonate} />;
@@ -587,7 +728,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-amber-800">
                 <AlertCircle size={20} />
-                <h4 className="font-bold">Duplicate Names Found ({duplicates.length} groups)</h4>
+                <h4 className="font-bold">Potential Duplicate Groups Found ({duplicates.length} groups)</h4>
               </div>
               <button 
                 onClick={() => setDuplicates([])}
@@ -599,7 +740,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {duplicates.map((group, idx) => (
                 <div key={idx} className="bg-white p-3 rounded-xl border border-amber-100 shadow-sm space-y-3">
-                  <p className="text-sm font-bold text-slate-900">{group[0].name}</p>
+                  <p className="text-sm font-bold text-slate-900">Duplicate Group</p>
                   <div className="space-y-2">
                     {group.map(emp => (
                       <div key={emp.id} className="flex items-center justify-between text-xs p-2 bg-slate-50 rounded-lg">
@@ -630,47 +771,81 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
         <PermissionsDashboard />
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <Users size={24} />
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <BarChart2 className="text-indigo-600" size={20} />
+              <h3 className="font-bold text-lg">Top 10 Performers</h3>
+            </div>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">By Points</span>
           </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Staff</p>
-            <p className="text-2xl font-bold text-slate-900">{employees.length}</p>
+          <div className="h-[250px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={performanceData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 600 }}
+                  dy={10}
+                />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#94a3b8', fontSize: 10 }}
+                />
+                <Tooltip 
+                  cursor={{ fill: '#f8fafc' }}
+                  contentStyle={{ 
+                    backgroundColor: '#fff', 
+                    borderRadius: '12px', 
+                    border: 'none', 
+                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                    fontSize: '12px',
+                    fontWeight: 'bold'
+                  }} 
+                />
+                <Bar dataKey="points" radius={[4, 4, 0, 0]} barSize={32}>
+                  {performanceData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={index === 0 ? '#4f46e5' : '#818cf8'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <ShieldCheck size={24} />
+
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+              <Users size={24} />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Staff</p>
+              <p className="text-2xl font-bold text-slate-900">{employees.length}</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active Staff</p>
-            <p className="text-2xl font-bold text-slate-900">{employees.filter(e => !e.endingDate).length}</p>
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+              <ShieldCheck size={24} />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active Staff</p>
+              <p className="text-2xl font-bold text-slate-900">{employees.filter(e => !e.endingDate).length}</p>
+            </div>
           </div>
-        </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <TrendingUp size={24} />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Avg. Points</p>
-            <p className="text-2xl font-bold text-slate-900">
-              {employees.length > 0 
-                ? Math.round(employees.reduce((acc, curr) => acc + curr.points, 0) / employees.length) 
-                : 0}
-            </p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-            <Award size={24} />
-          </div>
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Top Performer</p>
-            <p className="text-2xl font-bold text-slate-900 truncate max-w-[150px]">
-              {employees[0]?.name || 'N/A'}
-            </p>
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+            <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
+              <Award size={24} />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Top Performer</p>
+              <p className="text-2xl font-bold text-slate-900 truncate max-w-[150px]">
+                {employees[0]?.name || 'N/A'}
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -720,39 +895,186 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
               <p className="text-sm font-medium">Loading staff...</p>
             </div>
           ) : (
-            <table className="w-full text-left border-collapse">
-              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
-                  {selectedColumns.includes('employee') && <th className="px-6 py-4">Employee</th>}
+            <table className="w-full text-left border-collapse font-sans">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm border-b border-slate-100">
+                <tr className="text-slate-500 text-[10px] uppercase tracking-widest font-black">
+                  {selectedColumns.includes('employee') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('name')}
+                    >
+                      <div className="flex items-center">
+                        Employee
+                        <SortIcon columnKey="name" />
+                      </div>
+                    </th>
+                  )}
                   <th className="px-6 py-4 text-xs font-bold text-slate-400">#</th>
-                  {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
-                  {selectedColumns.includes('employeeId') && <th className="px-6 py-4">Employee ID</th>}
-                  {selectedColumns.includes('joiningDate') && <th className="px-6 py-4">Joining Date</th>}
-                  {selectedColumns.includes('modeOfWorking') && <th className="px-6 py-4">Mode</th>}
-                  {selectedColumns.includes('department') && <th className="px-6 py-4">Department</th>}
+                  {selectedColumns.includes('status') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('status')}
+                    >
+                      <div className="flex items-center">
+                        Status
+                        <SortIcon columnKey="status" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('employeeId') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('employeeId')}
+                    >
+                      <div className="flex items-center">
+                        Employee ID
+                        <SortIcon columnKey="employeeId" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('joiningDate') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('joiningDate')}
+                    >
+                      <div className="flex items-center">
+                        Joining Date
+                        <SortIcon columnKey="joiningDate" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('modeOfWorking') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('modeOfWorking')}
+                    >
+                      <div className="flex items-center">
+                        Mode
+                        <SortIcon columnKey="modeOfWorking" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('department') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('department')}
+                    >
+                      <div className="flex items-center">
+                        Department
+                        <SortIcon columnKey="department" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('assignments') && <th className="px-6 py-4">Assignments</th>}
                   {selectedColumns.includes('assignedTasks') && <th className="px-6 py-4">Assigned Tasks</th>}
                   {selectedColumns.includes('latestCompletedTask') && <th className="px-6 py-4">Latest Completed</th>}
-                  {selectedColumns.includes('officialMail') && <th className="px-6 py-4">Official Mail</th>}
-                  {selectedColumns.includes('personalEmail') && <th className="px-6 py-4">Personal Email</th>}
-                  {selectedColumns.includes('cnic') && <th className="px-6 py-4">CNIC</th>}
+                  {selectedColumns.includes('officialMail') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('email')}
+                    >
+                      <div className="flex items-center">
+                        Official Mail
+                        <SortIcon columnKey="email" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('officialMailPassword') && <th className="px-6 py-4">Email Pass</th>}
+                  {selectedColumns.includes('personalEmail') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('personalEmail')}
+                    >
+                      <div className="flex items-center">
+                        Personal Email
+                        <SortIcon columnKey="personalEmail" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('cnic') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('cnic')}
+                    >
+                      <div className="flex items-center">
+                        CNIC
+                        <SortIcon columnKey="cnic" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('whatsappPersonal') && <th className="px-6 py-4">WhatsApp</th>}
+                  {selectedColumns.includes('phone') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('phone')}
+                    >
+                      <div className="flex items-center">
+                        Phone
+                        <SortIcon columnKey="phone" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('homePhone') && <th className="px-6 py-4">Home Phone</th>}
                   {selectedColumns.includes('address') && <th className="px-6 py-4">Address</th>}
                   {selectedColumns.includes('qualification') && <th className="px-6 py-4">Qualification</th>}
                   {selectedColumns.includes('gender') && <th className="px-6 py-4">Gender</th>}
                   {selectedColumns.includes('remarks') && <th className="px-6 py-4">Remarks</th>}
-                  {selectedColumns.includes('endingDate') && <th className="px-6 py-4">Ending Date</th>}
+                  {selectedColumns.includes('endingDate') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('endingDate')}
+                    >
+                      <div className="flex items-center">
+                        Ending Date
+                        <SortIcon columnKey="endingDate" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('experience') && <th className="px-6 py-4">Work Experience</th>}
-                  {selectedColumns.includes('role') && <th className="px-6 py-4">Role</th>}
+                  {selectedColumns.includes('role') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('role')}
+                    >
+                      <div className="flex items-center">
+                        Role
+                        <SortIcon columnKey="role" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('performance') && <th className="px-6 py-4">Performance</th>}
-                  {selectedColumns.includes('points') && <th className="px-6 py-4">Points</th>}
+                  {selectedColumns.includes('points') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('points')}
+                    >
+                      <div className="flex items-center">
+                        Points
+                        <SortIcon columnKey="points" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('pcAllotted') && <th className="px-6 py-4">PC</th>}
+                  {selectedColumns.includes('pcUsername') && <th className="px-6 py-4">PC User</th>}
+                  {selectedColumns.includes('pcPassword') && <th className="px-6 py-4">PC Pass</th>}
+                  {selectedColumns.includes('portalEnabled') && <th className="px-6 py-4">Portal</th>}
+                  {selectedColumns.includes('createdAt') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('createdAt')}
+                    >
+                      <div className="flex items-center">
+                        Created
+                        <SortIcon columnKey="createdAt" />
+                      </div>
+                    </th>
+                  )}
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <AnimatePresence mode="popLayout">
-                  {filteredEmployees.map((emp, index) => (
+                  {sortedEmployees.map((emp, index) => (
                     <motion.tr 
                       layout
                       key={emp.id}
@@ -770,6 +1092,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                                 src={emp.photoURL || emp.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${emp.name}`} 
                                 className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 object-cover" 
                                 alt="" 
+                                referrerPolicy="no-referrer"
                               />
                               <div className={cn(
                                 "absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white shadow-sm",
@@ -854,6 +1177,9 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                       {selectedColumns.includes('officialMail') && (
                         <td className="px-6 py-4 text-sm text-slate-600">{emp.officialMail}</td>
                       )}
+                      {selectedColumns.includes('officialMailPassword') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{emp.officialMailPassword}</td>
+                      )}
                       {selectedColumns.includes('personalEmail') && (
                         <td className="px-6 py-4 text-sm text-slate-600">{emp.personalEmail}</td>
                       )}
@@ -862,6 +1188,9 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                       )}
                       {selectedColumns.includes('whatsappPersonal') && (
                         <td className="px-6 py-4 text-sm text-slate-600">{emp.whatsappPersonal}</td>
+                      )}
+                      {selectedColumns.includes('phone') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{emp.phone}</td>
                       )}
                       {selectedColumns.includes('homePhone') && (
                         <td className="px-6 py-4 text-sm text-slate-600">{emp.homePhone}</td>
@@ -912,6 +1241,30 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                             <span className="text-sm font-bold text-slate-900">{emp.points.toLocaleString()}</span>
                             <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">+12%</span>
                           </div>
+                        </td>
+                      )}
+                      {selectedColumns.includes('pcAllotted') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{emp.pcAllotted}</td>
+                      )}
+                      {selectedColumns.includes('pcUsername') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{emp.pcUsername}</td>
+                      )}
+                      {selectedColumns.includes('pcPassword') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">{emp.pcPassword}</td>
+                      )}
+                      {selectedColumns.includes('portalEnabled') && (
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                            emp.portalEnabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+                          )}>
+                            {emp.portalEnabled ? 'Enabled' : 'Disabled'}
+                          </span>
+                        </td>
+                      )}
+                      {selectedColumns.includes('createdAt') && (
+                        <td className="px-6 py-4 text-sm text-slate-600">
+                          {emp.createdAt && emp.createdAt.toDate ? emp.createdAt.toDate().toLocaleDateString() : 'N/A'}
                         </td>
                       )}
                       <td className="px-6 py-4 text-right">
@@ -1072,7 +1425,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                 </label>
                 <button 
                   type="button"
-                  onClick={() => generateEmployeeId(newEmployee.joiningDate)}
+                  onClick={() => generateEmployeeId()}
                   className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
                 >
                   Regenerate
@@ -1082,7 +1435,7 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                 required
                 type="text" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                placeholder="EMP-001"
+                placeholder="Emp-001"
                 value={newEmployee.employeeId}
                 onChange={e => setNewEmployee(prev => ({ ...prev, employeeId: e.target.value }))}
               />
@@ -1097,28 +1450,21 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
                 onChange={e => {
                   const date = e.target.value;
                   setNewEmployee(prev => ({ ...prev, joiningDate: date }));
-                  generateEmployeeId(date);
                 }}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Mode of Working</label>
-              <select 
+              <SearchableSelect
+                label="Mode of Working"
                 required
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                options={globalSettings?.modes?.map(mode => ({ label: mode, value: mode })) || [
+                  { label: "Office", value: "Office" },
+                  { label: "Remotely", value: "Remotely" },
+                  { label: "Hybrid", value: "Hybrid" }
+                ]}
                 value={newEmployee.modeOfWorking}
-                onChange={e => setNewEmployee(prev => ({ ...prev, modeOfWorking: e.target.value }))}
-              >
-                {globalSettings?.modes?.map(mode => (
-                  <option key={mode} value={mode}>{mode}</option>
-                )) || (
-                  <>
-                    <option value="Office">Office</option>
-                    <option value="Remotely">Remotely</option>
-                    <option value="Hybrid">Hybrid</option>
-                  </>
-                )}
-              </select>
+                onChange={value => setNewEmployee(prev => ({ ...prev, modeOfWorking: value }))}
+              />
             </div>
           </div>
 
@@ -1135,41 +1481,35 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Gender</label>
-              <select 
+              <SearchableSelect
+                label="Gender"
                 required
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                options={[
+                  { label: "Male", value: "Male" },
+                  { label: "Female", value: "Female" },
+                  { label: "Other", value: "Other" }
+                ]}
                 value={newEmployee.gender}
-                onChange={e => setNewEmployee(prev => ({ ...prev, gender: e.target.value as any }))}
-              >
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
-              </select>
+                onChange={value => setNewEmployee(prev => ({ ...prev, gender: value as any }))}
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Department</label>
-              <select 
+              <SearchableSelect
+                label="Department"
                 required
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                options={globalSettings?.departments?.map(dept => ({ label: dept, value: dept })) || [
+                  { label: "IT", value: "IT" },
+                  { label: "HR", value: "HR" },
+                  { label: "Finance", value: "Finance" },
+                  { label: "Marketing", value: "Marketing" },
+                  { label: "Operations", value: "Operations" }
+                ]}
                 value={newEmployee.department}
-                onChange={e => setNewEmployee(prev => ({ ...prev, department: e.target.value }))}
-              >
-                {globalSettings?.departments?.map(dept => (
-                  <option key={dept} value={dept}>{dept}</option>
-                )) || (
-                  <>
-                    <option value="IT">IT</option>
-                    <option value="HR">HR</option>
-                    <option value="Finance">Finance</option>
-                    <option value="Marketing">Marketing</option>
-                    <option value="Operations">Operations</option>
-                  </>
-                )}
-              </select>
+                onChange={value => setNewEmployee(prev => ({ ...prev, department: value }))}
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">Assignments</label>
@@ -1345,16 +1685,16 @@ export const Employees: React.FC<EmployeesProps> = ({ currentUser, onImpersonate
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Role</label>
-              <select 
+              <SearchableSelect
+                label="Role"
                 required
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                options={[
+                  { label: "Employee", value: "Employee" },
+                  { label: "Manager", value: "Manager" }
+                ]}
                 value={newEmployee.role}
-                onChange={e => setNewEmployee(prev => ({ ...prev, role: e.target.value as any }))}
-              >
-                <option value="Employee">Employee</option>
-                <option value="Manager">Manager</option>
-              </select>
+                onChange={value => setNewEmployee(prev => ({ ...prev, role: value as any }))}
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700">Initial Points</label>

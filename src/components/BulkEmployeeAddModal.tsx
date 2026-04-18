@@ -29,8 +29,13 @@ export const BulkEmployeeAddModal: React.FC<BulkEmployeeAddModalProps> = ({ isOp
       const parts = line.split('\t');
       if (parts.length < 3) return null;
 
+      const rawId = parts[0]?.trim() || '';
+      const employeeId = rawId.match(/^\d+$/) 
+        ? `Emp-${rawId.padStart(3, '0')}` 
+        : rawId;
+
       const employee = {
-        employeeId: parts[0]?.trim() || '',
+        employeeId,
         joiningDate: parts[1]?.trim() || '',
         name: parts[2]?.trim() || '',
         modeOfWorking: parts[3]?.trim() || '',
@@ -49,7 +54,7 @@ export const BulkEmployeeAddModal: React.FC<BulkEmployeeAddModalProps> = ({ isOp
         experience: parts[16]?.trim() || '',
         role: 'Employee',
         points: 0,
-        email: parts[7]?.trim() || parts[6]?.trim()?.replace(/"/g, '') || `emp${parts[0]?.trim()}@hostajournal.biz`,
+        email: parts[7]?.trim() || parts[6]?.trim()?.replace(/"/g, '') || `emp${employeeId.replace('Emp-', '')}@hostajournal.biz`,
         permissions: DEFAULT_EMPLOYEE_PERMISSIONS,
         createdAt: serverTimestamp()
       };

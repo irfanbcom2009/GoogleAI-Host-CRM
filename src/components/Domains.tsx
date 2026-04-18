@@ -17,24 +17,33 @@ import {
   Key,
   Server,
   GitMerge,
-  Trash2
+  Trash2,
+  AlertCircle,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Domain, Client, User } from '../types';
-import { cn } from '../lib/utils';
+import { Domain, Client, User, DomainRegistrar } from '../types';
+import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, Timestamp, where, doc, updateDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { DomainManager } from './DomainManager';
 import { DomainTransferRequests } from './DomainTransferRequests';
+import { RegistrarManager } from './RegistrarManager';
 import { ClientDetail } from './ClientDetail';
 import { ColumnSelector } from './ColumnSelector';
 import { usePermissions } from '../hooks/usePermissions';
+import { MergeModal } from './MergeModal';
+import { toast } from 'react-hot-toast';
 
 interface DomainsProps {
   searchQuery: string;
   currentUser: User;
   clientId?: string;
+  initialDomainId?: string;
+  onClearInitialId?: () => void;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -42,24 +51,58 @@ const AVAILABLE_COLUMNS = [
   { id: 'client', label: 'Client' },
   { id: 'registrar', label: 'Registrar' },
   { id: 'status', label: 'Status' },
-  { id: 'dates', label: 'Dates' },
-  { id: 'pricing', label: 'Pricing' },
+  { id: 'registrationDate', label: 'Reg. Date' },
+  { id: 'expirationDate', label: 'Exp. Date' },
+  { id: 'costPrice', label: 'Cost Price' },
+  { id: 'salePrice', label: 'Sale Price' },
+  { id: 'eppCode', label: 'EPP Code' },
+  { id: 'isDomainSubscribedFromUs', label: 'Domain Us' },
+  { id: 'isHostingSubscribedFromUs', label: 'Hosting Us' },
+  { id: 'createdAt', label: 'Created At' },
 ];
 
-export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clientId }) => {
-  const { check } = usePermissions(currentUser);
+export const Domains: React.FC<DomainsProps> = ({ 
+  searchQuery, 
+  currentUser, 
+  clientId,
+  initialDomainId,
+  onClearInitialId
+}) => {
+  const { check, isManager, isAdmin } = usePermissions(currentUser);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialDomainId && domains.length > 0) {
+      const domain = domains.find(d => d.id === initialDomainId);
+      if (domain) {
+        setSelectedDomain(domain);
+        setIsManagerModalOpen(true);
+        if (onClearInitialId) onClearInitialId();
+      }
+    }
+  }, [initialDomainId, domains, onClearInitialId]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isRegistrarModalOpen, setIsRegistrarModalOpen] = useState(false);
+  const [registrars, setRegistrars] = useState<DomainRegistrar[]>([]);
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['domains'] || ['domainName', 'client', 'registrar', 'status', 'dates', 'pricing']
+    currentUser.columnPreferences?.['domains'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expiring_soon' | 'expired' | 'unassigned'>('all');
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'expirationDate', direction: 'asc' });
+  const [showRegistrarCreds, setShowRegistrarCreds] = useState<Record<string, boolean>>({});
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeSource, setMergeSource] = useState<Domain | null>(null);
+  const [duplicates, setDuplicates] = useState<Domain[][]>([]);
+  const [isScanning, setIsScanning] = useState(false);
+  const [registrarSearch, setRegistrarSearch] = useState('');
+  const [isRegistrarDropdownOpen, setIsRegistrarDropdownOpen] = useState(false);
 
   useEffect(() => {
     if (clientId) {
@@ -85,6 +128,7 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
   const [newDomain, setNewDomain] = useState({
     clientId: '',
     domainName: '',
+    registrarId: '',
     registrar: '',
     status: 'active' as const,
     registrationDate: '',
@@ -127,13 +171,8 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
     const unsubscribeDomains = onSnapshot(q, (snapshot) => {
       const domainData = snapshot.docs.map(doc => {
         const data = doc.data();
-        const expDate = data.expirationDate instanceof Timestamp 
-          ? data.expirationDate.toDate().toISOString().split('T')[0]
-          : data.expirationDate;
-        
-        const regDate = data.registrationDate instanceof Timestamp
-          ? data.registrationDate.toDate().toISOString().split('T')[0]
-          : data.registrationDate;
+        const expDate = formatDateForInput(data.expirationDate);
+        const regDate = formatDateForInput(data.registrationDate);
         
         return {
           id: doc.id,
@@ -160,9 +199,20 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
+    const unsubscribeRegistrars = onSnapshot(query(collection(db, 'registrars'), orderBy('name', 'asc')), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as DomainRegistrar[];
+      setRegistrars(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'registrars');
+    });
+
     return () => {
       unsubscribeDomains();
       unsubscribeClients();
+      unsubscribeRegistrars();
     };
   }, []);
 
@@ -175,6 +225,45 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
     
     return matchesSearch && matchesStatus;
   });
+
+  const sortedDomains = [...filteredDomains].sort((a, b) => {
+    if (!sortConfig.key || !sortConfig.direction) return 0;
+    
+    let aValue: any = a[sortConfig.key as keyof Domain];
+    let bValue: any = b[sortConfig.key as keyof Domain];
+
+    if (sortConfig.key === 'client') {
+      const clientA = clients.find(c => c.id === a.clientId);
+      const clientB = clients.find(c => c.id === b.clientId);
+      aValue = clientA?.name || '';
+      bValue = clientB?.name || '';
+    }
+
+    if (aValue === bValue) return 0;
+    if (aValue === undefined || aValue === null) return 1;
+    if (bValue === undefined || bValue === null) return -1;
+
+    const modifier = sortConfig.direction === 'asc' ? 1 : -1;
+    if (typeof aValue === 'string') {
+      return aValue.localeCompare(bValue) * modifier;
+    }
+    return (aValue > bValue ? 1 : -1) * modifier;
+  });
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: string }) => {
+    if (sortConfig.key !== columnKey || !sortConfig.direction) return <ArrowUpDown size={12} className="opacity-0 group-hover:opacity-100 transition-opacity ml-1" />;
+    return sortConfig.direction === 'asc' ? <ChevronUp size={12} className="ml-1 text-indigo-600" /> : <ChevronDown size={12} className="ml-1 text-indigo-600" />;
+  };
 
   const handleDeleteDomain = async (domain: Domain) => {
     if (!confirm(`Are you sure you want to move "${domain.domainName}" to trash?`)) return;
@@ -227,6 +316,7 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
       setNewDomain({
         clientId: '',
         domainName: '',
+        registrarId: '',
         registrar: '',
         status: 'active',
         registrationDate: '',
@@ -255,6 +345,33 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
+    }
+  };
+
+  const scanForDuplicates = () => {
+    setIsScanning(true);
+    const groups: Domain[][] = [];
+    const processed = new Set<string>();
+
+    domains.forEach(domain => {
+      if (processed.has(domain.id)) return;
+
+      const group = domains.filter(other => {
+        if (other.id === domain.id) return false;
+        return domain.domainName?.toLowerCase() === other.domainName?.toLowerCase();
+      });
+
+      if (group.length > 0) {
+        const fullGroup = [domain, ...group];
+        fullGroup.forEach(item => processed.add(item.id));
+        groups.push(fullGroup);
+      }
+    });
+
+    setDuplicates(groups);
+    setIsScanning(false);
+    if (groups.length === 0) {
+      toast.success("No duplicate domains found.");
     }
   };
 
@@ -293,6 +410,15 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
             selectedColumns={selectedColumns}
             onChange={handleColumnChange}
           />
+          {isEmployee && check('domains', 'edit') && (
+            <button 
+              onClick={() => setIsRegistrarModalOpen(true)}
+              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
+            >
+              <Settings size={20} className="text-indigo-600" />
+              Registrars
+            </button>
+          )}
           <button 
             onClick={() => setIsTransferModalOpen(true)}
             className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
@@ -300,6 +426,17 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
             <ArrowLeftRight size={20} className="text-indigo-600" />
             Transfers
           </button>
+          {isEmployee && (
+            <button 
+              onClick={scanForDuplicates}
+              disabled={isScanning}
+              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
+              title="Scan for duplicate domains"
+            >
+              {isScanning ? <Loader2 size={18} className="animate-spin" /> : <GitMerge size={20} className="text-indigo-600" />}
+              Duplicate Check
+            </button>
+          )}
           {isEmployee && (
             <>
               {check('domains', 'add') && (
@@ -315,6 +452,56 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
           )}
         </div>
       </div>
+
+      {duplicates.length > 0 && (
+        <div className="mx-auto mb-6">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-800">
+                <AlertCircle size={20} />
+                <h4 className="font-bold">Potential Duplicate Domains Found ({duplicates.length} groups)</h4>
+              </div>
+              <button 
+                onClick={() => setDuplicates([])}
+                className="text-xs font-bold text-amber-600 hover:text-amber-700"
+              >
+                Dismiss
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {duplicates.map((group, idx) => (
+                <div key={`group-${idx}`} className="bg-white p-3 rounded-xl border border-amber-100 shadow-sm space-y-3">
+                  <p className="text-sm font-bold text-slate-900">Duplicate Group</p>
+                  <div className="space-y-2">
+                    {group.map((domain, dIdx) => (
+                      <div key={`${domain.id}-${dIdx}`} className="flex items-center justify-between text-xs p-2 bg-slate-50 rounded-lg">
+                        <div className="truncate mr-2">
+                          <p className="font-bold text-slate-700 truncate">{domain.domainName}</p>
+                          <p className="text-[10px] text-slate-500 truncate">{domain.registrar}</p>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setMergeSource(domain);
+                            setIsMergeModalOpen(true);
+                          }}
+                          className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-md font-bold hover:bg-indigo-100 transition-all shrink-0 flex items-center gap-1"
+                        >
+                          <GitMerge size={12} />
+                          Merge
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      )}
 
       <div className="flex gap-2 overflow-x-auto pb-2">
         {(['all', 'active', 'expiring_soon', 'expired', 'unassigned'] as const).map(status => (
@@ -371,21 +558,117 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
               <p className="text-sm font-medium">Loading domains...</p>
             </div>
           ) : (
-            <table className="w-full text-left border-collapse">
-              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-                <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
-                  {selectedColumns.includes('domainName') && <th className="px-6 py-4">Domain Name</th>}
-                  {selectedColumns.includes('client') && <th className="px-6 py-4">Client</th>}
-                  {selectedColumns.includes('registrar') && <th className="px-6 py-4">Registrar</th>}
-                  {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
-                  {selectedColumns.includes('dates') && <th className="px-6 py-4">Dates</th>}
-                  {selectedColumns.includes('pricing') && <th className="px-6 py-4">Pricing</th>}
+            <table className="w-full text-left border-collapse font-sans">
+              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm border-b border-slate-100">
+                <tr className="text-slate-500 text-[10px] uppercase tracking-widest font-black">
+                  {selectedColumns.includes('domainName') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('domainName')}
+                    >
+                      <div className="flex items-center">
+                        Domain Name
+                        <SortIcon columnKey="domainName" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('client') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('client')}
+                    >
+                      <div className="flex items-center">
+                        Client
+                        <SortIcon columnKey="client" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('registrar') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('registrar')}
+                    >
+                      <div className="flex items-center">
+                        Registrar
+                        <SortIcon columnKey="registrar" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('status') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('status')}
+                    >
+                      <div className="flex items-center">
+                        Status
+                        <SortIcon columnKey="status" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('registrationDate') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('registrationDate')}
+                    >
+                      <div className="flex items-center">
+                        Reg. Date
+                        <SortIcon columnKey="registrationDate" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('expirationDate') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('expirationDate')}
+                    >
+                      <div className="flex items-center">
+                        Exp. Date
+                        <SortIcon columnKey="expirationDate" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('costPrice') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('costPrice')}
+                    >
+                      <div className="flex items-center">
+                        Cost
+                        <SortIcon columnKey="costPrice" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('salePrice') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('salePrice')}
+                    >
+                      <div className="flex items-center">
+                        Sale
+                        <SortIcon columnKey="salePrice" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('eppCode') && <th className="px-6 py-4">EPP Code</th>}
+                  {selectedColumns.includes('isDomainSubscribedFromUs') && <th className="px-6 py-4">D. Us</th>}
+                  {selectedColumns.includes('isHostingSubscribedFromUs') && <th className="px-6 py-4">H. Us</th>}
+                  {selectedColumns.includes('createdAt') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      onClick={() => requestSort('createdAt')}
+                    >
+                      <div className="flex items-center">
+                        Created At
+                        <SortIcon columnKey="createdAt" />
+                      </div>
+                    </th>
+                  )}
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <AnimatePresence mode="popLayout">
-                  {filteredDomains.map((domain) => (
+                  {sortedDomains.map((domain) => (
                     <motion.tr 
                       layout
                       key={domain.id}
@@ -432,9 +715,60 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
                       )}
                       {selectedColumns.includes('registrar') && (
                         <td className="px-6 py-4">
-                          <span className="text-xs font-medium text-slate-600 px-2 py-1 bg-slate-100 rounded-md">
-                            {domain.registrar}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            {domain.registrarId ? (
+                              <>
+                                <span className="text-xs font-bold text-slate-600 px-2 py-1 bg-indigo-50 text-indigo-700 rounded-md border border-indigo-100 self-start">
+                                  {registrars.find(r => r.id === domain.registrarId)?.name || domain.registrar}
+                                </span>
+                                <div className="flex flex-col gap-1 mt-1">
+                                  {registrars.find(r => r.id === domain.registrarId)?.link && (
+                                    <a 
+                                      href={registrars.find(r => r.id === domain.registrarId)?.link} 
+                                      target="_blank" 
+                                      rel="noreferrer"
+                                      className="text-[10px] text-indigo-600 font-bold hover:underline flex items-center gap-1"
+                                    >
+                                      Portal Link <ExternalLink size={10} />
+                                    </a>
+                                  )}
+                                  
+                                  {isManager && (
+                                    <div className="space-y-1 mt-1 p-2 bg-slate-50 rounded-lg border border-slate-100">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex flex-col">
+                                          <span className="text-[9px] text-slate-400 font-black uppercase tracking-tighter">Login Details</span>
+                                          <span className="text-[10px] font-bold text-slate-700 truncate max-w-[100px]">
+                                            {domain.registrarCredentials?.username || registrars.find(r => r.id === domain.registrarId)?.email || 'N/A'}
+                                          </span>
+                                        </div>
+                                        <button 
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowRegistrarCreds(prev => ({ ...prev, [domain.id]: !prev[domain.id] }));
+                                          }}
+                                          className="text-slate-400 hover:text-indigo-600 transition-colors"
+                                        >
+                                          <Key size={12} />
+                                        </button>
+                                      </div>
+                                      {showRegistrarCreds[domain.id] && (
+                                        <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                                          <span className="text-[10px] font-mono text-indigo-600 font-bold bg-white px-1 rounded">
+                                            {domain.registrarCredentials?.password || registrars.find(r => r.id === domain.registrarId)?.password || '••••••••'}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-xs font-medium text-slate-600 px-2 py-1 bg-slate-100 rounded-md">
+                                {domain.registrar}
+                              </span>
+                            )}
+                          </div>
                         </td>
                       )}
       {selectedColumns.includes('status') && (
@@ -611,14 +945,98 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
           </div>
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Registrar</label>
-            <input 
-              required
-              type="text" 
-              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              placeholder="e.g. Namecheap"
-              value={newDomain.registrar}
-              onChange={e => setNewDomain(prev => ({ ...prev, registrar: e.target.value }))}
-            />
+            <div className="relative">
+              <button 
+                type="button"
+                onClick={() => setIsRegistrarDropdownOpen(!isRegistrarDropdownOpen)}
+                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all flex items-center justify-between text-left"
+              >
+                <span className={cn(newDomain.registrar ? "text-slate-900" : "text-slate-400")}>
+                  {newDomain.registrar || "Select Registrar..."}
+                </span>
+                <ChevronDown size={16} className={cn("text-slate-400 transition-transform", isRegistrarDropdownOpen && "rotate-180")} />
+              </button>
+
+              <AnimatePresence>
+                {isRegistrarDropdownOpen && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-[60]" 
+                      onClick={() => setIsRegistrarDropdownOpen(false)} 
+                    />
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="absolute z-[70] w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden"
+                    >
+                      <div className="p-2 border-b border-slate-100">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                          <input 
+                            autoFocus
+                            type="text"
+                            placeholder="Search registrars..."
+                            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={registrarSearch}
+                            onChange={e => setRegistrarSearch(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto p-1">
+                        {registrars
+                          .filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase()))
+                          .map(reg => (
+                            <button
+                              key={reg.id}
+                              type="button"
+                              onClick={() => {
+                                setNewDomain(prev => ({ 
+                                  ...prev, 
+                                  registrarId: reg.id,
+                                  registrar: reg.name 
+                                }));
+                                setIsRegistrarDropdownOpen(false);
+                                setRegistrarSearch('');
+                              }}
+                              className={cn(
+                                "w-full px-3 py-2 text-left text-sm rounded-lg transition-all flex items-center justify-between group",
+                                newDomain.registrarId === reg.id ? "bg-indigo-50 text-indigo-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+                              )}
+                            >
+                              {reg.name}
+                              {newDomain.registrarId === reg.id && <CheckCircle2 size={14} />}
+                            </button>
+                          ))}
+                        {registrars.filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase())).length === 0 && (
+                          <div className="py-8 text-center text-slate-400">
+                            <p className="text-xs">No registrars found</p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+            
+            {newDomain.registrarId && (
+              <div className="flex items-center gap-4 mt-2 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                <div className="flex-1">
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Portal Login Link</p>
+                  <p className="text-xs font-bold text-indigo-700 truncate">{registrars.find(r => r.id === newDomain.registrarId)?.link}</p>
+                </div>
+                <a 
+                  href={registrars.find(r => r.id === newDomain.registrarId)?.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-700 transition-all"
+                >
+                  <ExternalLink size={14} />
+                  Login
+                </a>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -715,6 +1133,15 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
         />
       </Modal>
 
+      <Modal
+        isOpen={isRegistrarModalOpen}
+        onClose={() => setIsRegistrarModalOpen(false)}
+        title="Settings: Domain Registrars"
+        maxWidth="4xl"
+      >
+        <RegistrarManager currentUser={currentUser} />
+      </Modal>
+
       {viewingClient && (
         <ClientDetail 
           client={viewingClient} 
@@ -722,6 +1149,19 @@ export const Domains: React.FC<DomainsProps> = ({ searchQuery, currentUser, clie
           currentUser={currentUser}
         />
       )}
+      <MergeModal
+        isOpen={isMergeModalOpen}
+        onClose={() => {
+          setIsMergeModalOpen(false);
+          setMergeSource(null);
+        }}
+        type="domains"
+        initialSourceItem={mergeSource}
+        onSuccess={() => {
+          setDuplicates([]);
+          scanForDuplicates();
+        }}
+      />
     </div>
   );
 };

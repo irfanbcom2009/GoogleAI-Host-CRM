@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Invoice, InvoiceItem, Payment, InvoiceStatus, RecurringDetails, ServiceType } from '../types';
+import { serviceCatalogService } from './serviceCatalogService';
 
 export const financeService = {
   generateInvoiceNumber: async (): Promise<string> => {
@@ -94,6 +95,11 @@ export const financeService = {
         status: newStatus,
         updatedAt: serverTimestamp()
       });
+
+      // 3. If paid, check for service activation
+      if (newStatus === 'paid') {
+        await serviceCatalogService.checkAndActivateByInvoice(payment.invoiceId);
+      }
 
       return paymentRef.id;
     } catch (error) {

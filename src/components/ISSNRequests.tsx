@@ -71,7 +71,7 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['issn'] || ['requestNo', 'journal', 'client', 'type', 'status']
+    currentUser.columnPreferences?.['issn'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
 
@@ -143,29 +143,41 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
       handleFirestoreError(error, OperationType.LIST, 'issn_requests');
     });
 
-    const unsubscribeClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
-      const clientData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Client[];
-      setClients(clientData);
-    });
+    const unsubscribeClients = onSnapshot(
+      query(collection(db, 'users'), where('role', '==', 'Client')), 
+      (snapshot) => {
+        const clientData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Client[];
+        setClients(clientData);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'users')
+    );
 
-    const unsubscribeJournals = onSnapshot(collection(db, 'journals'), (snapshot) => {
-      const journalData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Journal[];
-      setJournals(journalData);
-    });
+    const unsubscribeJournals = onSnapshot(
+      collection(db, 'journals'), 
+      (snapshot) => {
+        const journalData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Journal[];
+        setJournals(journalData);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'journals')
+    );
 
-    const unsubscribePublishers = onSnapshot(collection(db, 'publishers'), (snapshot) => {
-      const publisherData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Publisher[];
-      setPublishers(publisherData);
-    });
+    const unsubscribePublishers = onSnapshot(
+      collection(db, 'publishers'), 
+      (snapshot) => {
+        const publisherData = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Publisher[];
+        setPublishers(publisherData);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'publishers')
+    );
 
     return () => {
       unsubscribeRequests();
@@ -338,6 +350,65 @@ export const ISSNRequests: React.FC<ISSNRequestsProps> = ({ searchQuery, current
             </div>
           )}
         </div>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between"
+        >
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Requests</p>
+            <p className="text-2xl font-black text-slate-900 mt-1">{requests.length}</p>
+          </div>
+          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+            <Hash size={24} />
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between"
+        >
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Approved</p>
+            <p className="text-2xl font-black text-emerald-600 mt-1">{requests.filter(r => r.status === 'approved').length}</p>
+          </div>
+          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center">
+            <CheckCircle2 size={24} />
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between"
+        >
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Rejected</p>
+            <p className="text-2xl font-black text-rose-600 mt-1">{requests.filter(r => r.status === 'rejected').length}</p>
+          </div>
+          <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center">
+            <XCircle size={24} />
+          </div>
+        </motion.div>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between"
+        >
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Pending</p>
+            <p className="text-2xl font-black text-amber-600 mt-1">{requests.filter(r => r.status === 'pending').length}</p>
+          </div>
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center">
+            <Clock size={24} />
+          </div>
+        </motion.div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">

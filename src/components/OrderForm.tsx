@@ -13,6 +13,8 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { CatalogItem, User as UserType, Order, PricingTier } from '../types';
 import { cn } from '../lib/utils';
+import { SearchableSelect } from './ui/SearchableSelect';
+import { WorkflowEngine } from '../services/workflowEngine';
 
 interface OrderFormProps {
   service: CatalogItem;
@@ -45,7 +47,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({ service, currentUser, onCl
 
     try {
       const orderNumber = `ORD-${Date.now().toString().slice(-6)}`;
-      const order: Partial<Order> = {
+      const orderData: any = {
         orderNumber,
         clientId: currentUser.id,
         clientName: currentUser.name,
@@ -54,6 +56,8 @@ export const OrderForm: React.FC<OrderFormProps> = ({ service, currentUser, onCl
         requirementsData,
         deliverablesData: {},
         status: 'pending',
+        serviceStatus: 'Not Started',
+        progressPercentage: 0,
         paymentStatus: 'unpaid',
         priority: selectedTier.priority,
         totalAmount: selectedTier.price,
@@ -66,7 +70,11 @@ export const OrderForm: React.FC<OrderFormProps> = ({ service, currentUser, onCl
         updatedById: currentUser.id
       };
 
-      await addDoc(collection(db, 'orders'), order);
+      const docRef = await addDoc(collection(db, 'orders'), orderData);
+      
+      // Trigger Workflow Engine
+      await WorkflowEngine.generateTasksForOrder({ id: docRef.id, ...orderData } as Order, currentUser);
+      
       onSuccess();
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'orders');
@@ -162,17 +170,13 @@ export const OrderForm: React.FC<OrderFormProps> = ({ service, currentUser, onCl
                 )}
 
                 {req.type === 'select' && (
-                  <select 
+                  <SearchableSelect
                     required={req.required}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    options={req.options?.map(opt => ({ label: opt, value: opt })) || []}
                     value={requirementsData[req.id] || ''}
-                    onChange={e => handleInputChange(req.id, e.target.value)}
-                  >
-                    <option value="">Select an option</option>
-                    {req.options?.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
+                    onChange={value => handleInputChange(req.id, value)}
+                    placeholder="Select an option"
+                  />
                 )}
 
                 {req.type === 'number' && (

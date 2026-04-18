@@ -86,7 +86,7 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
 
   const handleSeedPolicies = async () => {
     const defaultPolicies = [
-      { title: 'Employee ID Policy', content: 'Employee IDs are automatically generated based on the joining date in the format EMP-YYYYMMDD-XXX. This ID is unique and used for all internal tracking.', category: 'General' },
+      { title: 'Employee ID Policy', content: 'Employee IDs are automatically generated in the format Emp-001, Emp-002, etc. based on the total count of staff members. This ID is unique and used for all internal tracking.', category: 'General' },
       { title: 'CNIC Verification Policy', content: 'CNIC must be a valid 13-digit number (format: XXXXX-XXXXXXX-X). It is required for payroll and legal compliance. Each CNIC must be unique in the directory.', category: 'General' },
       { title: 'Client Registration Policy', content: 'All clients must be registered with their full legal name or business name. This ensures accurate invoicing and communication.', category: 'General' },
       { title: 'Client Communication Policy', content: 'Official communication with clients should primarily happen via the registered email address. Ensure the email is active and monitored.', category: 'General' }

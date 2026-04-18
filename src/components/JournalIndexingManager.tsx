@@ -20,7 +20,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Journal, IndexingAgency, JournalIndexing, IndexingStatus, User as UserType } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, addDoc, serverTimestamp, query, where, updateDoc, doc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
-import { cn, sanitizeUrl } from '../lib/utils';
+import { cn, sanitizeUrl, formatDateForInput } from '../lib/utils';
 import { Modal } from './Modal';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -311,7 +311,7 @@ export const JournalIndexingManager: React.FC<JournalIndexingManagerProps> = ({ 
                           <h4 className="font-bold text-slate-900 text-sm">{agency?.name}</h4>
                           <p className="text-xs text-amber-600 font-medium flex items-center gap-1">
                             <Calendar size={10} />
-                            Applied: {indexing.appliedAt}
+                            Applied: {formatDateForInput(indexing.appliedAt)}
                           </p>
                         </div>
                       </div>

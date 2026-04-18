@@ -25,6 +25,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc, addDoc, serverT
 import { Order, User as UserType, PointHistory, CatalogItem } from '../types';
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
+import { SearchableSelect } from './ui/SearchableSelect';
 
 interface OrderManagementProps {
   currentUser: UserType;
@@ -214,18 +215,18 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
             onChange={e => setSearchQuery(e.target.value)}
           />
         </div>
-        <div className="flex gap-4">
-          <select 
-            className="px-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm font-bold text-slate-700"
+        <div className="flex gap-4 w-48">
+          <SearchableSelect
+            options={[
+              { label: "All Status", value: "all" },
+              { label: "Pending", value: "pending" },
+              { label: "Processing", value: "processing" },
+              { label: "Completed", value: "completed" },
+              { label: "Cancelled", value: "cancelled" }
+            ]}
             value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-          >
-            <option value="all">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="processing">Processing</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+            onChange={value => setStatusFilter(value)}
+          />
         </div>
       </div>
 
@@ -354,8 +355,8 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
                     <div key={key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                       <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">{key}</label>
                       <div className="text-sm text-slate-900 font-medium break-words">
-                        {typeof value === 'string' && value.startsWith('http') ? (
-                          <a href={value} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline flex items-center gap-1">
+                        {typeof value === 'string' && (value as string).startsWith('http') ? (
+                          <a href={value as string} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline flex items-center gap-1">
                             View File <FileText size={14} />
                           </a>
                         ) : String(value)}

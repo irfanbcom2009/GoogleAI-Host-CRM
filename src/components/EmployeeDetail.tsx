@@ -26,13 +26,19 @@ import {
   Monitor,
   Lock,
   Loader2,
-  ShieldCheck
+  ShieldCheck,
+  History,
+  PlusCircle,
+  MinusCircle,
+  ChevronRight,
+  Info,
+  X
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { User as CRMUser, Task, UserRole } from '../types';
-import { cn } from '../lib/utils';
+import { User as CRMUser, Task, UserRole, EmploymentPeriod } from '../types';
+import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { EmployeeEditForm } from './EmployeeEditForm';
 
@@ -57,6 +63,25 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [editData, setEditData] = useState<CRMUser>(employee);
+  const [history, setHistory] = useState<EmploymentPeriod[]>([]);
+  const [isRejoiningModalOpen, setIsRejoiningModalOpen] = useState(false);
+  const [isClosingModalOpen, setIsClosingModalOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'employment_history'),
+      where('employeeId', '==', employee.id),
+      orderBy('joinDate', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setHistory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as EmploymentPeriod));
+      setHistoryLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [employee.id]);
 
   useEffect(() => {
     setEditData(employee);
@@ -91,6 +116,17 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
 
   const handleSave = async () => {
     setIsSaving(true);
+    
+    // Restriction: Only admin can add/edit employees with gmail address
+    const isSystemAdmin = currentUser.role === 'Admin' || 
+                         ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email);
+    
+    if (editData.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
+      toast.error("Only administrators can manage records with @gmail.com addresses.");
+      setIsSaving(false);
+      return;
+    }
+
     try {
       await updateDoc(doc(db, 'users', employee.id), {
         ...editData,
@@ -106,17 +142,72 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
     }
   };
 
-  const handleRehire = async () => {
-    if (!window.confirm('Are you sure you want to rehire this employee? This will clear the ending date and set a new joining date to today.')) return;
+  const handleCloseEmployment = async (data: { leaveDate: string; reason: string; notes?: string }) => {
+    const activeRecord = history.find(h => h.status === 'Active');
+    if (!activeRecord) {
+      toast.error('No active employment record found to close.');
+      return;
+    }
+
+    if (new Date(data.leaveDate) < new Date(activeRecord.joinDate)) {
+      toast.error('Leave date cannot be earlier than join date.');
+      return;
+    }
+
     setIsRehiring(true);
     try {
-      await updateDoc(doc(db, 'users', employee.id), {
-        endingDate: '',
-        joiningDate: new Date().toISOString().split('T')[0],
-        remarks: (employee.remarks || '') + `\n[Rehired on ${new Date().toLocaleDateString()}]`
+      await updateDoc(doc(db, 'employment_history', activeRecord.id), {
+        leaveDate: data.leaveDate,
+        status: 'Closed',
+        reason: data.reason,
+        notes: data.notes || '',
+        updatedAt: serverTimestamp()
       });
+
+      await updateDoc(doc(db, 'users', employee.id), {
+        endingDate: data.leaveDate,
+        updatedAt: serverTimestamp()
+      });
+
+      toast.success('Employment record closed successfully.');
+      setIsClosingModalOpen(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
+      handleFirestoreError(error, OperationType.UPDATE, 'employment_history');
+    } finally {
+      setIsRehiring(false);
+    }
+  };
+
+  const handleRejoinEmployment = async (data: { joinDate: string; reason: string; notes?: string }) => {
+    const hasActive = history.some(h => h.status === 'Active');
+    if (hasActive) {
+      toast.error('Employee already has an active record.');
+      return;
+    }
+
+    setIsRehiring(true);
+    try {
+      await addDoc(collection(db, 'employment_history'), {
+        employeeId: employee.id,
+        joinDate: data.joinDate,
+        leaveDate: null,
+        status: 'Active',
+        reason: data.reason,
+        notes: data.notes || '',
+        createdAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, 'users', employee.id), {
+        joiningDate: data.joinDate,
+        endingDate: '',
+        status: 'active',
+        updatedAt: serverTimestamp()
+      });
+
+      toast.success('Rejoining record created successfully.');
+      setIsRejoiningModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'employment_history');
     } finally {
       setIsRehiring(false);
     }
@@ -223,26 +314,48 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
         {/* Left Column: Profile Card */}
         <div className="lg:col-span-1 space-y-6">
           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center space-y-6">
-            <div className="relative inline-block">
+            <div className="relative inline-block group">
               <img 
                 src={employee.photoURL || employee.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${employee.name}`} 
-                className="w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-xl mx-auto object-cover" 
+                className={cn(
+                  "w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-xl mx-auto object-cover transition-all",
+                  isEditing && "ring-4 ring-indigo-500 ring-offset-4"
+                )} 
                 alt={employee.name} 
+                referrerPolicy="no-referrer"
               />
-              <div className="absolute -bottom-2 -right-2 bg-indigo-600 text-white p-2 rounded-xl shadow-lg border-2 border-white">
-                <Trophy size={20} />
-              </div>
+              {isEditing ? (
+                <div className="absolute inset-0 bg-slate-900/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all">
+                  <Edit size={24} className="text-white" />
+                </div>
+              ) : (
+                <div className="absolute -bottom-2 -right-2 bg-indigo-600 text-white p-2 rounded-xl shadow-lg border-2 border-white">
+                  <Trophy size={20} />
+                </div>
+              )}
             </div>
             
             <div>
               {isEditing ? (
-                <input 
-                  type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xl font-black text-center"
-                  value={editData.name}
-                  onChange={e => setEditData(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="Full Name"
-                />
+                <div className="space-y-3">
+                  <input 
+                    type="text"
+                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xl font-black text-center"
+                    value={editData.name}
+                    onChange={e => setEditData(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Full Name"
+                  />
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center block">Photo URL</label>
+                    <input 
+                      type="text"
+                      className="w-full px-3 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-xs text-center font-mono"
+                      value={editData.photoURL || ''}
+                      onChange={e => setEditData(prev => ({ ...prev, photoURL: e.target.value }))}
+                      placeholder="https://..."
+                    />
+                  </div>
+                </div>
               ) : (
                 <h1 className="text-2xl font-black text-slate-900 break-words">{employee.name}</h1>
               )}
@@ -370,7 +483,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
 
               {employee.endingDate && check('employees', 'edit') && (
                 <button 
-                  onClick={handleRehire}
+                  onClick={() => setIsRejoiningModalOpen(true)}
                   disabled={isRehiring || !check('employees', 'edit')}
                   className={cn(
                     "w-full flex items-center justify-center gap-2 p-3 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 font-bold text-xs hover:bg-emerald-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
@@ -501,7 +614,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="date"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.joiningDate}
+                          value={formatDateForInput(editData.joiningDate)}
                           onChange={e => setEditData(prev => ({ ...prev, joiningDate: e.target.value }))}
                         />
                       ) : (
@@ -519,7 +632,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="date"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.endingDate}
+                          value={formatDateForInput(editData.endingDate)}
                           onChange={e => setEditData(prev => ({ ...prev, endingDate: e.target.value }))}
                         />
                       ) : (
@@ -584,7 +697,13 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                           onChange={e => setEditData(prev => ({ ...prev, officialMail: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.officialMail || 'N/A'}</p>
+                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">
+                          {employee.officialMail ? (
+                            <a href={`mailto:${employee.officialMail}`} className="hover:text-indigo-600 transition-colors">
+                              {employee.officialMail}
+                            </a>
+                          ) : 'N/A'}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -622,7 +741,13 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                           onChange={e => setEditData(prev => ({ ...prev, personalEmail: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{employee.personalEmail || 'N/A'}</p>
+                        <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">
+                          {employee.personalEmail ? (
+                            <a href={`mailto:${employee.personalEmail}`} className="hover:text-indigo-600 transition-colors">
+                              {employee.personalEmail}
+                            </a>
+                          ) : 'N/A'}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -658,7 +783,18 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                           onChange={e => setEditData(prev => ({ ...prev, whatsappPersonal: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm font-bold text-slate-900">{employee.whatsappPersonal || 'N/A'}</p>
+                        <p className="text-sm font-bold text-slate-900">
+                          {employee.whatsappPersonal ? (
+                            <a 
+                              href={`https://wa.me/${employee.whatsappPersonal.replace(/[^0-9]/g, '')}`} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="hover:text-indigo-600 transition-colors"
+                            >
+                              {employee.whatsappPersonal}
+                            </a>
+                          ) : 'N/A'}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -676,7 +812,13 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                           onChange={e => setEditData(prev => ({ ...prev, homePhone: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm font-bold text-slate-900">{employee.homePhone || 'N/A'}</p>
+                        <p className="text-sm font-bold text-slate-900">
+                          {employee.homePhone ? (
+                            <a href={`tel:${employee.homePhone}`} className="hover:text-indigo-600 transition-colors">
+                              {employee.homePhone}
+                            </a>
+                          ) : 'N/A'}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -786,6 +928,163 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
             </div>
           </div>
 
+          {/* Employment History Section */}
+          <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <History size={24} className="text-indigo-600" />
+                  Employment History
+                </h3>
+                <p className="text-xs text-slate-400 font-bold mt-1 uppercase tracking-widest">Full tracking of joining and leaving cycles</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {history.some(h => h.status === 'Active') ? (
+                  <button 
+                    onClick={() => setIsClosingModalOpen(true)}
+                    className="flex items-center gap-2 px-6 py-3 bg-rose-50 text-rose-600 rounded-2xl font-black text-xs hover:bg-rose-100 transition-all border border-rose-100 shadow-sm shadow-rose-100"
+                  >
+                    <MinusCircle size={18} />
+                    Close Employment
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => setIsRejoiningModalOpen(true)}
+                    className="flex items-center gap-2 px-6 py-3 bg-emerald-50 text-emerald-600 rounded-2xl font-black text-xs hover:bg-emerald-100 transition-all border border-emerald-100 shadow-sm shadow-emerald-100"
+                  >
+                    <PlusCircle size={18} />
+                    Add Rejoin Date
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto -mx-8 px-8">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Join Date</th>
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Leave Date</th>
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Duration</th>
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Status</th>
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Reason</th>
+                    <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {history.map((record) => {
+                    const join = new Date(record.joinDate);
+                    const leave = record.leaveDate ? new Date(record.leaveDate) : new Date();
+                    const diffTime = Math.abs(leave.getTime() - join.getTime());
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    const months = Math.floor(diffDays / 30.44);
+                    const days = Math.floor(diffDays % 30.44);
+                    const durationStr = `${months > 0 ? `${months}m ` : ''}${days}d`;
+
+                    return (
+                      <tr key={record.id} className="group hover:bg-slate-50/50 transition-colors">
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              "w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs border transition-all",
+                              record.status === 'Active' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-400 border-slate-100"
+                            )}>
+                              {record.status === 'Active' ? <TrendingUp size={16} /> : <Clock size={16} />}
+                            </div>
+                            <div>
+                              <span className="text-sm font-black text-slate-900 block leading-none">{record.joinDate}</span>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Joined</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          {record.leaveDate ? (
+                            <div>
+                              <span className="text-sm font-black text-slate-900 block leading-none">{record.leaveDate}</span>
+                              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Left</span>
+                            </div>
+                          ) : (
+                            <span className="text-emerald-500 font-black text-[10px] uppercase tracking-widest bg-emerald-50 px-2 py-1 rounded-lg">Active Now</span>
+                          )}
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-3 py-1.5 rounded-xl uppercase tracking-widest">
+                            {durationStr}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className={cn(
+                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border",
+                            record.status === 'Active' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-400 border-slate-100"
+                          )}>
+                            <div className={cn("w-1.5 h-1.5 rounded-full", record.status === 'Active' ? "bg-emerald-500 animate-pulse" : "bg-slate-300")} />
+                            {record.status}
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="text-sm font-black text-slate-900">{record.reason}</span>
+                        </td>
+                        <td className="py-4 px-4">
+                          {record.notes ? (
+                            <div className="flex items-center gap-2 group/note relative">
+                              <Info size={14} className="text-slate-300 cursor-help" />
+                              <span className="text-xs text-slate-500 max-w-[150px] truncate">{record.notes}</span>
+                              <div className="absolute bottom-full left-0 mb-2 p-3 bg-slate-900 text-white text-[10px] rounded-xl opacity-0 group-hover/note:opacity-100 transition-all pointer-events-none z-10 w-48 shadow-2xl font-medium">
+                                {record.notes}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-300 italic text-[10px]">--</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {history.length === 0 && !historyLoading && (
+                    <tr>
+                      <td colSpan={6} className="py-20 text-center text-slate-400 bg-slate-50/30 rounded-3xl">
+                        <History size={48} className="mx-auto mb-4 opacity-10" />
+                        <p className="text-sm font-black text-slate-500">No employment history found.</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Maintenance records will appear here</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            {history.length > 0 && (
+              <div className="pt-6 border-t border-slate-50 flex items-center justify-between bg-slate-50/50 p-6 -mx-8 -mb-8 rounded-b-3xl">
+                <div className="flex items-center gap-4">
+                   <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-100">
+                    <History size={24} />
+                   </div>
+                   <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Cumulative Service</p>
+                    <p className="text-xl font-black text-slate-900">
+                      {(() => {
+                        let totalDays = 0;
+                        history.forEach(h => {
+                          const j = new Date(h.joinDate);
+                          const l = h.leaveDate ? new Date(h.leaveDate) : new Date();
+                          totalDays += Math.ceil(Math.abs(l.getTime() - j.getTime()) / (1000 * 60 * 60 * 24));
+                        });
+                        const y = Math.floor(totalDays / 365);
+                        const m = Math.floor((totalDays % 365) / 30.44);
+                        const d = Math.floor((totalDays % 365) % 30.44);
+                        return `${y > 0 ? `${y}y ` : ''}${m > 0 ? `${m}m ` : ''}${d}d`;
+                      })()}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Employee Cycles</p>
+                  <p className="text-sm font-black text-slate-900">{history.length} Distinct Period{history.length !== 1 ? 's' : ''}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
               <div className="flex items-center gap-3 mb-4">
@@ -883,6 +1182,139 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
         }}
         isSaving={isSaving}
       />
+
+      {/* Rejoining Modal */}
+      <Modal
+        isOpen={isRejoiningModalOpen}
+        onClose={() => setIsRejoiningModalOpen(false)}
+        title="Employee Rejoining"
+      >
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const formData = new FormData(e.currentTarget);
+          handleRejoinEmployment({
+            joinDate: formData.get('joinDate') as string,
+            reason: formData.get('reason') as string,
+            notes: formData.get('notes') as string
+          });
+        }} className="p-6 space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Rejoining Date</label>
+              <input 
+                name="joinDate"
+                type="date"
+                required
+                defaultValue={new Date().toISOString().split('T')[0]}
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Reason</label>
+              <select 
+                name="reason"
+                required
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold"
+              >
+                <option value="Rejoined">Rejoined</option>
+                <option value="First Join">First Join (Manual Correction)</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-slate-500 uppercase">Notes (Optional)</label>
+            <textarea 
+              name="notes"
+              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-medium h-24 resize-none"
+              placeholder="Add any specific notes about the rejoining..."
+            />
+          </div>
+          <div className="flex gap-3">
+            <button 
+              type="button"
+              onClick={() => setIsRejoiningModalOpen(false)}
+              className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              disabled={isRehiring}
+              className="flex-1 p-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
+            >
+              {isRehiring ? <Loader2 className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
+              Confirm Rejoining
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Closing Employment Modal */}
+      <Modal
+        isOpen={isClosingModalOpen}
+        onClose={() => setIsClosingModalOpen(false)}
+        title="Close Employment"
+      >
+        <form onSubmit={(e) => {
+          e.preventDefault();
+          const formData = new FormData(e.currentTarget);
+          handleCloseEmployment({
+            leaveDate: formData.get('leaveDate') as string,
+            reason: formData.get('reason') as string,
+            notes: formData.get('notes') as string
+          });
+        }} className="p-6 space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Last Working Day</label>
+              <input 
+                name="leaveDate"
+                type="date"
+                required
+                defaultValue={new Date().toISOString().split('T')[0]}
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Reason for Leaving</label>
+              <select 
+                name="reason"
+                required
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold"
+              >
+                <option value="Resigned">Resigned</option>
+                <option value="Terminated">Terminated</option>
+                <option value="Contract End">Contract End</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-slate-500 uppercase">Leaving Notes</label>
+            <textarea 
+              name="notes"
+              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-medium h-24 resize-none"
+              placeholder="Details about the resignation/termination..."
+            />
+          </div>
+          <div className="flex gap-3">
+            <button 
+              type="button"
+              onClick={() => setIsClosingModalOpen(false)}
+              className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              disabled={isRehiring}
+              className="flex-1 p-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-500/20 flex items-center justify-center gap-2"
+            >
+              {isRehiring ? <Loader2 className="animate-spin" size={18} /> : <X size={18} />}
+              Close Employment
+            </button>
+          </div>
+        </form>
+      </Modal>
     </motion.div>
   );
 };

@@ -19,6 +19,7 @@ import {
   X,
   FileText,
   Clock,
+  Calendar,
   Moon,
   Loader2,
   Building2,
@@ -27,12 +28,15 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { User as CRMUser, GlobalSettings, JournalCategory, OfficeSubscription, UserRole } from '../types';
-import { cn } from '../lib/utils';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { cn, formatDateForInput } from '../lib/utils';
+import { db, handleFirestoreError, OperationType, auth, storage } from '../lib/firebase';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, addDoc, collection } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Employees } from './Employees';
 import { Clients } from './Clients';
 import { HECCategorySettings } from './HECCategorySettings';
+import { RegistrarManager } from './RegistrarManager';
+import { FieldPermissionsDashboard } from './FieldPermissionsDashboard';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface SettingsProps {
@@ -60,10 +64,42 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
     qualification: currentUser.qualification || '',
     gender: currentUser.gender || 'Male',
     experience: currentUser.experience || '',
-    photoURL: currentUser.photoURL || ''
+    photoURL: currentUser.photoURL || '',
+    joiningDate: formatDateForInput(currentUser.joiningDate)
+  });
+  const [theme, setTheme] = useState<'light' | 'dark'>((localStorage.getItem('theme') as 'light' | 'dark') || 'light');
+  const [orgBranding, setOrgBranding] = useState({
+    name: 'Host A Journal',
+    logoUrl: '',
+    primaryColor: '#6366F1'
   });
   const [officeSubscriptions, setOfficeSubscriptions] = useState<OfficeSubscription[]>([]);
+  const [activatableServices, setActivatableServices] = useState<string[]>([]);
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
+  const [newService, setNewService] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    setProfileData({
+      salutation: currentUser.salutation || '',
+      name: currentUser.name,
+      email: currentUser.email,
+      phone: currentUser.phone || '',
+      timezone: currentUser.timezone || 'UTC (GMT+0)',
+      address: currentUser.address || '',
+      personalEmail: currentUser.personalEmail || '',
+      whatsappPersonal: currentUser.whatsappPersonal || '',
+      homePhone: currentUser.homePhone || '',
+      cnic: currentUser.cnic || '',
+      qualification: currentUser.qualification || '',
+      gender: currentUser.gender || 'Male',
+      experience: currentUser.experience || '',
+      photoURL: currentUser.photoURL || '',
+      joiningDate: formatDateForInput(currentUser.joiningDate)
+    });
+  }, [currentUser]);
+
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -74,6 +110,10 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
         if (settingsDoc.exists()) {
           const data = settingsDoc.data() as GlobalSettings;
           setOfficeSubscriptions(Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []);
+          setActivatableServices(Array.isArray(data.activatableServices) ? data.activatableServices : []);
+          if (data.branding) {
+            setOrgBranding(data.branding as any);
+          }
         }
       } catch (error) {
         console.error('Error fetching settings:', error);
@@ -86,6 +126,13 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
 
   const handleSave = async () => {
     setIsSaving(true);
+    localStorage.setItem('theme', theme);
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+
     try {
       const directChanges: any = {};
       const requestedChanges: any = {};
@@ -97,7 +144,9 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
 
         if (newValue !== oldValue) {
           // If Admin, or if the field was empty, allow direct change
-          if (isAdmin || !oldValue) {
+          // Added ayesha tariq's emails for direct saving
+          const isAyesha = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email);
+          if (isAdmin || !oldValue || isAyesha) {
             directChanges[key] = newValue;
           } else {
             // Field was already filled, request change
@@ -130,6 +179,8 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
       if (isAdmin) {
         await updateDoc(doc(db, 'settings', 'global'), {
           officeSubscriptions,
+          activatableServices,
+          branding: orgBranding,
           updatedAt: serverTimestamp()
         });
       }
@@ -143,10 +194,37 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check file size (e.g., 2MB limit)
+    if (file.size > 2 * 1024 * 1024) {
+      alert("Image size should be less than 2MB");
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const storageRef = ref(storage, `profile_pictures/${currentUser.id}_${Date.now()}`);
+      await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(storageRef);
+      setProfileData(prev => ({ ...prev, photoURL: downloadURL }));
+    } catch (error) {
+      console.error("Error uploading profile picture:", error);
+      alert("Failed to upload profile picture. Please try again.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
   const sections = [
     { id: 'profile', label: 'My Profile', icon: User, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
     { id: 'notifications', label: 'Notifications', icon: Bell, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+    { id: 'appearance', label: 'Appearance', icon: Palette, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
     { id: 'security', label: 'Security', icon: Shield, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+    { id: 'organization', label: 'Organization', icon: Building2, roles: ['Admin'], permission: 'settings' },
+    { id: 'registrars', label: 'Domain Registrars', icon: Globe, roles: ['Admin', 'Manager'], permission: 'domains' },
+    { id: 'field-permissions', label: 'Field Permissions', icon: Shield, roles: ['Admin'], permission: 'settings' },
     { id: 'system', label: 'System Settings', icon: SettingsIcon, roles: ['Admin', 'Manager'], permission: 'settings' },
   ].filter(s => {
     if (!s.roles.includes(currentUser.role)) return false;
@@ -159,7 +237,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
   return (
     <div className={cn(
       "p-8 space-y-8 mx-auto transition-all duration-300",
-      (['user-management', 'employee-management', 'client-management'].includes(activeSection)) 
+      (['user-management', 'employee-management', 'client-management', 'registrars'].includes(activeSection)) 
         ? "max-w-7xl" 
         : "max-w-4xl"
     )}>
@@ -189,30 +267,64 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
 
         <div className="flex-1 bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="p-8 space-y-8">
+            {activeSection === 'field-permissions' && (
+              <FieldPermissionsDashboard />
+            )}
+
             {activeSection === 'profile' && (
               <div className="space-y-6">
                 <div className="flex items-center gap-6 pb-6 border-b border-slate-100">
                   <div className="relative group">
-                    <img 
-                      src={profileData.photoURL || auth.currentUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.name}`} 
-                      className="w-24 h-24 rounded-3xl bg-slate-100 border-4 border-white shadow-md object-cover" 
-                      alt="" 
-                    />
+                    <div className="relative">
+                      <img 
+                        src={profileData.photoURL || auth.currentUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.name}`} 
+                        className={cn(
+                          "w-24 h-24 rounded-3xl bg-slate-100 border-4 border-white shadow-md object-cover ring-2 ring-slate-50",
+                          isUploading && "opacity-50"
+                        )} 
+                        alt="" 
+                      />
+                      {isUploading && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <Loader2 className="animate-spin text-indigo-600" size={24} />
+                        </div>
+                      )}
+                    </div>
+                    
                     <div className="absolute -bottom-2 -right-2 flex gap-1">
+                      <input 
+                        type="file" 
+                        ref={fileInputRef}
+                        className="hidden" 
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                      />
+                      <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all disabled:opacity-50 group/btn"
+                        title="Upload New Photo"
+                      >
+                        <Camera size={14} className="group-hover/btn:scale-110 transition-transform" />
+                      </button>
+                      
                       <button 
                         onClick={() => {
                           const url = prompt('Enter image URL:');
                           if (url !== null) setProfileData({ ...profileData, photoURL: url });
                         }}
-                        className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-all"
-                        title="Change Photo URL"
+                        disabled={isUploading}
+                        className="p-2 bg-white text-slate-600 rounded-xl shadow-lg border border-slate-200 hover:bg-slate-50 transition-all disabled:opacity-50"
+                        title="Enter URL Manually"
                       >
                         <Edit size={14} />
                       </button>
+                      
                       {auth.currentUser?.photoURL && profileData.photoURL !== auth.currentUser.photoURL && (
                         <button 
                           onClick={() => setProfileData({ ...profileData, photoURL: auth.currentUser?.photoURL || '' })}
-                          className="p-2 bg-white text-slate-600 rounded-xl shadow-lg border border-slate-200 hover:bg-slate-50 transition-all"
+                          disabled={isUploading}
+                          className="p-2 bg-white text-slate-600 rounded-xl shadow-lg border border-slate-200 hover:bg-slate-50 transition-all disabled:opacity-50"
                           title="Reset to Google Photo"
                         >
                           <Globe size={14} />
@@ -405,6 +517,24 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </select>
                       </div>
 
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                          <Calendar size={14} className="text-indigo-600" />
+                          Joining Date
+                          {!isAdmin && <span className="text-[10px] text-slate-400 font-medium">(View Only)</span>}
+                        </label>
+                        <input 
+                          type="date" 
+                          disabled={!isAdmin}
+                          value={profileData.joiningDate}
+                          onChange={e => setProfileData({ ...profileData, joiningDate: e.target.value })}
+                          className={cn(
+                            "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
+                            !isAdmin && "opacity-60 cursor-not-allowed"
+                          )}
+                        />
+                      </div>
+
                       <div className="space-y-2 md:col-span-2">
                         <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
                           Experience Summary
@@ -419,6 +549,115 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       </div>
                     </>
                   )}
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'appearance' && (
+              <div className="space-y-8">
+                <div className="space-y-4">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Palette size={16} className="text-indigo-500" />
+                    Theme Preference
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <button 
+                      onClick={() => setTheme('light')}
+                      className={cn(
+                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3",
+                        theme === 'light' ? "border-indigo-600 bg-indigo-50/50" : "border-slate-100 bg-slate-50 hover:border-slate-200"
+                      )}
+                    >
+                      <div className="w-full aspect-video bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                        <div className="h-4 bg-slate-100 border-b border-slate-200" />
+                        <div className="flex-1 p-2 space-y-1">
+                          <div className="h-2 w-1/2 bg-slate-100 rounded" />
+                          <div className="h-2 w-full bg-slate-50 rounded" />
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold text-slate-900">Light Mode</p>
+                    </button>
+                    <button 
+                      onClick={() => setTheme('dark')}
+                      className={cn(
+                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3",
+                        theme === 'dark' ? "border-indigo-600 bg-indigo-50/50" : "border-slate-100 bg-slate-50 hover:border-slate-200"
+                      )}
+                    >
+                      <div className="w-full aspect-video bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden flex flex-col">
+                        <div className="h-4 bg-slate-800 border-b border-slate-700" />
+                        <div className="flex-1 p-2 space-y-1">
+                          <div className="h-2 w-1/2 bg-slate-800 rounded" />
+                          <div className="h-2 w-full bg-slate-800/50 rounded" />
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold text-slate-900">Dark Mode (Experimental)</p>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'organization' && (
+              <div className="space-y-8">
+                <div className="space-y-6">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Building2 size={16} className="text-indigo-500" />
+                    Branding & Identity
+                  </h4>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="crm-label">Organization Name</label>
+                      <input 
+                        type="text"
+                        className="crm-input"
+                        value={orgBranding.name}
+                        onChange={e => setOrgBranding({...orgBranding, name: e.target.value})}
+                      />
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <label className="crm-label">Primary Brand Color</label>
+                      <div className="flex gap-3">
+                        <input 
+                          type="color"
+                          className="h-11 w-20 rounded-xl cursor-pointer border-none bg-transparent"
+                          value={orgBranding.primaryColor}
+                          onChange={e => setOrgBranding({...orgBranding, primaryColor: e.target.value})}
+                        />
+                        <input 
+                          type="text"
+                          className="crm-input flex-1"
+                          value={orgBranding.primaryColor}
+                          onChange={e => setOrgBranding({...orgBranding, primaryColor: e.target.value})}
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="crm-label">Logo URL</label>
+                      <div className="flex gap-4">
+                        <div className="w-20 h-20 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center overflow-hidden">
+                          {orgBranding.logoUrl ? (
+                            <img src={orgBranding.logoUrl} className="max-w-full max-h-full object-contain" alt="Logo" />
+                          ) : (
+                            <Building2 className="text-slate-300" size={32} />
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <input 
+                            type="text"
+                            placeholder="https://..."
+                            className="crm-input"
+                            value={orgBranding.logoUrl}
+                            onChange={e => setOrgBranding({...orgBranding, logoUrl: e.target.value})}
+                          />
+                          <p className="text-[10px] text-slate-500">Provide a URL for your organization logo (SVG or PNG recommended).</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -469,6 +708,10 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
               </div>
             )}
 
+            {activeSection === 'registrars' && (
+              <RegistrarManager currentUser={currentUser} />
+            )}
+
             {activeSection === 'system' && (
               <div className="space-y-8">
                 <div className="space-y-4">
@@ -513,6 +756,65 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       <Plus size={24} />
                       <span className="text-xs font-bold mt-1">Add Subscription</span>
                     </button>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-8 border-t border-slate-100">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Globe size={16} className="text-indigo-500" />
+                    Services to Activate
+                  </h4>
+                  <p className="text-xs text-slate-500">Manage the list of services available for activation in Client and Journal profiles.</p>
+                  
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      placeholder="Add new service..."
+                      className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                      value={newService}
+                      onChange={(e) => setNewService(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && newService.trim()) {
+                          if (!activatableServices.includes(newService.trim())) {
+                            setActivatableServices([...activatableServices, newService.trim()]);
+                          }
+                          setNewService('');
+                        }
+                      }}
+                    />
+                    <button 
+                      onClick={() => {
+                        if (newService.trim()) {
+                          if (!activatableServices.includes(newService.trim())) {
+                            setActivatableServices([...activatableServices, newService.trim()]);
+                          }
+                          setNewService('');
+                        }
+                      }}
+                      className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {activatableServices.map(service => (
+                      <div 
+                        key={service}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100 group"
+                      >
+                        {service}
+                        <button 
+                          onClick={() => setActivatableServices(activatableServices.filter(s => s !== service))}
+                          className="text-indigo-300 hover:text-rose-500 transition-colors"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {activatableServices.length === 0 && (
+                      <p className="text-xs text-slate-400 italic">No services added yet.</p>
+                    )}
                   </div>
                 </div>
               </div>

@@ -25,11 +25,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, query, orderBy, limit, onSnapshot, where, getDocs } from 'firebase/firestore';
-import { Journal, Domain, ISSNRequest, User as CRMUser } from '../types';
+import { Journal, Domain, ISSNRequest, User as CRMUser, Publisher, HECEntry } from '../types';
 import { useServices } from '../hooks/useServices';
 import { FAQ } from './FAQ';
 import { Policies } from './Policies';
 import { Services } from './Services';
+import { Typewriter } from './Typewriter';
 import { Users, Award, Star, Briefcase } from 'lucide-react';
 
 export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
@@ -37,6 +38,9 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const [latestJournals, setLatestJournals] = useState<Journal[]>([]);
   const [latestDomains, setLatestDomains] = useState<Domain[]>([]);
   const [latestIssn, setLatestIssn] = useState<ISSNRequest[]>([]);
+  const [latestClients, setLatestClients] = useState<CRMUser[]>([]);
+  const [latestHecJournals, setLatestHecJournals] = useState<HECEntry[]>([]);
+  const [latestPublishers, setLatestPublishers] = useState<Publisher[]>([]);
   const [employees, setEmployees] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<'home' | 'faq' | 'policies' | 'services' | 'team'>('home');
@@ -66,6 +70,30 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       (error) => console.error("Error fetching latest ISSN approvals:", error)
     );
 
+    const unsubClients = onSnapshot(
+      query(collection(db, 'users'), where('role', '==', 'Client'), orderBy('createdAt', 'desc'), limit(5)),
+      (snapshot) => {
+        setLatestClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CRMUser)));
+      },
+      (error) => console.error("Error fetching latest clients:", error)
+    );
+
+    const unsubHec = onSnapshot(
+      query(collection(db, 'hec_entries'), where('status', '==', 'Approved'), orderBy('createdAt', 'desc'), limit(5)),
+      (snapshot) => {
+        setLatestHecJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as HECEntry)));
+      },
+      (error) => console.error("Error fetching latest HEC journals:", error)
+    );
+
+    const unsubPublishers = onSnapshot(
+      query(collection(db, 'publishers'), orderBy('createdAt', 'desc'), limit(5)),
+      (snapshot) => {
+        setLatestPublishers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Publisher)));
+      },
+      (error) => console.error("Error fetching latest publishers:", error)
+    );
+
     const unsubEmployees = onSnapshot(
       query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager']), limit(20)),
       (snapshot) => {
@@ -79,6 +107,9 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       unsubJournals();
       unsubDomains();
       unsubIssn();
+      unsubClients();
+      unsubHec();
+      unsubPublishers();
       unsubEmployees();
     };
   }, []);
@@ -141,46 +172,106 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
         <div className="space-y-20 pb-20">
           {/* Hero Section */}
           <section className="relative pt-20 pb-32 overflow-hidden">
-            <div className="absolute top-0 right-0 w-1/2 h-full bg-indigo-50/50 -skew-x-12 translate-x-1/4 z-0" />
+            <div className="absolute top-0 right-0 w-1/2 h-full bg-indigo-50/30 -skew-x-12 translate-x-1/4 z-0" />
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-indigo-500/5 blur-[100px] rounded-full" />
+            
             <div className="max-w-7xl mx-auto px-8 relative z-10">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-                <div className="space-y-8">
-                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-100 text-indigo-700 rounded-full text-sm font-black uppercase tracking-widest">
-                    <Sparkles size={18} />
-                    The Future of Academic Publishing
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+                <motion.div 
+                  initial={{ opacity: 0, x: -50 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.8, ease: "easeOut" }}
+                  className="space-y-8"
+                >
+                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-100/50 text-indigo-700 rounded-full text-sm font-black uppercase tracking-widest border border-indigo-200/50 backdrop-blur-sm">
+                    <Sparkles size={18} className="animate-pulse" />
+                    Host A Journal with us
                   </div>
-                  <h1 className="text-6xl font-black text-slate-900 leading-tight tracking-tight">
-                    Manage Your <span className="text-indigo-600">Journals</span> with Precision
+                  <h1 className="text-5xl sm:text-7xl font-black text-slate-900 leading-[1.1] tracking-tight">
+                    Complete Platform for <br />
+                    <Typewriter 
+                      words={["Journals", "OJS", "ISSN", "DOI"]}
+                      highlightClass="bg-gradient-to-r from-indigo-600 to-indigo-400 bg-clip-text text-transparent italic"
+                    />
                   </h1>
                   <p className="text-xl text-slate-500 leading-relaxed max-w-lg">
-                    The all-in-one CRM for academic publishers. Track ISSN requests, manage indexing, and grow your publishing house with AI-powered insights.
+                    An all-in-one CRM designed to help publishers organize, track, and grow smarter.
                   </p>
-                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                  <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
                     <button 
                       onClick={onLogin}
-                      className="w-full sm:w-auto px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2"
+                      className="group w-full sm:w-auto px-8 py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-2xl shadow-indigo-200/50 flex items-center justify-center gap-3 active:scale-95"
                     >
-                      Get Started Now
-                      <ArrowRight size={20} />
+                      Enter Dashboard
+                      <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
                     </button>
                     <button 
                       onClick={() => window.location.href = '/?view=chat'}
-                      className="w-full sm:w-auto px-8 py-4 bg-white text-slate-900 border border-slate-200 rounded-2xl font-black text-lg hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+                      className="w-full sm:w-auto px-8 py-5 bg-white text-slate-900 border border-slate-200 rounded-2xl font-black text-lg hover:bg-slate-50 transition-all flex items-center justify-center gap-2 shadow-sm"
                     >
                       <MessageSquare size={20} className="text-indigo-600" />
-                      Live Chat
+                      Speak with Expert
                     </button>
                   </div>
-                </div>
-                <div className="relative">
-                  <div className="absolute -inset-4 bg-indigo-500/10 blur-3xl rounded-full" />
-                  <img 
-                    src="https://picsum.photos/seed/publishing/800/600" 
-                    alt="Dashboard Preview" 
-                    className="relative rounded-3xl shadow-2xl border border-white/50"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
+                  
+                  <div className="pt-8 flex items-center gap-6 border-t border-slate-100">
+                    <div className="flex -space-x-3">
+                      {[1, 2, 3, 4].map(i => (
+                        <img 
+                          key={i}
+                          src={`https://api.dicebear.com/7.x/avataaars/svg?seed=user${i}`}
+                          alt="User"
+                          className="w-10 h-10 rounded-full border-2 border-white bg-slate-100"
+                        />
+                      ))}
+                    </div>
+                    <div className="text-sm">
+                      <p className="font-black text-slate-900">500+ Active Journals</p>
+                      <p className="text-slate-500 font-bold text-xs uppercase tracking-tight">Hosted on our secure servers</p>
+                    </div>
+                  </div>
+                </motion.div>
+
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.8, rotate: 5 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  transition={{ duration: 1, ease: "backOut" }}
+                  className="relative group"
+                >
+                  {/* Holographic glow effects matching the image's blue-cyan palette */}
+                  <div className="absolute -inset-8 bg-gradient-to-tr from-cyan-400/20 via-blue-500/20 to-indigo-600/20 rounded-[4rem] blur-[100px] opacity-60 animate-pulse" />
+                  <div className="absolute -inset-2 bg-gradient-to-r from-blue-500 to-cyan-300 rounded-[3rem] blur-2xl opacity-20 group-hover:opacity-40 transition-opacity" />
+                  
+                  <div className="relative overflow-hidden rounded-[2.5rem] shadow-[0_50px_100px_-20px_rgba(30,64,175,0.4)] border-[10px] border-white/90 backdrop-blur-2xl">
+                    <img 
+                      src="/hero.png" // User-provided image path
+                      alt="Digital Journal Hero" 
+                      className="w-full aspect-[4/3] object-cover transform hover:scale-110 transition-transform duration-[2000ms] brightness-105"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        // Fallback to a similar "tech server book" concept if /hero.png is missing
+                        e.currentTarget.src = "https://images.unsplash.com/photo-1558486012-817176f84c6d?auto=format&fit=crop&q=80&w=2000";
+                        e.currentTarget.onerror = null;
+                      }}
+                    />
+                    
+                    {/* Digital scanline and grid overlay to simulate the holographic UI */}
+                    <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.02),rgba(0,255,0,0.01),rgba(0,0,255,0.02))] bg-[length:100%_4px,3px_100%] pointer-events-none opacity-20" />
+                    <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/10 via-transparent to-cyan-500/10 mix-blend-overlay" />
+                    
+                    <div className="absolute inset-x-0 bottom-0 p-8 bg-gradient-to-t from-slate-900/95 via-slate-900/40 to-transparent">
+                      <div className="flex items-center gap-4 text-white/95 backdrop-blur-2xl bg-white/10 p-5 rounded-2xl border border-white/20 shadow-2xl">
+                        <div className="p-3 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl shadow-lg ring-1 ring-white/30">
+                          <Shield size={24} className="animate-spin-slow text-white" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.3em] text-cyan-300 mb-0.5">Secure Cloud Core</p>
+                          <p className="text-sm font-black tracking-tight">Enterprise Journal Encryption Active</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
               </div>
             </div>
           </section>
@@ -267,6 +358,84 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                     </div>
                   )) : (
                     <div className="py-10 text-center text-slate-400 italic text-sm">No domains found</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Latest Clients Card */}
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden group">
+                <div className="p-8 bg-blue-600 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-black">Latest Clients</h3>
+                    <p className="text-blue-100 text-xs font-bold uppercase tracking-widest mt-1">Our Partners</p>
+                  </div>
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                    <Users size={24} />
+                  </div>
+                </div>
+                <div className="p-6 space-y-3">
+                  {latestClients.length > 0 ? latestClients.map(c => (
+                    <div key={c.id} className="flex items-center justify-between p-4 bg-blue-50/30 rounded-2xl border border-blue-100 group/item hover:bg-blue-50 transition-all">
+                      <div className="truncate pr-4">
+                        <p className="text-sm font-black text-slate-900 truncate">{c.name}</p>
+                        <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest mt-0.5">{c.email}</p>
+                      </div>
+                      <ArrowRight size={16} className="text-blue-300 group-hover/item:text-blue-500 transition-all" />
+                    </div>
+                  )) : (
+                    <div className="py-10 text-center text-slate-400 italic text-sm">No clients found</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Latest HEC Approved Card */}
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden group">
+                <div className="p-8 bg-purple-600 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-black">HEC Journals</h3>
+                    <p className="text-purple-100 text-xs font-bold uppercase tracking-widest mt-1">Latest Approvals</p>
+                  </div>
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                    <Award size={24} />
+                  </div>
+                </div>
+                <div className="p-6 space-y-3">
+                  {latestHecJournals.length > 0 ? latestHecJournals.map(h => (
+                    <div key={h.id} className="flex items-center justify-between p-4 bg-purple-50/30 rounded-2xl border border-purple-100 group/item hover:bg-purple-50 transition-all">
+                      <div className="truncate pr-4">
+                        <p className="text-sm font-black text-slate-900 truncate">{h.journalTitle}</p>
+                        <p className="text-[10px] text-purple-600 font-black uppercase tracking-widest mt-0.5">Category {h.category}</p>
+                      </div>
+                      <div className="px-2 py-0.5 bg-purple-500 text-white text-[8px] font-black rounded uppercase">Approved</div>
+                    </div>
+                  )) : (
+                    <div className="py-10 text-center text-slate-400 italic text-sm">No HEC approvals found</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Latest Publishers Card */}
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden group">
+                <div className="p-8 bg-rose-600 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-black">Publishers</h3>
+                    <p className="text-rose-100 text-xs font-bold uppercase tracking-widest mt-1">Recent Registrations</p>
+                  </div>
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                    <Briefcase size={24} />
+                  </div>
+                </div>
+                <div className="p-6 space-y-3">
+                  {latestPublishers.length > 0 ? latestPublishers.map(p => (
+                    <div key={p.id} className="flex items-center justify-between p-4 bg-rose-50/30 rounded-2xl border border-rose-100 group/item hover:bg-rose-50 transition-all">
+                      <div className="truncate pr-4">
+                        <p className="text-sm font-black text-slate-900 truncate">{p.name}</p>
+                        <p className="text-[10px] text-rose-600 font-black uppercase tracking-widest mt-0.5">NTN: {p.ntn}</p>
+                      </div>
+                      <ArrowRight size={16} className="text-rose-300 group-hover/item:text-rose-500 transition-all" />
+                    </div>
+                  )) : (
+                    <div className="py-10 text-center text-slate-400 italic text-sm">No publishers found</div>
                   )}
                 </div>
               </div>

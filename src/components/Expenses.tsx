@@ -19,7 +19,8 @@ import {
   PieChart as PieChartIcon,
   BarChart3,
   TrendingDown,
-  Settings2
+  Settings2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Expense, User as UserType, GlobalSettings, OfficeSubscription } from '../types';
@@ -28,6 +29,7 @@ import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/fir
 import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, deleteDoc, doc, Timestamp, updateDoc, getDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
+import { SearchableSelect } from './ui/SearchableSelect';
 import { Shield } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 import { ConfigModal } from './ConfigModal';
@@ -39,9 +41,11 @@ interface ExpensesProps {
 const AVAILABLE_COLUMNS = [
   { id: 'head', label: 'Expense Head' },
   { id: 'date', label: 'Date' },
+  { id: 'endDate', label: 'End Date' },
   { id: 'amount', label: 'Amount' },
   { id: 'tax', label: 'Tax' },
   { id: 'total', label: 'Total' },
+  { id: 'nextDueDate', label: 'Next Due' },
   { id: 'attachment', label: 'Attachment' },
 ];
 
@@ -58,20 +62,22 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
   const [expenseHeads, setExpenseHeads] = useState<string[]>([]);
   const [officeSubscriptions, setOfficeSubscriptions] = useState<OfficeSubscription[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['expenses'] || ['head', 'date', 'amount', 'tax', 'total', 'attachment']
+    currentUser.columnPreferences?.['expenses'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
 
   // Form state
   const [newExpense, setNewExpense] = useState({
     head: '',
     date: new Date().toISOString().split('T')[0],
+    endDate: '',
     amount: 0,
     currency: 'USD' as 'USD' | 'PKR',
     taxAmount: 0,
     attachmentUrl: '',
     notes: '',
     isRecurring: false,
-    recurringInterval: 'monthly' as 'monthly' | 'quarterly' | 'yearly'
+    recurringInterval: 'monthly' as 'monthly' | 'quarterly' | 'yearly' | 'custom',
+    recurringCustomDays: 30
   });
 
   const [uploading, setUploading] = useState(false);
@@ -146,12 +152,40 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
     reader.readAsDataURL(file);
   };
 
+  const calculateNextDueDate = (startDate: string, interval: 'monthly' | 'quarterly' | 'yearly' | 'custom', customDays?: number): string => {
+    const date = new Date(startDate);
+    switch (interval) {
+      case 'monthly':
+        date.setMonth(date.getMonth() + 1);
+        break;
+      case 'quarterly':
+        date.setMonth(date.getMonth() + 3);
+        break;
+      case 'yearly':
+        date.setFullYear(date.getFullYear() + 1);
+        break;
+      case 'custom':
+        if (customDays) {
+          date.setDate(date.getDate() + customDays);
+        } else {
+          date.setMonth(date.getMonth() + 1);
+        }
+        break;
+    }
+    return date.toISOString().split('T')[0];
+  };
+
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const nextDueDate = newExpense.isRecurring 
+        ? calculateNextDueDate(newExpense.date, newExpense.recurringInterval, newExpense.recurringCustomDays)
+        : null;
+
       await addDoc(collection(db, 'expenses'), {
         ...newExpense,
         date: Timestamp.fromDate(new Date(newExpense.date)),
+        nextDueDate,
         createdAt: new Date().toISOString(),
         createdBy: currentUser.name,
         createdById: currentUser.id,
@@ -164,14 +198,52 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
       setNewExpense({
         head: '',
         date: new Date().toISOString().split('T')[0],
+        endDate: '',
         amount: 0,
         currency: 'USD',
         taxAmount: 0,
         attachmentUrl: '',
         notes: '',
         isRecurring: false,
-        recurringInterval: 'monthly'
+        recurringInterval: 'monthly',
+        recurringCustomDays: 30
       });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    }
+  };
+
+  const handleRenewExpense = async (expense: Expense) => {
+    if (!confirm(`Renew this expense? A new entry will be generated for ${expense.nextDueDate || 'the next period'}.`)) return;
+
+    try {
+      const nextStartDate = expense.nextDueDate || new Date().toISOString().split('T')[0];
+      const nextDueDate = calculateNextDueDate(
+        nextStartDate, 
+        expense.recurringInterval || 'monthly', 
+        expense.recurringCustomDays
+      );
+
+      await addDoc(collection(db, 'expenses'), {
+        head: expense.head,
+        amount: expense.amount,
+        currency: expense.currency,
+        taxAmount: expense.taxAmount,
+        notes: `Renewal of ${expense.id}. ${expense.notes || ''}`,
+        isRecurring: true,
+        recurringInterval: expense.recurringInterval,
+        recurringCustomDays: expense.recurringCustomDays,
+        date: Timestamp.fromDate(new Date(nextStartDate)),
+        nextDueDate,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.name,
+        createdById: currentUser.id,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.name,
+        updatedById: currentUser.id,
+        isVerified: false
+      });
+      alert('Renewal expense generated successfully.');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'expenses');
     }
@@ -220,6 +292,14 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
     const now = new Date();
     const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     return diffDays <= 30; // Expiring within 30 days
+  });
+
+  const expiringExpenses = expenses.filter(expense => {
+    if (!expense.endDate) return false;
+    const expDate = new Date(expense.endDate);
+    const today = new Date();
+    const diff = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    return diff >= 0 && diff <= 30; // Count as expiring within 30 days for summary
   });
 
   const totalUSD = filteredExpenses
@@ -290,7 +370,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
             >
               <Clock size={16} />
               Subscriptions
-              {expiringSubscriptions.length > 0 && (
+              {(expiringSubscriptions.length > 0 || expiringExpenses.length > 0) && (
                 <span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse" />
               )}
             </button>
@@ -457,6 +537,79 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
               </div>
             )}
           </div>
+
+          {expenses.filter(e => e.isRecurring).length > 0 && (
+            <div className="space-y-6 pt-10">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-slate-900">Service & Recurring Expenses</h3>
+                <div className="bg-amber-50 text-amber-600 px-3 py-1 rounded-full text-xs font-bold">
+                  {expiringExpenses.length} Expiring Soon
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {expenses.filter(e => e.isRecurring).map(expense => {
+                  const isExpiring = expense.endDate && (() => {
+                    const expDate = new Date(expense.endDate);
+                    const today = new Date();
+                    const diff = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    return diff >= 0 && diff <= 30;
+                  })();
+                  const isExpired = expense.endDate && new Date(expense.endDate) < new Date();
+
+                  return (
+                    <div key={expense.id} className={cn(
+                      "p-6 bg-white rounded-3xl border shadow-sm space-y-4 relative overflow-hidden",
+                      isExpired ? "border-rose-200 bg-rose-50/10" : isExpiring ? "border-amber-200" : "border-slate-100"
+                    )}>
+                      {isExpired ? (
+                        <div className="absolute top-0 right-0 bg-rose-500 text-white px-3 py-1 rounded-bl-2xl text-[10px] font-black uppercase tracking-wider">
+                          Expired
+                        </div>
+                      ) : isExpiring && (
+                        <div className="absolute top-0 right-0 bg-amber-500 text-white px-3 py-1 rounded-bl-2xl text-[10px] font-black uppercase tracking-wider">
+                          Expiring
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center gap-4">
+                        <div className={cn(
+                          "w-12 h-12 rounded-2xl flex items-center justify-center",
+                          isExpired ? "bg-rose-100 text-rose-600" : isExpiring ? "bg-amber-100 text-amber-600" : "bg-indigo-100 text-indigo-600"
+                        )}>
+                          <FileText size={24} />
+                        </div>
+                        <div>
+                          <h4 className="font-black text-slate-900">{expense.head}</h4>
+                          <p className="text-xs text-slate-400 font-medium">Recurring Expense</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+                        <div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Interval</p>
+                          <p className="text-sm font-bold text-slate-700 capitalize">{expense.recurringInterval}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Next Due</p>
+                          <p className="text-sm font-black text-indigo-600">{expense.nextDueDate || '-'}</p>
+                        </div>
+                      </div>
+
+                      {(isExpired || isExpiring || expense.nextDueDate) && isAdmin && (
+                        <button
+                          onClick={() => handleRenewExpense(expense)}
+                          className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
+                        >
+                          <RefreshCw size={14} />
+                          Renew Subscription
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -505,119 +658,181 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     <AnimatePresence mode="popLayout">
-                      {filteredExpenses.map((expense) => (
-                        <motion.tr 
-                          layout
-                          key={expense.id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          className="hover:bg-slate-50/50 transition-all group"
-                        >
-                          {selectedColumns.includes('head') && (
-                            <td className="px-6 py-4">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center">
-                                  <FileText size={16} />
+                      {filteredExpenses.map((expense) => {
+                        const isExpiring = expense.endDate && (() => {
+                          const expDate = new Date(expense.endDate);
+                          const today = new Date();
+                          const diff = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                          return diff >= 0 && diff <= 7;
+                        })();
+
+                        const isExpired = expense.endDate && new Date(expense.endDate) < new Date();
+
+                        return (
+                          <motion.tr 
+                            layout
+                            key={expense.id}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className={cn(
+                              "hover:bg-slate-50/50 transition-all group border-l-4",
+                              isExpired ? "border-l-rose-500 bg-rose-50/20" : 
+                              isExpiring ? "border-l-amber-500 bg-amber-50/20" : "border-l-transparent"
+                            )}
+                          >
+                            {selectedColumns.includes('head') && (
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-3">
+                                  <div className={cn(
+                                    "w-8 h-8 rounded-lg flex items-center justify-center",
+                                    isExpired ? "bg-rose-100 text-rose-600" : 
+                                    isExpiring ? "bg-amber-100 text-amber-600" : "bg-slate-100 text-slate-600"
+                                  )}>
+                                    <FileText size={16} />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-bold text-sm text-slate-900">{expense.head}</p>
+                                      {expense.isRecurring && (
+                                        <div title={`Recurring: ${expense.recurringInterval}`}>
+                                          <Clock size={12} className="text-indigo-500" />
+                                        </div>
+                                      )}
+                                    </div>
+                                    {expense.notes && <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{expense.notes}</p>}
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="font-bold text-sm text-slate-900">{expense.head}</p>
-                                  {expense.notes && <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{expense.notes}</p>}
+                              </td>
+                            )}
+                            {selectedColumns.includes('date') && (
+                              <td className="px-6 py-4">
+                                <div className="flex items-center gap-2 text-sm text-slate-600 font-medium">
+                                  <Calendar size={14} className="text-slate-400" />
+                                  {expense.date}
                                 </div>
+                              </td>
+                            )}
+                            {selectedColumns.includes('endDate') && (
+                              <td className="px-6 py-4">
+                                {expense.endDate ? (
+                                  <div className={cn(
+                                    "flex items-center gap-2 text-sm font-bold",
+                                    isExpired ? "text-rose-600" : isExpiring ? "text-amber-600" : "text-slate-600"
+                                  )}>
+                                    <Clock size={14} className="opacity-50" />
+                                    {expense.endDate}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-300">-</span>
+                                )}
+                              </td>
+                            )}
+                            {selectedColumns.includes('amount') && (
+                              <td className="px-6 py-4">
+                                <span className="text-sm font-bold text-slate-900">
+                                  {expense.currency === 'USD' ? '$' : 'Rs. '}{(expense.amount || 0).toLocaleString()}
+                                </span>
+                              </td>
+                            )}
+                            {selectedColumns.includes('tax') && (
+                              <td className="px-6 py-4">
+                                <span className="text-sm text-slate-500">
+                                  {expense.currency === 'USD' ? '$' : 'Rs. '}{(expense.taxAmount || 0).toLocaleString()}
+                                </span>
+                              </td>
+                            )}
+                            {selectedColumns.includes('total') && (
+                              <td className="px-6 py-4">
+                                <span className="text-sm font-bold text-indigo-600">
+                                  {expense.currency === 'USD' ? '$' : 'Rs. '}{((expense.amount || 0) + (expense.taxAmount || 0)).toLocaleString()}
+                                </span>
+                              </td>
+                            )}
+                            {selectedColumns.includes('nextDueDate') && (
+                              <td className="px-6 py-4">
+                                {expense.nextDueDate ? (
+                                  <div className="flex flex-col">
+                                    <span className="text-[10px] font-black uppercase text-indigo-400">Next Due</span>
+                                    <span className="text-xs font-bold text-slate-600">{expense.nextDueDate}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-300">-</span>
+                                )}
+                              </td>
+                            )}
+                            {selectedColumns.includes('attachment') && (
+                              <td className="px-6 py-4">
+                                {expense.attachmentUrl ? (
+                                  <a 
+                                    href={expense.attachmentUrl} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg transition-all"
+                                  >
+                                    <ImageIcon size={14} />
+                                    View
+                                    <ExternalLink size={10} />
+                                  </a>
+                                ) : (
+                                  <span className="text-xs text-slate-400 italic">No attachment</span>
+                                )}
+                              </td>
+                            )}
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                {(isExpiring || isExpired || expense.nextDueDate) && isAdmin && (
+                                  <button 
+                                    onClick={() => handleRenewExpense(expense)}
+                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                    title="Renew / Regenerate Expense"
+                                  >
+                                    <RefreshCw size={16} />
+                                  </button>
+                                )}
+                                {!expense.isVerified && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
+                                  <button 
+                                    onClick={() => handleVerifyExpense(expense.id)}
+                                    className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
+                                    title="Mark as Verified"
+                                  >
+                                    <Shield size={16} />
+                                  </button>
+                                )}
+                                {isAdmin && (
+                                  <button 
+                                    onClick={() => handleDeleteExpense(expense)}
+                                    disabled={expense.isVerified && currentUser.role !== 'Admin'}
+                                    className={cn(
+                                      "p-2 rounded-lg transition-all",
+                                      expense.isVerified && currentUser.role !== 'Admin'
+                                        ? "text-slate-200 cursor-not-allowed"
+                                        : "text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                    )}
+                                    title={expense.isVerified && currentUser.role !== 'Admin' ? "Only Admins can delete verified entries" : "Delete Expense"}
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => {
+                                    // For now, we'll just show the notes in an alert if they exist
+                                    if (expense.notes) {
+                                      alert(`Expense Notes: ${expense.notes}`);
+                                    } else {
+                                      alert('No additional notes for this expense.');
+                                    }
+                                  }}
+                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                  title="View Notes"
+                                >
+                                  <MoreHorizontal size={16} />
+                                </button>
                               </div>
                             </td>
-                          )}
-                          {selectedColumns.includes('date') && (
-                            <td className="px-6 py-4">
-                              <div className="flex items-center gap-2 text-sm text-slate-600 font-medium">
-                                <Calendar size={14} className="text-slate-400" />
-                                {expense.date}
-                              </div>
-                            </td>
-                          )}
-                          {selectedColumns.includes('amount') && (
-                            <td className="px-6 py-4">
-                              <span className="text-sm font-bold text-slate-900">
-                                {expense.currency === 'USD' ? '$' : 'Rs. '}{(expense.amount || 0).toLocaleString()}
-                              </span>
-                            </td>
-                          )}
-                          {selectedColumns.includes('tax') && (
-                            <td className="px-6 py-4">
-                              <span className="text-sm text-slate-500">
-                                {expense.currency === 'USD' ? '$' : 'Rs. '}{(expense.taxAmount || 0).toLocaleString()}
-                              </span>
-                            </td>
-                          )}
-                          {selectedColumns.includes('total') && (
-                            <td className="px-6 py-4">
-                              <span className="text-sm font-bold text-indigo-600">
-                                {expense.currency === 'USD' ? '$' : 'Rs. '}{((expense.amount || 0) + (expense.taxAmount || 0)).toLocaleString()}
-                              </span>
-                            </td>
-                          )}
-                          {selectedColumns.includes('attachment') && (
-                            <td className="px-6 py-4">
-                              {expense.attachmentUrl ? (
-                                <a 
-                                  href={expense.attachmentUrl} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg transition-all"
-                                >
-                                  <ImageIcon size={14} />
-                                  View
-                                  <ExternalLink size={10} />
-                                </a>
-                              ) : (
-                                <span className="text-xs text-slate-400 italic">No attachment</span>
-                              )}
-                            </td>
-                          )}
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              {!expense.isVerified && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
-                                <button 
-                                  onClick={() => handleVerifyExpense(expense.id)}
-                                  className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
-                                  title="Mark as Verified"
-                                >
-                                  <Shield size={16} />
-                                </button>
-                              )}
-                              {isAdmin && (
-                                <button 
-                                  onClick={() => handleDeleteExpense(expense)}
-                                  disabled={expense.isVerified && currentUser.role !== 'Admin'}
-                                  className={cn(
-                                    "p-2 rounded-lg transition-all",
-                                    expense.isVerified && currentUser.role !== 'Admin'
-                                      ? "text-slate-200 cursor-not-allowed"
-                                      : "text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                                  )}
-                                  title={expense.isVerified && currentUser.role !== 'Admin' ? "Only Admins can delete verified entries" : "Delete Expense"}
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              )}
-                              <button 
-                                onClick={() => {
-                                  // For now, we'll just show the notes in an alert if they exist
-                                  if (expense.notes) {
-                                    alert(`Expense Notes: ${expense.notes}`);
-                                  } else {
-                                    alert('No additional notes for this expense.');
-                                  }
-                                }}
-                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                title="View Notes"
-                              >
-                                <MoreHorizontal size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </motion.tr>
-                      ))}
+                          </motion.tr>
+                        );
+                      })}
                     </AnimatePresence>
                   </tbody>
                 </table>
@@ -634,18 +849,14 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
       >
         <form onSubmit={handleAddExpense} className="space-y-4">
           <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">Expense Head (Category)</label>
-            <select 
+            <SearchableSelect
+              label="Expense Head (Category)"
               required
-              className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+              options={expenseHeads.map(head => ({ label: head, value: head }))}
               value={newExpense.head}
-              onChange={e => setNewExpense(prev => ({ ...prev, head: e.target.value }))}
-            >
-              <option value="">Select Category</option>
-              {expenseHeads.map(head => (
-                <option key={head} value={head}>{head}</option>
-              ))}
-            </select>
+              onChange={value => setNewExpense(prev => ({ ...prev, head: value }))}
+              placeholder="Select Category"
+            />
           </div>
 
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
@@ -670,32 +881,47 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
             </div>
 
             {newExpense.isRecurring && (
-              <div className="grid grid-cols-1 gap-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Interval</label>
-                <div className="flex gap-2">
-                  {['monthly', 'quarterly', 'yearly'].map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      onClick={() => setNewExpense(prev => ({ ...prev, recurringInterval: interval as any }))}
-                      className={cn(
-                        "flex-1 py-2 rounded-lg text-xs font-bold capitalize transition-all",
-                        newExpense.recurringInterval === interval 
-                          ? "bg-indigo-600 text-white" 
-                          : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}
-                    >
-                      {interval}
-                    </button>
-                  ))}
+              <div className="space-y-4 pt-2">
+                <div className="grid grid-cols-1 gap-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Interval</label>
+                  <div className="flex flex-wrap gap-2">
+                    {['monthly', 'quarterly', 'yearly', 'custom'].map((interval) => (
+                      <button
+                        key={interval}
+                        type="button"
+                        onClick={() => setNewExpense(prev => ({ ...prev, recurringInterval: interval as any }))}
+                        className={cn(
+                          "flex-1 py-1.5 px-3 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                          newExpense.recurringInterval === interval 
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" 
+                            : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        {interval}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {newExpense.recurringInterval === 'custom' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Custom Frequency (Days)</label>
+                    <input 
+                      type="number"
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                      placeholder="e.g. 15"
+                      value={newExpense.recurringCustomDays}
+                      onChange={e => setNewExpense(prev => ({ ...prev, recurringCustomDays: Number(e.target.value) }))}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Date</label>
+              <label className="text-sm font-bold text-slate-700">Start Date</label>
               <input 
                 required
                 type="date" 
@@ -705,16 +931,27 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Currency</label>
-              <select 
+              <label className="text-sm font-bold text-slate-700">End Date (Expiry)</label>
+              <input 
+                type="date" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newExpense.currency}
-                onChange={e => setNewExpense(prev => ({ ...prev, currency: e.target.value as 'USD' | 'PKR' }))}
-              >
-                <option value="USD">USD ($)</option>
-                <option value="PKR">PKR (Rs.)</option>
-              </select>
+                value={newExpense.endDate}
+                onChange={e => setNewExpense(prev => ({ ...prev, endDate: e.target.value }))}
+              />
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <SearchableSelect
+              label="Currency"
+              required
+              options={[
+                { label: "USD ($)", value: "USD" },
+                { label: "PKR (Rs.)", value: "PKR" }
+              ]}
+              value={newExpense.currency}
+              onChange={value => setNewExpense(prev => ({ ...prev, currency: value as 'USD' | 'PKR' }))}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

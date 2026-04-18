@@ -22,10 +22,10 @@ import {
   Loader2,
   RefreshCw
 } from 'lucide-react';
-import { User as CRMUser, UserPermissions, ModulePermissions } from '../types';
+import { User as CRMUser, UserPermissions, ModulePermissions, EmploymentPeriod } from '../types';
 import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
-import { cn } from '../lib/utils';
+import { cn, formatDateForInput } from '../lib/utils';
 import { HelpIcon } from './HelpIcon';
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -47,8 +47,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
     department: employee.department || '',
     assignments: employee.assignments || '',
     qualification: employee.qualification || '',
-    joiningDate: employee.joiningDate ? (typeof employee.joiningDate === 'string' ? employee.joiningDate.split('T')[0] : '') : '',
-    endingDate: employee.endingDate ? (typeof employee.endingDate === 'string' ? employee.endingDate.split('T')[0] : '') : '',
+    joiningDate: formatDateForInput(employee.joiningDate),
+    endingDate: formatDateForInput(employee.endingDate),
     experience: employee.experience || '',
     gender: employee.gender || '',
     officialMail: employee.officialMail || '',
@@ -60,6 +60,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
     address: employee.address || '',
     remarks: employee.remarks || '',
     portalEnabled: employee.portalEnabled ?? false,
+    isActive: employee.isActive ?? true,
+    isHidden: employee.isHidden ?? false,
     photoURL: employee.photoURL || '',
     pcAllotted: employee.pcAllotted || '',
     pcUsername: employee.pcUsername || '',
@@ -156,12 +158,17 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
   const handleRehire = () => {
     if (!formData.endingDate) return;
     
-    const newHistory = [
+    const newHistory: EmploymentPeriod[] = [
       ...formData.employmentHistory,
       {
-        joiningDate: formData.joiningDate,
-        endingDate: formData.endingDate,
-        remarks: formData.remarks
+        id: crypto.randomUUID(),
+        employeeId: employee.id || '',
+        joinDate: formData.joiningDate,
+        leaveDate: formData.endingDate,
+        status: 'Closed',
+        reason: 'Resigned', // Default reason for history before rehire
+        notes: formData.remarks,
+        createdAt: new Date().toISOString()
       }
     ];
 
@@ -174,21 +181,15 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
     }));
   };
 
-  const generateEmployeeId = async (joiningDate: string) => {
-    if (!joiningDate) return;
-    
-    const dateStr = joiningDate.replace(/-/g, ''); // YYYYMMDD
-    const prefix = `EMP-${dateStr}-`;
-    
+  const generateEmployeeId = async () => {
     try {
       const q = query(
         collection(db, 'users'), 
-        where('employeeId', '>=', prefix),
-        where('employeeId', '<=', prefix + '\uf8ff')
+        where('role', 'in', ['Employee', 'Manager'])
       );
       const snapshot = await getDocs(q);
-      const count = snapshot.size + 1;
-      const newId = `${prefix}${count.toString().padStart(3, '0')}`;
+      const nextNumber = snapshot.size + 1;
+      const newId = `Emp-${nextNumber.toString().padStart(3, '0')}`;
       
       setFormData(prev => ({ ...prev, employeeId: newId }));
     } catch (error) {
@@ -204,7 +205,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
     setError(null);
 
     // Restriction: Only admin can add/edit employees with gmail address
-    const isSystemAdmin = currentUser.role === 'Admin' || currentUser.email === 'irfanbcom2009@gmail.com';
+    const isSystemAdmin = currentUser.role === 'Admin' || 
+                         ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser.email);
     
     if (formData.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
       setError("Only administrators can manage records with @gmail.com addresses.");
@@ -297,7 +299,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   </label>
                   <button 
                     type="button"
-                    onClick={() => generateEmployeeId(formData.joiningDate)}
+                    onClick={() => generateEmployeeId()}
                     className="text-[8px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider flex items-center gap-1"
                   >
                     <RefreshCw size={8} />
@@ -418,11 +420,50 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   />
                 </button>
                 <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                  {formData.portalEnabled ? 'Enabled' : 'Disabled'}
+                  Portal: {formData.portalEnabled ? 'On' : 'Off'}
                 </span>
-                {!check('employees', 'edit') && (
-                  <span className="text-[10px] text-rose-500 font-bold uppercase tracking-tight">Admin Only</span>
-                )}
+                
+                <button
+                  type="button"
+                  disabled={!check('employees', 'edit')}
+                  onClick={() => setFormData(prev => ({ ...prev, isActive: !prev.isActive }))}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                    formData.isActive ? "bg-emerald-600" : "bg-slate-200",
+                    !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                      formData.isActive ? "translate-x-6" : "translate-x-1"
+                    )}
+                  />
+                </button>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  Active: {formData.isActive ? 'Yes' : 'No'}
+                </span>
+
+                <button
+                  type="button"
+                  disabled={!check('employees', 'edit')}
+                  onClick={() => setFormData(prev => ({ ...prev, isHidden: !prev.isHidden }))}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                    formData.isHidden ? "bg-rose-600" : "bg-slate-200",
+                    !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                      formData.isHidden ? "translate-x-6" : "translate-x-1"
+                    )}
+                  />
+                </button>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  Hidden: {formData.isHidden ? 'Yes' : 'No'}
+                </span>
               </div>
             </div>
             <div className="space-y-1">
@@ -635,16 +676,16 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   <div className="flex items-center gap-4">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase">Joined</span>
-                      <span className="font-bold text-slate-700">{period.joiningDate}</span>
+                      <span className="font-bold text-slate-700">{period.joinDate}</span>
                     </div>
                     <div className="flex flex-col">
                       <span className="text-[10px] font-bold text-slate-400 uppercase">Left</span>
-                      <span className="font-bold text-slate-700">{period.endingDate || 'Present'}</span>
+                      <span className="font-bold text-slate-700">{period.leaveDate || 'Present'}</span>
                     </div>
                   </div>
-                  {period.remarks && (
+                  {period.notes && (
                     <div className="flex-1 ml-8 text-slate-500 italic truncate max-w-md">
-                      {period.remarks}
+                      {period.notes}
                     </div>
                   )}
                 </div>

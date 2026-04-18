@@ -6,6 +6,7 @@ import {
   ChevronUp, 
   BookOpen, 
   Shield, 
+  ShieldCheck,
   Globe, 
   DollarSign, 
   FileText,
@@ -27,75 +28,111 @@ const FAQ_DATA = [
       {
         id: 'g1',
         question: 'What is Host A Journal CRM?',
-        answer: 'Host A Journal CRM is a comprehensive management system designed for academic publishers to track journals, ISSN requests, HEC applications, and client interactions efficiently. It centralizes all operations from domain management to indexing and financial tracking.'
+        answer: 'Host A Journal CRM is an advanced Enterprise Resource Planning (ERP) and Customer Relationship Management (CRM) solution specifically tailored for academic publishing houses. It enables publishers to manage their entire lifecycle—from journal inception and domain registration to ISSN acquisition, HEC indexing, and ongoing editorial operations—within a unified, secure platform.'
       },
       {
         id: 'g2',
-        question: 'How do I get started?',
-        answer: 'New users can follow the "Quick Start" workflow available in the header. This guided process helps you set up a client, register a domain, and create your first journal entry in a few simple steps.'
+        question: 'How do I get started as a new Administrator?',
+        answer: 'Administrators should begin by configuring the Global Settings. This includes setting up custom categories for journals, defining department structures, and setting up office subscriptions. Once the backbone is ready, you can start onboarding employees and managers through the Employees module.'
       },
       {
         id: 'g3',
-        question: 'What roles are available in the system?',
-        answer: 'The system supports four main roles: Admin (full access), Manager (operational oversight), Employee (daily tasks and management), and Client (view-only access to their own journals and services).'
+        question: 'What are the different user roles and their permissions?',
+        answer: 'The system uses a granular Role-Based Access Control (RBAC) model:\n- Admin: Comprehensive system control, financial overview, and user management.\n- Manager: Departmental oversight, task approval, and operational reporting.\n- Employee: Daily operational execution, journal management, and task fulfillment.\n- Client: Secure portal access to view their specific journals, track service status, and order new publishing services.'
+      },
+      {
+        id: 'g4',
+        question: 'Can I customize the branding of my portal?',
+        answer: 'Yes, Administrators can navigate to Settings > Organization Branding to upload a custom logo, define primary brand colors, and set the organization name. These changes reflect across the dashboard and client portal for a consistent professional experience.'
       }
     ]
   },
   {
-    category: 'Publishing & ISSN',
+    category: 'Journal Operations',
     icon: FileText,
     questions: [
       {
-        id: 'p1',
-        question: 'How do I request an ISSN?',
-        answer: 'Navigate to the ISSN Requests section and click "New Request". Fill in the journal details, publisher information, and frequency. You can track the status of your application (Pending, Approved, Rejected) directly from the list view.'
+        id: 'jo1',
+        question: 'How do I register a new Journal?',
+        answer: 'Navigate to the Journals section and click "Add New Journal". You will need to provide the journal name, select its category (e.g., Social Sciences, Medicine), specify the frequency (e.g., Quarterly, Monthly), and assign it to a client. You can also link it to an existing domain record immediately.'
       },
       {
-        id: 'p2',
-        question: 'What is the difference between Print and Online ISSN?',
-        answer: 'A Print ISSN is for physical publications, while an Online ISSN (e-ISSN) is for digital versions. Many journals apply for both to ensure full coverage across all distribution formats.'
+        id: 'jo2',
+        question: 'What is the ISSN request workflow?',
+        answer: 'The ISSN request module automates the application tracking. You create a request, specify whether it is for Print, Online, or Both, and upload necessary documents. The system tracks the status through stages like "Pending", "Under Review", and "Received". Once received, the ISSN is automatically linked to the journal profile.'
       },
       {
-        id: 'p3',
-        question: 'How do I manage journal indexing?',
-        answer: 'In the Indexing Agencies section, you can manage different indexing bodies. For each journal, you can track which agencies it has applied to and the current status of those applications.'
+        id: 'jo3',
+        question: 'How do I manage the Editorial Board?',
+        answer: 'Each journal profile includes an "Editorial Board" section where you can add editors, reviewers, and board members. You can track their profiles, institutional affiliations, and specific roles within the journal to meet HEC and indexing requirements.'
+      },
+      {
+        id: 'jo4',
+        question: 'What is HEC Journal Recognition tracking?',
+        answer: 'For journals seeking recognition from the Higher Education Commission (HEC), the system provides a specific module to track the application status for various categories (W, X, Y, Z). It stores the history of applications, HEC feedback, and current recognition tier.'
       }
     ]
   },
   {
-    category: 'Domains & Hosting',
+    category: 'Domains & Infrastructure',
     icon: Globe,
     questions: [
       {
         id: 'd1',
-        question: 'How do I track domain renewals?',
-        answer: 'The Domains section provides a clear view of all registered domains and their expiry dates. The system automatically highlights domains nearing expiry to ensure timely renewals.'
+        question: 'How does the Domain Manager work?',
+        answer: 'The Domain Manager tracks your entire URL portfolio. It records registrar details, nameservers, EPP codes, and registration/expiry dates. The dashboard provides automated alerts for domains expiring within 30, 60, or 90 days to prevent service interruptions.'
       },
       {
         id: 'd2',
-        question: 'Where can I find hosting credentials?',
-        answer: 'Hosting credentials (EPP codes, panel links, etc.) are stored securely within the Domain Manager. Access is restricted based on user roles to ensure security.'
+        question: 'Can I manage hosting and CPanel details?',
+        answer: 'Yes, each domain entry has a dedicated section for Hosting Details. You can store CPanel URLs, usernames, and server IPs. For security, these highly sensitive credentials are only visible to authorized Roles (Admin/Manager).'
+      },
+      {
+        id: 'd3',
+        question: 'What should I do when a domain renews?',
+        answer: 'After successfully renewing a domain with your registrar, locate the domain in the Domain Manager, click "Edit", and update the Expiry Date. This will automatically update the status and reset the renewal reminders.'
       }
     ]
   },
   {
-    category: 'Finance & Points',
+    category: 'Performance & Workflow',
+    icon: ShieldCheck,
+    questions: [
+      {
+        id: 'w1',
+        question: 'How are employee points calculated?',
+        answer: 'Points are the core of our performance gamification. Employees earn points automatically for: \n- Successfully acquiring an ISSN (50-100 pts)\n- Completing assigned tasks (variable pts)\n- Managing journal milestones (e.g., Volume publication)\nManagers can also manually award bonus points for exceptional performance.'
+      },
+      {
+        id: 'w2',
+        question: 'How do I assign tasks to my team?',
+        answer: 'Managers can use the Tasks module or click the "+" button in many views to create a task. You can set priority levels (High, Medium, Low), define deadlines, and attach relevant files. The "Activity Log" tracks all changes to a task from creation to completion.'
+      },
+      {
+        id: 'w3',
+        question: 'What is the Attendance & Leave system?',
+        answer: 'Employees can "Clock In" and "Clock Out" daily through the dashboard. The system records work hours and calculates monthly attendance reports. Leave requests (Sick, Casual, Paid) can be submitted for Manager approval through the same interface.'
+      }
+    ]
+  },
+  {
+    category: 'Finance & Invoicing',
     icon: DollarSign,
     questions: [
       {
         id: 'f1',
-        question: 'How are points calculated?',
-        answer: 'Points are awarded to employees for completing tasks, managing journals, and successful ISSN/HEC approvals. These points contribute to the staff leaderboard and performance reviews.'
+        question: 'How do I create an invoice for a client?',
+        answer: 'Navigate to the Invoices section and click "Create Invoice". You can select a Client, add line items for various services (e.g., Domain Registration, ISSN Service, Web Development), and set tax rates. Invoices can be downloaded as PDF or shared directly via email.'
       },
       {
         id: 'f2',
-        question: 'How do I generate an invoice?',
-        answer: 'Invoices can be generated from the Invoices section or directly from an ISSN Request detail page. You can track payment status (Paid, Unpaid, Overdue) and send reminders to clients.'
+        question: 'How does the Expense Manager work?',
+        answer: 'The system allows tracking of all office and operational expenses. Expenses are categorized by "Head" (e.g., Utilities, Marketing, Salaries). You can upload proof of payment (bills/receipts) and view monthly expense summaries for financial balancing.'
       },
       {
         id: 'f3',
-        question: 'Can I track daily expenses?',
-        answer: 'Yes, the Expenses section allows Admins and Managers to record daily operational costs, categorized by type (Office, Marketing, Travel, etc.), with support for receipt attachments.'
+        question: 'Can I track client payments?',
+        answer: 'Yes, each invoice tracks its own "Payment Status" (Unpaid, Partially Paid, Paid). When a client pays, you can record the transaction details, including the payment method (Bank, JazzCash, EasyPaisa) and transaction ID.'
       }
     ]
   },
@@ -105,13 +142,18 @@ const FAQ_DATA = [
     questions: [
       {
         id: 's1',
-        question: 'Is my data secure?',
-        answer: 'We use industry-standard encryption and Firebase security rules to ensure that data is only accessible to authorized users. Role-based access control (RBAC) is strictly enforced across all modules.'
+        question: 'Who has access to my data?',
+        answer: 'Access is strictly limited based on the role assigned to each user. Clients can ONLY see their own journals and services. Employees see journals and tasks relevant to their assignments. All data is protected by Firebase Security Rules which enforce these restrictions at the database level.'
       },
       {
         id: 's2',
-        question: 'What should I do if I forget my password?',
-        answer: 'Please contact your system administrator to reset your password. For security reasons, password resets must be handled through the official administrative channels.'
+        question: 'How do I report a bug or request a feature?',
+        answer: 'You can submit feedback directly through the "Live Chat" feature or by contacting your dedicated Account Manager. For technical emergencies, please use the contact numbers provided at the bottom of the Help Center.'
+      },
+      {
+        id: 's3',
+        question: 'Can I export my journal data?',
+        answer: 'Yes, Administrators can export core data lists (Journals, Domains, Clients) to CSV or Excel format for external reporting or offline backups. This feature is located within the "Resources" or specific module list views.'
       }
     ]
   }

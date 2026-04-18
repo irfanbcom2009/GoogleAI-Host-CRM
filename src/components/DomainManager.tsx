@@ -14,10 +14,14 @@ import {
   Lock,
   RefreshCw,
   Users,
-  ShieldCheck
+  ShieldCheck,
+  Eye,
+  EyeOff,
+  Search,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Domain, RegistrarHistory, HostingMigrationLog, User as UserType, Client, OwnershipHistory } from '../types';
+import { Domain, RegistrarHistory, HostingMigrationLog, User as UserType, Client, OwnershipHistory, DomainRegistrar } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, updateDoc, arrayUnion, arrayRemove, serverTimestamp, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { cn, sanitizeUrl } from '../lib/utils';
@@ -35,6 +39,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
   const [activeTab, setActiveTab] = useState<'history' | 'hosting' | 'credentials' | 'renewals' | 'ownership'>('history');
   const [loading, setLoading] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
+  const [registrars, setRegistrars] = useState<DomainRegistrar[]>([]);
 
   // Form states
   const [newRegistrar, setNewRegistrar] = useState({ registrarName: '', date: new Date().toISOString().split('T')[0], notes: '' });
@@ -48,9 +53,16 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
   });
   const [newOwnership, setNewOwnership] = useState({ clientId: '', startDate: new Date().toISOString().split('T')[0], notes: '' });
   const [newRenewal, setNewRenewal] = useState({ date: new Date().toISOString().split('T')[0], costPrice: 0, salePrice: 0, notes: '' });
+  const [primaryRegistrarId, setPrimaryRegistrarId] = useState(domain.registrarId || '');
+  const [registrarCreds, setRegistrarCreds] = useState(domain.registrarCredentials || { username: '', password: '' });
+  const [showRegistrarPassword, setShowRegistrarPassword] = useState(false);
   const [credentials, setCredentials] = useState(domain.hostingCredentials || { panelUrl: '', username: '', password: '' });
+  const [showHostingPassword, setShowHostingPassword] = useState(false);
   const [eppCode, setEppCode] = useState(domain.eppCode || '');
   const [isDomainSubscribedFromUs, setIsDomainSubscribedFromUs] = useState(domain.isDomainSubscribedFromUs ?? domain.isSubscribed ?? true);
+  const [registrarSearch, setRegistrarSearch] = useState('');
+  const [isRegistrarHistoryDropdownOpen, setIsRegistrarHistoryDropdownOpen] = useState(false);
+  const [isPrimaryRegistrarDropdownOpen, setIsPrimaryRegistrarDropdownOpen] = useState(false);
   const [isHostingSubscribedFromUs, setIsHostingSubscribedFromUs] = useState(domain.isHostingSubscribedFromUs ?? domain.isSubscribed ?? true);
 
   React.useEffect(() => {
@@ -59,7 +71,16 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
       const unsubscribe = onSnapshot(q, (snapshot) => {
         setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Client));
       });
-      return () => unsubscribe();
+
+      const qRegistrars = query(collection(db, 'registrars'));
+      const unsubscribeRegistrars = onSnapshot(qRegistrars, (snapshot) => {
+        setRegistrars(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as DomainRegistrar));
+      });
+
+      return () => {
+        unsubscribe();
+        unsubscribeRegistrars();
+      };
     }
   }, [isEmployee]);
 
@@ -90,6 +111,9 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
       };
       await updateDoc(doc(db, 'domains', domain.id), {
         hostingCredentials: sanitizedCredentials,
+        registrarCredentials: registrarCreds,
+        registrarId: primaryRegistrarId,
+        registrar: registrars.find(r => r.id === primaryRegistrarId)?.name || domain.registrar,
         eppCode: eppCode,
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name,
@@ -404,14 +428,79 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Registrar Name</label>
-                    <input 
-                      required
-                      type="text" 
-                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      placeholder="e.g. Namecheap, GoDaddy"
-                      value={newRegistrar.registrarName}
-                      onChange={e => setNewRegistrar(prev => ({ ...prev, registrarName: e.target.value }))}
-                    />
+                    <div className="relative">
+                      <button 
+                        type="button"
+                        onClick={() => setIsRegistrarHistoryDropdownOpen(!isRegistrarHistoryDropdownOpen)}
+                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all flex items-center justify-between text-left"
+                      >
+                        <span className={cn(newRegistrar.registrarName ? "text-slate-900" : "text-slate-400")}>
+                          {newRegistrar.registrarName || "Select Registrar..."}
+                        </span>
+                        <ChevronDown size={16} className={cn("text-slate-400 transition-transform", isRegistrarHistoryDropdownOpen && "rotate-180")} />
+                      </button>
+
+                      <AnimatePresence>
+                        {isRegistrarHistoryDropdownOpen && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-[60]" 
+                              onClick={() => setIsRegistrarHistoryDropdownOpen(false)} 
+                            />
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              className="absolute z-[70] w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden"
+                            >
+                              <div className="p-2 border-b border-slate-100">
+                                <div className="relative">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                  <input 
+                                    autoFocus
+                                    type="text"
+                                    placeholder="Search registrars..."
+                                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                                    value={registrarSearch}
+                                    onChange={e => setRegistrarSearch(e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              <div className="max-h-60 overflow-y-auto p-1">
+                                {registrars
+                                  .filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase()))
+                                  .map(reg => (
+                                    <button
+                                      key={reg.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setNewRegistrar(prev => ({ 
+                                          ...prev, 
+                                          registrarName: reg.name 
+                                        }));
+                                        setIsRegistrarHistoryDropdownOpen(false);
+                                        setRegistrarSearch('');
+                                      }}
+                                      className={cn(
+                                        "w-full px-3 py-2 text-left text-sm rounded-lg transition-all flex items-center justify-between group",
+                                        newRegistrar.registrarName === reg.name ? "bg-indigo-50 text-indigo-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+                                      )}
+                                    >
+                                      {reg.name}
+                                      {newRegistrar.registrarName === reg.name && <CheckCircle2 size={14} />}
+                                    </button>
+                                  ))}
+                                {registrars.filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase())).length === 0 && (
+                                  <div className="py-8 text-center text-slate-400">
+                                    <p className="text-xs">No registrars found</p>
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Date</label>
@@ -632,6 +721,152 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
               <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 space-y-6">
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <ShieldCheck size={16} className="text-indigo-600" />
+                    Registrar Configuration
+                  </h4>
+                  
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Registrar</label>
+                    <div className="relative">
+                      <button 
+                        disabled={!isEmployee}
+                        type="button"
+                        onClick={() => setIsPrimaryRegistrarDropdownOpen(!isPrimaryRegistrarDropdownOpen)}
+                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all flex items-center justify-between text-left disabled:bg-slate-100 disabled:text-slate-500"
+                      >
+                        <span className={cn(primaryRegistrarId ? "text-slate-900" : "text-slate-400")}>
+                          {registrars.find(r => r.id === primaryRegistrarId)?.name || "Select Registrar..."}
+                        </span>
+                        <ChevronDown size={16} className={cn("text-slate-400 transition-transform", isPrimaryRegistrarDropdownOpen && "rotate-180")} />
+                      </button>
+
+                      <AnimatePresence>
+                        {isPrimaryRegistrarDropdownOpen && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-[60]" 
+                              onClick={() => setIsPrimaryRegistrarDropdownOpen(false)} 
+                            />
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              className="absolute z-[70] w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden"
+                            >
+                              <div className="p-2 border-b border-slate-100">
+                                <div className="relative">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                  <input 
+                                    autoFocus
+                                    type="text"
+                                    placeholder="Search registrars..."
+                                    className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
+                                    value={registrarSearch}
+                                    onChange={e => setRegistrarSearch(e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              <div className="max-h-60 overflow-y-auto p-1">
+                                {registrars
+                                  .filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase()))
+                                  .map(reg => (
+                                    <button
+                                      key={reg.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setPrimaryRegistrarId(reg.id);
+                                        setIsPrimaryRegistrarDropdownOpen(false);
+                                        setRegistrarSearch('');
+                                      }}
+                                      className={cn(
+                                        "w-full px-3 py-2 text-left text-sm rounded-lg transition-all flex items-center justify-between group",
+                                        primaryRegistrarId === reg.id ? "bg-indigo-50 text-indigo-700 font-bold" : "text-slate-600 hover:bg-slate-50"
+                                      )}
+                                    >
+                                      {reg.name}
+                                      {primaryRegistrarId === reg.id && <CheckCircle2 size={14} />}
+                                    </button>
+                                  ))}
+                                {registrars.filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase())).length === 0 && (
+                                  <div className="py-8 text-center text-slate-400">
+                                    <p className="text-xs">No registrars found</p>
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 border-t border-slate-200 pt-4">
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                      <Key size={14} className="text-indigo-600" />
+                      Specific Access Credentials
+                    </h4>
+                    {isDomainSubscribedFromUs ? (
+                      <div className="grid grid-cols-1 gap-4">
+                        {primaryRegistrarId && registrars.find(r => r.id === primaryRegistrarId)?.link && (
+                        <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-200">
+                          <div className="flex items-center gap-2">
+                            <Globe size={16} className="text-indigo-500" />
+                            <span className="text-xs font-bold text-slate-700">Registrar Portal</span>
+                          </div>
+                          <a 
+                            href={registrars.find(r => r.id === domain.registrarId)?.link} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="text-[10px] bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-bold flex items-center gap-1 hover:bg-indigo-100 transition-all"
+                          >
+                            Login Page <ArrowRight size={10} />
+                          </a>
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Username</label>
+                          <input 
+                            disabled={!isEmployee}
+                            type="text" 
+                            className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                            placeholder={registrars.find(r => r.id === domain.registrarId)?.email || "Registrar username"}
+                            value={registrarCreds.username}
+                            onChange={e => setRegistrarCreds(prev => ({ ...prev, username: e.target.value }))}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
+                          <div className="relative">
+                            <input 
+                              disabled={!isEmployee}
+                              type={showRegistrarPassword ? "text" : "password"} 
+                              className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                              placeholder={registrars.find(r => r.id === domain.registrarId)?.password ? "••••••••" : "Registrar password"}
+                              value={registrarCreds.password}
+                              onChange={e => setRegistrarCreds(prev => ({ ...prev, password: e.target.value }))}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowRegistrarPassword(!showRegistrarPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 p-1"
+                            >
+                              {showRegistrarPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-slate-400 italic">If empty, master registrar account credentials will be used.</p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">Domain is managed externally. Registrar credentials hidden.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-200 space-y-4">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                     <Lock size={16} className="text-indigo-600" />
                     Hosting Access Credentials
                   </h4>
@@ -661,13 +896,22 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                         </div>
                         <div className="space-y-2">
                           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password</label>
-                          <input 
-                            disabled={!isEmployee}
-                            type="text" 
-                            className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                            value={credentials.password}
-                            onChange={e => setCredentials(prev => ({ ...prev, password: e.target.value }))}
-                          />
+                          <div className="relative">
+                            <input 
+                              disabled={!isEmployee}
+                              type={showHostingPassword ? "text" : "password"} 
+                              className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
+                              value={credentials.password}
+                              onChange={e => setCredentials(prev => ({ ...prev, password: e.target.value }))}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowHostingPassword(!showHostingPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 p-1"
+                            >
+                              {showHostingPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

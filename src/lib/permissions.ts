@@ -49,7 +49,8 @@ export const DEFAULT_CLIENT_PERMISSIONS: UserPermissions = {
   approvalRequests: INITIAL_MODULE_PERMISSIONS,
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: INITIAL_MODULE_PERMISSIONS,
-  doajApplications: { ...INITIAL_MODULE_PERMISSIONS, view: true }
+  doajApplications: { ...INITIAL_MODULE_PERMISSIONS, view: true },
+  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true }
 };
 
 export const DEFAULT_EMPLOYEE_PERMISSIONS: UserPermissions = {
@@ -71,7 +72,8 @@ export const DEFAULT_EMPLOYEE_PERMISSIONS: UserPermissions = {
   approvalRequests: INITIAL_MODULE_PERMISSIONS,
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: { ...INITIAL_MODULE_PERMISSIONS, view: true },
-  doajApplications: INITIAL_MODULE_PERMISSIONS
+  doajApplications: INITIAL_MODULE_PERMISSIONS,
+  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true }
 };
 
 export const DEFAULT_MANAGER_PERMISSIONS: UserPermissions = {
@@ -93,7 +95,8 @@ export const DEFAULT_MANAGER_PERMISSIONS: UserPermissions = {
   approvalRequests: VIEW_ONLY_MODULE_PERMISSIONS,
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: INITIAL_MODULE_PERMISSIONS,
-  doajApplications: VIEW_ONLY_MODULE_PERMISSIONS
+  doajApplications: VIEW_ONLY_MODULE_PERMISSIONS,
+  serviceCatalog: VIEW_ONLY_MODULE_PERMISSIONS
 };
 
 export const DEFAULT_ADMIN_PERMISSIONS: UserPermissions = {
@@ -115,7 +118,8 @@ export const DEFAULT_ADMIN_PERMISSIONS: UserPermissions = {
   approvalRequests: FULL_MODULE_PERMISSIONS,
   settings: FULL_MODULE_PERMISSIONS,
   employees: FULL_MODULE_PERMISSIONS,
-  doajApplications: FULL_MODULE_PERMISSIONS
+  doajApplications: FULL_MODULE_PERMISSIONS,
+  serviceCatalog: FULL_MODULE_PERMISSIONS
 };
 
 export function getPermissionsForRole(role: UserRole): UserPermissions {

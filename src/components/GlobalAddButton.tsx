@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   User as UserIcon, 
@@ -48,6 +48,17 @@ export const GlobalAddButton: React.FC<GlobalAddButtonProps> = ({
 }) => {
   const { check } = usePermissions(currentUser);
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        setIsOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const actions = [
     { id: 'client', label: 'Add Client', icon: UserIcon, color: 'bg-indigo-500', tab: 'clients', permission: 'clients' },

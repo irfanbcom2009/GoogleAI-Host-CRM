@@ -23,7 +23,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../lib/utils';
+import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, Timestamp, where } from 'firebase/firestore';
 import { DOAJApplication, Client, User as UserType } from '../types';
@@ -59,7 +59,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
   const [showPasswords, setShowPasswords] = useState<{ [key: string]: boolean }>({});
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['doaj'] || ['sr', 'invoice', 'client', 'journal', 'submission', 'status']
+    currentUser.columnPreferences?.['doaj'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
 
   const [formData, setFormData] = useState({
@@ -91,12 +91,8 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
         return {
           id: doc.id,
           ...data,
-          submissionDate: data.submissionDate instanceof Timestamp 
-            ? data.submissionDate.toDate().toISOString().split('T')[0]
-            : data.submissionDate,
-          objectionDate: data.objectionDate instanceof Timestamp
-            ? data.objectionDate.toDate().toISOString().split('T')[0]
-            : data.objectionDate
+          submissionDate: formatDateForInput(data.submissionDate),
+          objectionDate: formatDateForInput(data.objectionDate)
         };
       }) as DOAJApplication[];
       setApplications(appData);
@@ -242,9 +238,9 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
   };
 
   const filteredApps = applications.filter(app => 
-    app.journalName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    app.clientName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    app.invoiceNo.toLowerCase().includes(searchQuery.toLowerCase())
+    (app.journalName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (app.clientName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (app.invoiceNo || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const getStatusBadge = (status: DOAJApplication['status']) => {

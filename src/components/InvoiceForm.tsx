@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -9,9 +9,12 @@ import {
   User,
   FileText,
   Percent,
-  DollarSign
+  DollarSign,
+  Search,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { SearchableSelect } from './ui/SearchableSelect';
 import { 
   Invoice, 
   InvoiceItem, 
@@ -21,9 +24,9 @@ import {
   User as UserType
 } from '../types';
 import { financeService } from '../services/financeService';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc } from 'firebase/firestore';
-import { cn } from '../lib/utils';
+import { db, handleFirestoreError, OperationType, logActivity } from '../lib/firebase';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, orderBy } from 'firebase/firestore';
+import { cn, formatDateForInput } from '../lib/utils';
 
 interface InvoiceFormProps {
   invoice?: Invoice;
@@ -40,6 +43,7 @@ export const InvoiceForm: React.FC<InvoiceFormProps> = ({
 }) => {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(false);
+
   const [formData, setFormData] = useState<Partial<Invoice>>({
     clientId: initialClientId || invoice?.clientId || '',
     invoiceNumber: invoice?.invoiceNumber || '',
@@ -68,9 +72,32 @@ export const InvoiceForm: React.FC<InvoiceFormProps> = ({
   });
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    // Correctly fetch clients from users collection with role Client
+    const q = query(
+      collection(db, 'users'), 
+      where('role', '==', 'Client'),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
       setClients(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Client)));
+    }, (err) => {
+      console.error("Error fetching clients for invoice:", err);
     });
+    
+    if (invoice) {
+      setFormData({
+        ...formData,
+        ...invoice,
+        issueDate: formatDateForInput(invoice.issueDate),
+        dueDate: formatDateForInput(invoice.dueDate),
+        recurringDetails: invoice.recurringDetails ? {
+          ...invoice.recurringDetails,
+          startDate: formatDateForInput(invoice.recurringDetails.startDate),
+          endDate: formatDateForInput(invoice.recurringDetails.endDate),
+          nextGenerationDate: formatDateForInput(invoice.recurringDetails.nextGenerationDate)
+        } : undefined
+      });
+    }
     
     if (!invoice?.invoiceNumber) {
       financeService.generateInvoiceNumber().then(num => {
@@ -199,21 +226,17 @@ export const InvoiceForm: React.FC<InvoiceFormProps> = ({
           {/* Basic Info */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                <User size={14} className="text-indigo-500" />
-                Select Client
-              </label>
-              <select 
-                required
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
-                value={formData.clientId}
-                onChange={(e) => setFormData({ ...formData, clientId: e.target.value })}
-              >
-                <option value="">Choose a client...</option>
-                {clients.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                label="Select Client"
+                options={clients.map(c => ({
+                  label: c.name,
+                  value: c.id,
+                  subLabel: c.email
+                }))}
+                value={formData.clientId || ''}
+                onChange={value => setFormData({ ...formData, clientId: value })}
+                placeholder="Choose a client..."
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-bold text-slate-700 flex items-center gap-2">

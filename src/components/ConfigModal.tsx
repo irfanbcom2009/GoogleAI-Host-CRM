@@ -23,9 +23,16 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
   type,
   initialItems
 }) => {
-  const [items, setItems] = useState<any[]>(initialItems);
+  const [items, setItems] = useState<any[]>(initialItems || []);
   const [newItem, setNewItem] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Sync items when initialItems changes or modal opens
+  React.useEffect(() => {
+    if (isOpen) {
+      setItems(initialItems || []);
+    }
+  }, [initialItems, isOpen]);
 
   const handleAddItem = () => {
     if (!newItem.trim()) return;
@@ -98,10 +105,10 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
         </div>
 
         <div className="max-h-[400px] overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-          {items.map((item, index) => (
-            <div key={index} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+          {(items || []).map((item, index) => (
+            <div key={item?.id || index} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900">{type === 'string-list' ? item : item.name}</span>
+                <span className="font-bold text-slate-900">{type === 'string-list' ? item : (item?.name || 'Unnamed')}</span>
                 <button
                   onClick={() => handleRemoveItem(index)}
                   className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
@@ -110,15 +117,15 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
                 </button>
               </div>
 
-              {type === 'journal-categories' && (
+              {type === 'journal-categories' && item && (
                 <div className="pl-4 space-y-2 border-l-2 border-slate-200">
                   <div className="flex flex-wrap gap-2">
-                    {item.subCategories.map((sub: string, subIndex: number) => (
+                    {(item.subCategories || []).map((sub: string, subIndex: number) => (
                       <span
                         key={subIndex}
                         className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-600"
                       >
-                        {sub}
+                        {sub || ''}
                         <button
                           onClick={() => handleRemoveSubCategory(index, subIndex)}
                           className="hover:text-rose-600"

@@ -12,7 +12,10 @@ import {
   Trash2,
   Edit,
   Loader2,
-  X
+  X,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -28,6 +31,9 @@ interface PublishersProps {
   searchQuery?: string;
   currentUser: User;
   clientId?: string;
+  initialPublisherId?: string;
+  onClearInitialId?: () => void;
+  onNavigate?: (tab: string, id: string) => void;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -35,19 +41,37 @@ const AVAILABLE_COLUMNS = [
   { id: 'owner', label: 'Owner' },
   { id: 'secp', label: 'SECP Reg' },
   { id: 'ntn', label: 'NTN' },
+  { id: 'email', label: 'Email' },
+  { id: 'phone', label: 'Phone' },
+  { id: 'address', label: 'Address' },
   { id: 'documents', label: 'Documents' },
+  { id: 'createdAt', label: 'Created At' },
 ];
 
-export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', currentUser, clientId }) => {
+export const Publishers: React.FC<PublishersProps> = ({ 
+  searchQuery = '', 
+  currentUser, 
+  clientId,
+  initialPublisherId,
+  onClearInitialId,
+  onNavigate
+}) => {
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPublisher, setEditingPublisher] = useState<Publisher | null>(null);
-  const [selectedPublisherId, setSelectedPublisherId] = useState<string | null>(null);
+  const [selectedPublisherId, setSelectedPublisherId] = useState<string | null>(initialPublisherId || null);
+
+  useEffect(() => {
+    if (initialPublisherId) {
+      setSelectedPublisherId(initialPublisherId);
+    }
+  }, [initialPublisherId]);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
-    currentUser.columnPreferences?.['publishers'] || ['name', 'owner', 'secp', 'ntn', 'documents']
+    currentUser.columnPreferences?.['publishers'] || AVAILABLE_COLUMNS.map(c => c.id)
   );
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'createdAt', direction: 'desc' });
 
   const isClient = currentUser.role === 'Client';
   const effectiveClientId = isClient ? currentUser.id : clientId;
@@ -185,8 +209,54 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
     return matchesSearch && matchesClient;
   });
 
+  const sortedPublishers = [...filteredPublishers].sort((a, b) => {
+    if (!sortConfig.key || !sortConfig.direction) return 0;
+    
+    let aValue: any = a[sortConfig.key as keyof Publisher];
+    let bValue: any = b[sortConfig.key as keyof Publisher];
+
+    if (sortConfig.key === 'owner') {
+      aValue = a.ownerName || '';
+      bValue = b.ownerName || '';
+    }
+
+    if (aValue === bValue) return 0;
+    if (aValue === undefined || aValue === null) return 1;
+    if (bValue === undefined || bValue === null) return -1;
+
+    const modifier = sortConfig.direction === 'asc' ? 1 : -1;
+    if (typeof aValue === 'string') {
+      return aValue.localeCompare(bValue) * modifier;
+    }
+    return (aValue > bValue ? 1 : -1) * modifier;
+  });
+
+  const requestSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const SortIcon = ({ columnKey }: { columnKey: string }) => {
+    if (sortConfig.key !== columnKey || !sortConfig.direction) return <ArrowUpDown size={12} className="opacity-0 group-hover:opacity-100 transition-opacity ml-1" />;
+    return sortConfig.direction === 'asc' ? <ChevronUp size={12} className="ml-1 text-indigo-600" /> : <ChevronDown size={12} className="ml-1 text-indigo-600" />;
+  };
+
   if (selectedPublisherId) {
-    return <PublisherDetail publisherId={selectedPublisherId} onBack={() => setSelectedPublisherId(null)} />;
+    return (
+      <PublisherDetail 
+        publisherId={selectedPublisherId} 
+        onBack={() => {
+          setSelectedPublisherId(null);
+          if (onClearInitialId) onClearInitialId();
+        }} 
+        onNavigate={onNavigate}
+      />
+    );
   }
 
   return (
@@ -214,30 +284,64 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-              <tr className="border-b border-slate-200">
-                {selectedColumns.includes('name') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Publisher Name</th>}
-                {selectedColumns.includes('owner') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Owner</th>}
-                {selectedColumns.includes('secp') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">SECP Reg</th>}
-                {selectedColumns.includes('ntn') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">NTN</th>}
-                {selectedColumns.includes('documents') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Documents</th>}
-                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Actions</th>
+          <table className="w-full text-left border-collapse font-sans">
+            <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm border-b border-slate-200">
+              <tr className="text-slate-500 text-[10px] uppercase tracking-widest font-black">
+                {selectedColumns.includes('name') && (
+                  <th 
+                    className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                    onClick={() => requestSort('name')}
+                  >
+                    <div className="flex items-center">
+                      Publisher Name
+                      <SortIcon columnKey="name" />
+                    </div>
+                  </th>
+                )}
+                {selectedColumns.includes('owner') && (
+                  <th 
+                    className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                    onClick={() => requestSort('owner')}
+                  >
+                    <div className="flex items-center">
+                      Owner
+                      <SortIcon columnKey="owner" />
+                    </div>
+                  </th>
+                )}
+                {selectedColumns.includes('secp') && <th className="px-6 py-4">SECP</th>}
+                {selectedColumns.includes('ntn') && <th className="px-6 py-4">NTN</th>}
+                {selectedColumns.includes('email') && <th className="px-6 py-4">Email</th>}
+                {selectedColumns.includes('phone') && <th className="px-6 py-4">Phone</th>}
+                {selectedColumns.includes('address') && <th className="px-6 py-4">Address</th>}
+                {selectedColumns.includes('documents') && <th className="px-6 py-4">Docs</th>}
+                {selectedColumns.includes('createdAt') && (
+                  <th 
+                    className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                    onClick={() => requestSort('createdAt')}
+                  >
+                    <div className="flex items-center">
+                      Created
+                      <SortIcon columnKey="createdAt" />
+                    </div>
+                  </th>
+                )}
+                <th className="px-6 py-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
+                  <td colSpan={10} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center gap-2 text-slate-400">
                       <Loader2 className="animate-spin" size={32} />
                       <p className="text-sm font-medium">Loading publishers...</p>
                     </div>
                   </td>
                 </tr>
-              ) : filteredPublishers.length === 0 ? (
+              ) : sortedPublishers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
+                  <td colSpan={10} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center gap-2 text-slate-400">
                       <Building2 size={32} />
                       <p className="text-sm font-medium">No publishers found</p>
@@ -245,7 +349,7 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                   </td>
                 </tr>
               ) : (
-                filteredPublishers.map((pub) => (
+                sortedPublishers.map((pub) => (
                   <tr 
                     key={pub.id} 
                     onClick={() => setSelectedPublisherId(pub.id)}
@@ -279,6 +383,15 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                         <span className="text-sm font-mono text-slate-500">{pub.ntn}</span>
                       </td>
                     )}
+                    {selectedColumns.includes('email') && (
+                      <td className="px-6 py-4 text-xs text-slate-600">{pub.email || 'N/A'}</td>
+                    )}
+                    {selectedColumns.includes('phone') && (
+                      <td className="px-6 py-4 text-xs text-slate-600">{pub.phone || 'N/A'}</td>
+                    )}
+                    {selectedColumns.includes('address') && (
+                      <td className="px-6 py-4 text-xs text-slate-600 truncate max-w-[150px]">{pub.address || 'N/A'}</td>
+                    )}
                     {selectedColumns.includes('documents') && (
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-1">
@@ -289,6 +402,11 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                           {pub.documents.ntn && <span title="NTN"><FileText size={16} className="text-purple-500" /></span>}
                           {pub.documents.secp && <span title="SECP"><ShieldCheck size={16} className="text-rose-500" /></span>}
                         </div>
+                      </td>
+                    )}
+                    {selectedColumns.includes('createdAt') && (
+                      <td className="px-6 py-4 text-xs text-slate-500">
+                        {pub.createdAt && (pub.createdAt as any).toDate ? (pub.createdAt as any).toDate().toLocaleDateString() : 'N/A'}
                       </td>
                     )}
                     <td className="px-6 py-4 text-right">
@@ -395,6 +513,28 @@ export const Publishers: React.FC<PublishersProps> = ({ searchQuery = '', curren
                         <option key={client.id} value={client.id}>{client.name}</option>
                       ))}
                     </select>
+                    
+                    {/* Already Attached Publishers */}
+                    {newPublisher.clientId && (
+                      <div className="mt-4 p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-2">
+                        <div className="flex items-center gap-2 text-amber-600 mb-2">
+                          <Building2 size={16} />
+                          <p className="text-xs font-bold uppercase tracking-widest">Existing Publishers for this Client</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {publishers.filter(p => p.clientId === newPublisher.clientId).length > 0 ? (
+                            publishers.filter(p => p.clientId === newPublisher.clientId).map(p => (
+                              <div key={p.id} className="px-3 py-1.5 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-700 shadow-sm flex items-center gap-2">
+                                <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></span>
+                                {p.name}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-[10px] text-amber-500 font-medium italic">No publishers attached yet.</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-bold text-slate-700">Publisher Name</label>

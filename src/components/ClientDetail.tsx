@@ -17,14 +17,18 @@ import {
   Trash2,
   Edit,
   Copy,
+  Key,
   Building2,
-  Globe2
+  Globe2,
+  MessageSquare,
+  Smartphone
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Client, Journal, Task, Invoice, User as UserType, Publisher, Domain, UserRole } from '../types';
+import { useFieldPermissions } from '../hooks/useFieldPermissions';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, deleteDoc, addDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { ConfirmModal } from './ConfirmModal';
 import { ClientEditForm } from './ClientEditForm';
@@ -56,6 +60,7 @@ interface ClientDetailProps {
 const SALUTATIONS = ['Mr.', 'Miss', 'Mrs.', 'Dr.', 'Prof.', 'Dr. Prof.'];
 
 export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, currentUser, initialEdit = false, onImpersonate }) => {
+  const { canView, canEdit, canDelete } = useFieldPermissions(currentUser);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -69,6 +74,7 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
   const [isEditing, setIsEditing] = useState(initialEdit);
   const [isSaving, setIsSaving] = useState(false);
   const [editedClient, setEditedClient] = useState<Client>(client);
+  const [activatableServices, setActivatableServices] = useState<string[]>([]);
 
   useEffect(() => {
     setEditedClient(client);
@@ -101,13 +107,38 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
     }
   }, [isEditing]);
 
+  useEffect(() => {
+    const fetchGlobalSettings = async () => {
+      try {
+        const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          setActivatableServices(data.activatableServices || []);
+        }
+      } catch (error) {
+        console.error('Error fetching global settings:', error);
+      }
+    };
+    fetchGlobalSettings();
+  }, []);
+
   const handleSaveInline = async () => {
+    // Restriction: Only admin can add/edit clients with gmail address
+    const isSystemAdmin = currentUser?.role === 'Admin' || 
+                         ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser?.email || '');
+    
+    if (editedClient.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
+      toast.error("Only administrators can manage records with @gmail.com addresses.");
+      return;
+    }
+
     setIsSaving(true);
     try {
       const clientRef = doc(db, 'users', client.id);
       await updateDoc(clientRef, {
         salutation: editedClient.salutation || '',
         name: editedClient.name,
+        photoURL: editedClient.photoURL || '',
         careOf: editedClient.careOf || '',
         email: editedClient.email,
         phone: editedClient.phone || '',
@@ -408,17 +439,19 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
             <Edit size={18} />
             Edit Profile
           </button>
-          <button 
-            onClick={() => setIsDeleteModalOpen(true)}
-            disabled={isEditing}
-            className={cn(
-              "px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 flex items-center gap-2",
-              isEditing && "opacity-50 cursor-not-allowed"
-            )}
-          >
-            <Trash2 size={18} />
-            Delete Client
-          </button>
+          {canDelete('clients', 'status') && (
+            <button 
+              onClick={() => setIsDeleteModalOpen(true)}
+              disabled={isEditing}
+              className={cn(
+                "px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 flex items-center gap-2",
+                isEditing && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <Trash2 size={18} />
+              Delete Client
+            </button>
+          )}
         </div>
       </div>
 
@@ -431,38 +464,76 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
         <div className="px-8 pb-8">
           <div className="relative flex items-end justify-between -mt-12 mb-6">
             <div className="flex items-end gap-6 w-full">
-              <div className="w-32 h-32 rounded-3xl bg-white p-2 shadow-xl shrink-0">
-                <div className="w-full h-full rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 text-4xl font-black">
-                  {client.name.charAt(0)}
-                </div>
+              <div className="w-32 h-32 rounded-3xl bg-white p-2 shadow-xl shrink-0 group relative">
+                {client.photoURL ? (
+                  <img 
+                    src={client.photoURL} 
+                    alt={client.name} 
+                    className="w-full h-full rounded-2xl object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 text-4xl font-black uppercase">
+                    {client.name.charAt(0)}
+                  </div>
+                )}
+                {isEditing && (
+                  <div className="absolute inset-0 bg-slate-900/40 rounded-3xl flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-all text-white p-2">
+                    <Edit size={20} className="mb-1" />
+                    <span className="text-[10px] font-bold uppercase">Change Photo</span>
+                  </div>
+                )}
               </div>
               <div className="pb-2 min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-3">
                   {isEditing ? (
-                    <div className="flex items-center gap-2 w-full max-w-2xl">
-                      <select
-                        className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
-                        value={editedClient.salutation}
-                        onChange={e => setEditedClient(prev => ({ ...prev, salutation: e.target.value }))}
-                      >
-                        <option value="">None</option>
-                        {SALUTATIONS.map(sal => (
-                          <option key={sal} value={sal}>{sal}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-2xl font-black text-slate-900"
-                        value={editedClient.name}
-                        onChange={e => setEditedClient(prev => ({ ...prev, name: e.target.value }))}
-                        placeholder="Full Name"
-                      />
-                    </div>
+                    canEdit('clients', 'name') ? (
+                      <div className="flex flex-col gap-2 w-full max-w-2xl">
+                        <div className="flex items-center gap-2">
+                          <select
+                            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold text-slate-700"
+                            value={editedClient.salutation}
+                            onChange={e => setEditedClient(prev => ({ ...prev, salutation: e.target.value }))}
+                          >
+                            <option value="">None</option>
+                            {SALUTATIONS.map(sal => (
+                              <option key={sal} value={sal}>{sal}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="text"
+                            className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-2xl font-black text-slate-900"
+                            value={editedClient.name}
+                            onChange={e => setEditedClient(prev => ({ ...prev, name: e.target.value }))}
+                            placeholder="Full Name"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Profile Photo URL</p>
+                          <input
+                            type="text"
+                            className="w-full px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                            value={editedClient.photoURL || ''}
+                            onChange={e => setEditedClient(prev => ({ ...prev, photoURL: e.target.value }))}
+                            placeholder="https://..."
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
+                        {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
+                        {client.name}
+                      </h1>
+                    )
                   ) : (
-                    <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
-                      {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
-                      {client.name}
-                    </h1>
+                    canView('clients', 'name') ? (
+                      <h1 className="text-3xl font-black text-slate-900 tracking-tight break-words">
+                        {client.salutation && <span className="text-slate-400 mr-2">{client.salutation}</span>}
+                        {client.name}
+                      </h1>
+                    ) : (
+                      <h1 className="text-3xl font-black text-slate-300 tracking-tight italic">Hidden</h1>
+                    )
                   )}
                   <div className="flex items-center gap-2">
                     {isEditing ? (
@@ -499,21 +570,38 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                     )}
                   </div>
                 </div>
-                {isEditing ? (
-                  <div className="flex items-center gap-2 mt-2">
-                    <Mail size={16} className="text-slate-400" />
-                    <input
-                      type="email"
-                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm text-slate-600"
-                      value={editedClient.email}
-                      onChange={e => setEditedClient(prev => ({ ...prev, email: e.target.value }))}
-                      placeholder="Email Address"
-                    />
-                  </div>
+                 {isEditing ? (
+                   canEdit('clients', 'email') ? (
+                    <div className="flex items-center gap-2 mt-2">
+                      <Mail size={16} className="text-slate-400" />
+                      <input
+                        type="email"
+                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm text-slate-600"
+                        value={editedClient.email}
+                        onChange={e => setEditedClient(prev => ({ ...prev, email: e.target.value }))}
+                        placeholder="Email Address"
+                      />
+                    </div>
+                   ) : (
+                      <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
+                        <Mail size={16} className="flex-shrink-0" /> 
+                        {client.email}
+                      </p>
+                   )
                 ) : (
-                  <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
-                    <Mail size={16} className="flex-shrink-0" /> {client.email}
-                  </p>
+                  canView('clients', 'email') ? (
+                    <p className="text-slate-500 font-medium flex items-center gap-2 mt-1 break-all">
+                      <Mail size={16} className="flex-shrink-0" /> 
+                      <a href={`mailto:${client.email}`} className="hover:text-indigo-600 transition-colors">
+                        {client.email}
+                      </a>
+                    </p>
+                  ) : (
+                    <p className="text-slate-300 font-medium flex items-center gap-2 mt-1 italic">
+                      <Mail size={16} className="flex-shrink-0" /> 
+                      Hidden
+                    </p>
+                  )
                 )}
               </div>
             </div>
@@ -570,7 +658,23 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                       placeholder="Phone Number"
                     />
                   ) : (
-                    <span className="font-medium">{client.phone || 'No phone provided'}</span>
+                    <span className="font-medium">
+                      {client.phone ? (
+                        <div className="flex flex-col gap-1">
+                          <a href={`tel:${client.phone}`} className="hover:text-indigo-600 transition-colors">
+                            {client.phone}
+                          </a>
+                          <a 
+                            href={`https://wa.me/${client.phone.replace(/[^0-9]/g, '')}`} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="text-[10px] text-emerald-600 font-bold hover:underline flex items-center gap-1"
+                          >
+                            <MessageSquare size={10} /> WhatsApp
+                          </a>
+                        </div>
+                      ) : 'No phone provided'}
+                    </span>
                   )}
                 </div>
                 <div className="flex items-start gap-3 text-slate-600 min-w-0">
@@ -643,8 +747,8 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                                 {sub.invoiceNumber}
                               </p>
                             ) : (
-                              <p className="text-[8px] bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100 text-rose-600 font-bold">
-                                Subscribed بدون Invoice
+                              <p className="text-[8px] bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 text-indigo-600 font-bold">
+                                Active Subscription
                               </p>
                             )}
                             {sub.subscriptionType && (
@@ -714,32 +818,34 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
               </div>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
-              <h3 className="text-sm font-bold text-slate-900 mb-4">Quick Actions</h3>
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={() => setIsNewJournalModalOpen(true)}
-                  className="p-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-300 hover:text-indigo-600 transition-all flex flex-col items-center gap-2"
-                >
-                  <Plus size={18} />
-                  New Journal
-                </button>
-                <button 
-                  onClick={() => setIsNewTaskModalOpen(true)}
-                  className="p-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-300 hover:text-indigo-600 transition-all flex flex-col items-center gap-2"
-                >
-                  <Plus size={18} />
-                  New Task
-                </button>
-                <button 
-                  onClick={() => setIsActivateServiceModalOpen(true)}
-                  className="p-3 bg-indigo-600 border border-indigo-600 rounded-xl text-xs font-bold text-white hover:bg-indigo-700 transition-all flex flex-col items-center gap-2 col-span-2"
-                >
-                  <Shield size={18} />
-                  Activate Service
-                </button>
+            {currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager') && (
+              <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-900 mb-4">Quick Actions</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={() => setIsNewJournalModalOpen(true)}
+                    className="p-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-300 hover:text-indigo-600 transition-all flex flex-col items-center gap-2"
+                  >
+                    <Plus size={18} />
+                    New Journal
+                  </button>
+                  <button 
+                    onClick={() => setIsNewTaskModalOpen(true)}
+                    className="p-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-300 hover:text-indigo-600 transition-all flex flex-col items-center gap-2"
+                  >
+                    <Plus size={18} />
+                    New Task
+                  </button>
+                  <button 
+                    onClick={() => setIsActivateServiceModalOpen(true)}
+                    className="p-3 bg-indigo-600 border border-indigo-600 rounded-xl text-xs font-bold text-white hover:bg-indigo-700 transition-all flex flex-col items-center gap-2 col-span-2"
+                  >
+                    <Shield size={18} />
+                    Activate Service
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -844,16 +950,17 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
                               </div>
                             </div>
                               <div className="flex items-center gap-3">
-                                {journal.credentials?.password && (
+                                {journal.credentials && Array.isArray(journal.credentials) && journal.credentials.length > 0 && (
                                   <button 
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      navigator.clipboard.writeText(journal.credentials?.password || '');
+                                      const pass = (journal.credentials as any)[0]?.password;
+                                      if (pass) navigator.clipboard.writeText(pass);
                                     }}
                                     className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                    title="Copy Password"
+                                    title={`Copy first password (${journal.credentials.length} stored)`}
                                   >
-                                    <Copy size={16} />
+                                    <Key size={16} />
                                   </button>
                                 )}
                                 <div className="flex flex-col items-end gap-1">
@@ -1231,14 +1338,22 @@ export const ClientDetail: React.FC<ClientDetailProps> = ({ client, onBack, curr
               onChange={(e) => setServiceToActivate(e.target.value as ServiceType)}
             >
               <option value="">Select Service</option>
-              <option value="Domain">Domain</option>
-              <option value="ISSN">ISSN</option>
-              <option value="DOI">DOI</option>
-              <option value="OJS">OJS</option>
-              <option value="Hosting">Hosting</option>
-              <option value="Editorial">Editorial</option>
-              <option value="Indexing">Indexing</option>
-              <option value="Plagiarism">Plagiarism</option>
+              {activatableServices.length > 0 ? (
+                activatableServices.map(service => (
+                  <option key={service} value={service}>{service}</option>
+                ))
+              ) : (
+                <>
+                  <option value="Domain">Domain</option>
+                  <option value="ISSN">ISSN</option>
+                  <option value="DOI">DOI</option>
+                  <option value="OJS">OJS</option>
+                  <option value="Hosting">Hosting</option>
+                  <option value="Editorial">Editorial</option>
+                  <option value="Indexing">Indexing</option>
+                  <option value="Plagiarism">Plagiarism</option>
+                </>
+              )}
             </select>
           </div>
 

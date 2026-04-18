@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, 
   Eye, 
@@ -22,6 +22,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { User as CRMUser, UserPermissions, ModulePermissions } from '../types';
 import { cn } from '../lib/utils';
+import { toast } from 'react-hot-toast';
 import { INITIAL_MODULE_PERMISSIONS } from '../lib/permissions';
 
 export const PermissionsDashboard: React.FC = () => {
@@ -32,6 +33,7 @@ export const PermissionsDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedModule, setSelectedModule] = useState<keyof UserPermissions>('clients');
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active');
+  const [roleFilter, setRoleFilter] = useState< CRMUser['role'] | 'all'>('all');
 
   const modules: { id: keyof UserPermissions; label: string }[] = [
     { id: 'clients', label: 'Clients' },
@@ -56,7 +58,7 @@ export const PermissionsDashboard: React.FC = () => {
   ];
 
   useEffect(() => {
-    const q = query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager']));
+    const q = query(collection(db, 'users'), where('role', 'in', ['Employee', 'Manager', 'Admin', 'Client']));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const emps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as CRMUser[];
       setEmployees(emps);
@@ -108,6 +110,30 @@ export const PermissionsDashboard: React.FC = () => {
     }
   };
 
+  const toggleUserStatus = async (employeeId: string, field: 'isActive' | 'isHidden') => {
+    const employee = employees.find(e => e.id === employeeId);
+    if (!employee) return;
+
+    const docId = employee.uid || employee.id;
+    setSavingId(`${employeeId}-${field}`);
+    setError(null);
+
+    try {
+      const currentValue = employee[field] ?? (field === 'isActive' ? true : false);
+      await updateDoc(doc(db, 'users', docId), {
+        [field]: !currentValue,
+        updatedAt: serverTimestamp()
+      });
+      toast.success(`${employee.name} access updated successfully`);
+    } catch (err: any) {
+      console.error(`Error updating ${field} for doc:`, docId, err);
+      setError(`Failed to update access for ${employee.name}.`);
+      handleFirestoreError(err, OperationType.UPDATE, `users/${docId}`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   const toggleAllView = async () => {
     setError(null);
     setLoading(true);
@@ -143,17 +169,29 @@ export const PermissionsDashboard: React.FC = () => {
     }
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const matchesSearch = emp.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      emp.employeeId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      emp.department?.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'active' && (!emp.status || emp.status === 'active') && !emp.endingDate) ||
-      (statusFilter === 'inactive' && (emp.status === 'inactive' || !!emp.endingDate));
-    
-    return matchesSearch && matchesStatus;
-  });
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(emp => {
+      // Robust null checks
+      const name = emp.name || '';
+      const email = emp.email || '';
+      const employeeId = emp.employeeId || '';
+      const department = emp.department || '';
+      const search = searchQuery.toLowerCase();
+
+      const matchesSearch = name.toLowerCase().includes(search) ||
+        email.toLowerCase().includes(search) ||
+        employeeId.toLowerCase().includes(search) ||
+        department.toLowerCase().includes(search);
+      
+      const matchesStatus = statusFilter === 'all' || 
+        (statusFilter === 'active' && (!emp.status || emp.status === 'active') && !emp.endingDate && emp.isActive !== false) ||
+        (statusFilter === 'inactive' && (emp.status === 'inactive' || !!emp.endingDate || emp.isActive === false));
+      
+      const matchesRole = roleFilter === 'all' || emp.role === roleFilter;
+
+      return matchesSearch && matchesStatus && matchesRole;
+    });
+  }, [employees, searchQuery, statusFilter, roleFilter]);
 
   if (loading) {
     return (
@@ -181,6 +219,23 @@ export const PermissionsDashboard: React.FC = () => {
                 )}
               >
                 {m.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 bg-white p-1 rounded-2xl border border-slate-200 shadow-sm">
+            {(['Employee', 'Manager', 'Admin', 'Client', 'all'] as const).map((role) => (
+              <button
+                key={role}
+                onClick={() => setRoleFilter(role as any)}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all uppercase tracking-widest",
+                  roleFilter === role 
+                    ? "bg-slate-900 text-white shadow-lg" 
+                    : "text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                {role}
               </button>
             ))}
           </div>
@@ -228,17 +283,9 @@ export const PermissionsDashboard: React.FC = () => {
             <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
               <tr className="border-b border-slate-200">
                 <th className="px-6 py-4 text-xs font-black text-slate-500 uppercase tracking-widest">Employee</th>
-                <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">
-                  <div className="flex flex-col items-center gap-1">
-                    <span>View</span>
-                    <button 
-                      onClick={toggleAllView}
-                      className="text-[10px] text-indigo-600 hover:text-indigo-800 underline font-bold"
-                    >
-                      Toggle All
-                    </button>
-                  </div>
-                </th>
+                <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">Active</th>
+                <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">Hidden</th>
+                <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">View</th>
                 <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">Add</th>
                 <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">Edit</th>
                 <th className="px-4 py-4 text-xs font-black text-slate-500 uppercase tracking-widest text-center">Delete</th>
@@ -275,6 +322,28 @@ export const PermissionsDashboard: React.FC = () => {
                       </div>
                     </td>
                     
+                    <td className="px-4 py-4 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <PermissionToggle 
+                          active={emp.isActive !== false} 
+                          onClick={() => toggleUserStatus(emp.id, 'isActive')}
+                          icon={<Unlock size={20} />}
+                          color="emerald"
+                        />
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <PermissionToggle 
+                          active={emp.isHidden === true} 
+                          onClick={() => toggleUserStatus(emp.id, 'isHidden')}
+                          icon={<Lock size={20} />}
+                          color="rose"
+                        />
+                      </div>
+                    </td>
+
                     <td className="px-4 py-4 text-center">
                       <PermissionToggle 
                         active={perms.view} 

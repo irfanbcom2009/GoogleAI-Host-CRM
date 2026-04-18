@@ -18,7 +18,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Client, Publisher, Domain, Journal, User as UserType } from '../types';
+import { Client, Publisher, Domain, Journal, User as UserType, DomainRegistrar } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, query, where, onSnapshot, orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
 import { cn } from '../lib/utils';
@@ -36,6 +36,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
+  const [registrars, setRegistrars] = useState<DomainRegistrar[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Selection state for drill-down
@@ -127,10 +128,15 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
       }
     );
 
+    const unsubRegistrars = onSnapshot(query(collection(db, 'registrars')), (snap) => {
+      setRegistrars(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as DomainRegistrar)));
+    });
+
     return () => {
       unsubPublishers();
       unsubDomains();
       unsubJournals();
+      unsubRegistrars();
     };
   }, [client.id]);
 
@@ -431,7 +437,17 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
           </div>
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Registrar</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newDomain.registrar} onChange={e => setNewDomain({...newDomain, registrar: e.target.value})} />
+            <select 
+              required 
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" 
+              value={newDomain.registrar} 
+              onChange={e => setNewDomain({...newDomain, registrar: e.target.value})}
+            >
+              <option value="">Select Registrar...</option>
+              {registrars.map(reg => (
+                <option key={reg.id} value={reg.name}>{reg.name}</option>
+              ))}
+            </select>
           </div>
           <button type="submit" className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold">Save Domain</button>
         </form>

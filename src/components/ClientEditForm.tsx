@@ -14,7 +14,8 @@ import {
 import { Client, ServiceType, Subscription, Domain } from '../types';
 import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
-import { cn } from '../lib/utils';
+import { cn, formatDateForInput } from '../lib/utils';
+import { useFieldPermissions } from '../hooks/useFieldPermissions';
 import { Globe } from 'lucide-react';
 
 interface ClientEditFormProps {
@@ -26,6 +27,7 @@ interface ClientEditFormProps {
 const SALUTATIONS = ['Mr.', 'Miss', 'Mrs.', 'Dr.', 'Prof.', 'Dr. Prof.'];
 
 export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentUser, onClose }) => {
+  const { canView, canEdit } = useFieldPermissions(currentUser);
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +40,9 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
     address: client.address,
     status: client.status,
     portalEnabled: client.portalEnabled ?? false,
-    endingDate: client.endingDate || '',
+    isActive: client.isActive ?? true,
+    isHidden: client.isHidden ?? false,
+    endingDate: formatDateForInput(client.endingDate),
     photoURL: client.photoURL || '',
     subscriptions: client.subscriptions || []
   });
@@ -62,8 +66,12 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
     const dates: Record<string, { startDate: string, expiryDate: string, domainId?: string }> = {};
     client.subscriptions?.forEach(sub => {
       const service = typeof sub === 'string' ? sub : sub.service;
-      const startDate = typeof sub === 'string' ? new Date().toISOString().split('T')[0] : (sub.startDate || new Date().toISOString().split('T')[0]);
-      const expiryDate = typeof sub === 'string' ? new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0] : (sub.expiryDate || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0]);
+      const startDate = typeof sub === 'string' 
+        ? new Date().toISOString().split('T')[0] 
+        : (formatDateForInput(sub.startDate) || new Date().toISOString().split('T')[0]);
+      const expiryDate = typeof sub === 'string' 
+        ? new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0] 
+        : (formatDateForInput(sub.expiryDate) || new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0]);
       const domainId = typeof sub === 'string' ? undefined : sub.domainId;
       
       dates[service] = { startDate, expiryDate, domainId };
@@ -78,8 +86,8 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
     setError(null);
 
     // Restriction: Only admin can add/edit clients with gmail address
-    const isDefaultAdmin = auth.currentUser?.email === 'irfanbcom2009@gmail.com';
-    if (formData.email.toLowerCase().endsWith('@gmail.com') && !isDefaultAdmin) {
+    const isSystemAdmin = auth.currentUser?.email === 'irfanbcom2009@gmail.com' || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(auth.currentUser?.email || '');
+    if (formData.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
       setError("Only administrators can manage records with @gmail.com addresses.");
       setIsSaving(false);
       return;
@@ -226,7 +234,11 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           <input 
             type="text"
             required
-            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={!canEdit('clients', 'name')}
+            className={cn(
+               "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
+               !canEdit('clients', 'name') && "opacity-50 cursor-not-allowed"
+            )}
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           />
@@ -248,7 +260,11 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           <input 
             type="email"
             required
-            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={!canEdit('clients', 'email')}
+            className={cn(
+               "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
+               !canEdit('clients', 'email') && "opacity-50 cursor-not-allowed"
+            )}
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
           />
@@ -257,12 +273,78 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           <label className="text-sm font-bold text-slate-700">Phone</label>
           <input 
             type="text"
-            className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={!canEdit('clients', 'phone')}
+            className={cn(
+               "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
+               !canEdit('clients', 'phone') && "opacity-50 cursor-not-allowed"
+            )}
             value={formData.phone}
             onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
           />
         </div>
       </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700">Portal Access</label>
+          <div className="flex items-center gap-2 h-[42px]">
+            <button
+              type="button"
+              onClick={() => setFormData(prev => ({ ...prev, portalEnabled: !prev.portalEnabled }))}
+              className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                formData.portalEnabled ? "bg-indigo-600" : "bg-slate-200"
+              )}
+            >
+              <span className={cn(
+                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                formData.portalEnabled ? "translate-x-6" : "translate-x-1"
+              )} />
+            </button>
+            <span className="text-xs font-bold text-slate-600">{formData.portalEnabled ? 'On' : 'Off'}</span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700">Active Status</label>
+          <div className="flex items-center gap-2 h-[42px]">
+            <button
+              type="button"
+              onClick={() => setFormData(prev => ({ ...prev, isActive: !prev.isActive }))}
+              className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                formData.isActive ? "bg-emerald-600" : "bg-slate-200"
+              )}
+            >
+              <span className={cn(
+                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                formData.isActive ? "translate-x-6" : "translate-x-1"
+              )} />
+            </button>
+            <span className="text-xs font-bold text-slate-600">{formData.isActive ? 'Active' : 'Inactive'}</span>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-bold text-slate-700">Hidden Status</label>
+          <div className="flex items-center gap-2 h-[42px]">
+            <button
+              type="button"
+              onClick={() => setFormData(prev => ({ ...prev, isHidden: !prev.isHidden }))}
+              className={cn(
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                formData.isHidden ? "bg-rose-600" : "bg-slate-200"
+              )}
+            >
+              <span className={cn(
+                "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                formData.isHidden ? "translate-x-6" : "translate-x-1"
+              )} />
+            </button>
+            <span className="text-xs font-bold text-slate-600">{formData.isHidden ? 'Hidden' : 'Visible'}</span>
+          </div>
+        </div>
+      </div>
+
       <div className="space-y-2">
         <label className="text-sm font-bold text-slate-700">Address</label>
         <textarea 

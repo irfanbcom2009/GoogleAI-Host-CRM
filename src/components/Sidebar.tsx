@@ -22,11 +22,18 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   userRole?: UserRole;
   userPermissions?: UserPermissions;
+  userEmail?: string;
+  userPhotoURL?: string;
   userDepartment?: string;
   onLogout?: () => void;
   isImpersonating?: boolean;
   onStopImpersonating?: () => void;
   pendingApprovalsCount?: number;
+  branding?: {
+    name: string;
+    logoUrl?: string;
+    primaryColor?: string;
+  };
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -34,11 +41,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab, 
   userRole = 'Employee', 
   userPermissions,
+  userEmail,
+  userPhotoURL,
   userDepartment,
   onLogout,
   isImpersonating,
   onStopImpersonating,
-  pendingApprovalsCount = 0
+  pendingApprovalsCount = 0,
+  branding = { name: 'Host A Journal' }
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -67,14 +77,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const filteredMenu = useMemo(() => {
+    const ayeshaEmails = ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
+    const isAyesha = userEmail && ayeshaEmails.includes(userEmail);
+
     return MENU_CONFIG.map(group => ({
       ...group,
       items: group.items.filter(item => {
-        // Role check
-        if (!item.roles.includes(userRole)) return false;
+        // Role check - Bypass for Ayesha on specific tabs
+        if (!item.roles.includes(userRole) && !(isAyesha && ['employees', 'activity-history'].includes(item.id))) return false;
         
-        // Permission check
-        if (item.permission && userPermissions) {
+        // Permission check - Bypass for Ayesha on specific tabs
+        if (item.permission && userPermissions && !(isAyesha && ['employees', 'activity-history'].includes(item.id))) {
           const modulePerms = (userPermissions as any)[item.permission];
           if (modulePerms === false) return false;
           if (modulePerms && typeof modulePerms === 'object' && modulePerms.view === false) return false;
@@ -151,12 +164,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Header */}
       <div className={cn("p-6", isCollapsed && "px-4 text-center")}>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-            <Layers className="text-white" size={24} />
+          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0 overflow-hidden">
+            {branding.logoUrl ? (
+              <img src={branding.logoUrl} className="w-full h-full object-contain p-1" alt="" />
+            ) : (
+              <Layers className="text-white" size={24} />
+            )}
           </div>
           {!isCollapsed && (
-            <div>
-              <h1 className="text-sm font-bold text-white truncate">Host A Journal</h1>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-white truncate">{branding.name}</h1>
               <p className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">CRM System</p>
             </div>
           )}
@@ -217,6 +234,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Footer */}
       <div className={cn("p-4 border-t border-slate-800 space-y-1", isCollapsed && "px-2")}>
+        {!isCollapsed && userEmail && (
+          <div className="flex items-center gap-3 px-4 py-3 mb-2 bg-slate-800/30 rounded-xl border border-slate-700/50">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0 overflow-hidden border border-slate-700">
+              {userPhotoURL ? (
+                <img src={userPhotoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                userEmail.charAt(0).toUpperCase()
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">{userRole}</p>
+              <p className="text-xs font-medium text-slate-200 truncate">{userEmail}</p>
+            </div>
+          </div>
+        )}
+
         {isImpersonating && (
           <button 
             onClick={onStopImpersonating}
