@@ -10,7 +10,9 @@ import {
   LogOut,
   Shield,
   Sparkles,
-  Layers
+  Layers,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { UserRole, UserPermissions } from '../types';
@@ -25,6 +27,7 @@ interface SidebarProps {
   userEmail?: string;
   userPhotoURL?: string;
   userDepartment?: string;
+  userSubscriptions?: any[];
   onLogout?: () => void;
   isImpersonating?: boolean;
   onStopImpersonating?: () => void;
@@ -44,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userEmail,
   userPhotoURL,
   userDepartment,
+  userSubscriptions,
   onLogout,
   isImpersonating,
   onStopImpersonating,
@@ -54,6 +58,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+
+  // Listen to custom window events for mobile navigation
+  useEffect(() => {
+    const handleToggle = () => setIsMobileOpen(prev => !prev);
+    const handleOpen = () => setIsMobileOpen(true);
+    const handleClose = () => setIsMobileOpen(false);
+
+    window.addEventListener('toggle-mobile-sidebar', handleToggle);
+    window.addEventListener('open-mobile-sidebar', handleOpen);
+    window.addEventListener('close-mobile-sidebar', handleClose);
+
+    return () => {
+      window.removeEventListener('toggle-mobile-sidebar', handleToggle);
+      window.removeEventListener('open-mobile-sidebar', handleOpen);
+      window.removeEventListener('close-mobile-sidebar', handleClose);
+    };
+  }, []);
 
   // Auto-expand group containing active tab
   useEffect(() => {
@@ -86,11 +107,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
         // Role check - Bypass for Ayesha on specific tabs
         if (!item.roles.includes(userRole) && !(isAyesha && ['employees', 'activity-history'].includes(item.id))) return false;
         
-        // Permission check - Bypass for Ayesha on specific tabs
-        if (item.permission && userPermissions && !(isAyesha && ['employees', 'activity-history'].includes(item.id))) {
-          const modulePerms = (userPermissions as any)[item.permission];
-          if (modulePerms === false) return false;
-          if (modulePerms && typeof modulePerms === 'object' && modulePerms.view === false) return false;
+        // Active Subscriptions check for Client users
+        if (userRole === 'Client') {
+          const activeSubs = (userSubscriptions || []).filter(
+            (sub: any) => sub.status === 'active'
+          );
+          const activeServices = activeSubs.map((sub: any) => sub.service);
+
+          if (item.id === 'domains') {
+            const hasSub = activeServices.some((s: string) => 
+              ['Domain', 'Domain (External)', 'Hosting', 'Hosting (External)'].includes(s)
+            );
+            if (!hasSub) return false;
+          }
+          if (item.id === 'journals') {
+            const hasSub = activeServices.some((s: string) => 
+              ['OJS', 'Publisher', 'Editorial Setup', 'Journal Evaluation'].includes(s)
+            );
+            if (!hasSub) return false;
+          }
+          if (item.id === 'doi') {
+            const hasSub = activeServices.some((s: string) => s === 'DOI');
+            if (!hasSub) return false;
+          }
+          if (['workflow-dashboard', 'workflow-orders', 'workflow-logs'].includes(item.id)) {
+            if (activeServices.length === 0) return false;
+          }
+        }
+
+        // Permission check
+        if (item.permission && userRole !== 'Admin') {
+          // Bypass for Ayesha on specific tabs
+          const isAyeshaBypass = isAyesha && ['employees', 'activity-history'].includes(item.id);
+          if (!isAyeshaBypass) {
+            const modulePerms = userPermissions ? (userPermissions as any)[item.permission] : null;
+            if (!modulePerms || typeof modulePerms !== 'object' || modulePerms.view !== true) {
+              return false;
+            }
+          }
         }
 
         // Department check
@@ -102,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return true;
       })
     })).filter(group => group.items.length > 0);
-  }, [userRole, userPermissions, userDepartment, searchQuery]);
+  }, [userRole, userPermissions, userDepartment, searchQuery, userSubscriptions]);
 
   const renderMenuItem = (item: MenuItem) => {
     const isActive = activeTab === item.id;
@@ -180,21 +234,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Search */}
-      {!isCollapsed && (
-        <div className="px-4 mb-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
-            <input 
-              type="text"
-              placeholder="Search menu..."
-              className="w-full pl-9 pr-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-slate-200"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        </div>
-      )}
+      {/* Search - Icon only or compact button */}
+      <div className="px-4 mb-4 flex justify-center shrink-0 select-none">
+        <button
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('open-command-palette'));
+          }}
+          className={cn(
+            "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 cursor-pointer border border-transparent hover:border-slate-800/80 w-full",
+            isCollapsed && "w-10 h-10 justify-center p-0"
+          )}
+          title="Search CRM System (⌘ K)"
+        >
+          <Search size={16} className="text-indigo-400 shrink-0" />
+          {!isCollapsed && <span className="font-semibold text-xs tracking-tight">Search System...</span>}
+        </button>
+      </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-4 space-y-2 overflow-y-auto pb-8 scrollbar-hide">
@@ -264,6 +319,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
         
+        <button 
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('toggle-global-theme'));
+          }}
+          className={cn(
+            "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl hover:bg-slate-800 hover:text-white transition-all text-slate-400 group cursor-pointer",
+            isCollapsed && "justify-center px-0"
+          )}
+          title={isCollapsed ? "Switch Theme" : undefined}
+        >
+          <Sun size={18} className="shrink-0 text-amber-400 group-hover:rotate-45 transition-transform duration-300" />
+          {!isCollapsed && (
+            <span className="font-medium text-xs truncate">
+              Toggle Light / Dark
+            </span>
+          )}
+        </button>
+
         <button 
           onClick={() => setActiveTab('settings')}
           className={cn(

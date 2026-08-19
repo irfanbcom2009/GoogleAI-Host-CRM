@@ -43,6 +43,9 @@ export const InvoiceDashboard: React.FC = () => {
     const fetchSummary = async () => {
       setLoading(true);
       try {
+        // Run recurring check first
+        await financeService.checkRecurringInvoices();
+        
         const data = await financeService.getFinancialSummary(dateRange.start, dateRange.end);
         setSummary(data);
       } catch (error) {
@@ -118,14 +121,14 @@ export const InvoiceDashboard: React.FC = () => {
             <input 
               type="date" 
               className="bg-transparent border-none outline-none text-sm font-bold text-slate-700"
-              value={dateRange.start}
+              value={dateRange.start || ''}
               onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
             />
             <span className="text-slate-300">to</span>
             <input 
               type="date" 
               className="bg-transparent border-none outline-none text-sm font-bold text-slate-700"
-              value={dateRange.end}
+              value={dateRange.end || ''}
               onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
             />
           </div>

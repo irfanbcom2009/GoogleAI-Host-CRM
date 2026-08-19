@@ -45,3 +45,39 @@ export function sanitizeUrl(url: string): string {
     return url; // Return original if it's still not a valid URL structure
   }
 }
+
+export function getHostname(url: string): string {
+  if (!url) return '';
+  try {
+    let sanitized = url.trim();
+    if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
+      sanitized = `https://${sanitized}`;
+    }
+    return new URL(sanitized).hostname;
+  } catch {
+    return '';
+  }
+}
+
+export function generateJournalAbbreviation(title: string): string {
+  if (!title) return '';
+  const stopWords = ['of', 'and', 'the', 'in', 'on', 'at', 'for', 'to', 'with', 'by', 'as'];
+  return title
+    .split(/\s+/)
+    .filter(word => word && !stopWords.includes(word.toLowerCase()))
+    .map(word => {
+       if (word.length <= 4) return word;
+       return word.substring(0, 3) + '.';
+    })
+    .join(' ');
+}
+
+export function generateJournalInitials(title: string): string {
+  if (!title) return '';
+  const stopWords = ['of', 'and', 'the', 'in', 'on', 'at', 'for', 'to', 'with', 'by', 'as'];
+  return title
+    .split(/\s+/)
+    .filter(word => word && !stopWords.includes(word.toLowerCase()))
+    .map(word => word[0].toUpperCase())
+    .join('');
+}

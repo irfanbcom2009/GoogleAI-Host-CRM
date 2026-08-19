@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Mail, 
@@ -20,14 +20,19 @@ import {
   ShieldCheck,
   Check,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  DollarSign,
+  Eye,
+  EyeOff
 } from 'lucide-react';
-import { User as CRMUser, UserPermissions, ModulePermissions, EmploymentPeriod } from '../types';
-import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { User as CRMUser, UserPermissions, ModulePermissions, EmploymentPeriod, GlobalSettings } from '../types';
+import { db, auth, handleFirestoreError, OperationType, getErrorMessage } from '../lib/firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { toast } from 'react-hot-toast';
 import { cn, formatDateForInput } from '../lib/utils';
 import { HelpIcon } from './HelpIcon';
 import { usePermissions } from '../hooks/usePermissions';
+import { DEFAULT_IMAGES } from '../constants/images';
 
 interface EmployeeEditFormProps {
   employee: CRMUser;
@@ -40,6 +45,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showMailPassword, setShowMailPassword] = useState(false);
+  const [showPcPassword, setShowPcPassword] = useState(false);
   const [formData, setFormData] = useState({
     employeeId: employee.employeeId || '',
     name: employee.name || '',
@@ -50,6 +57,8 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
     joiningDate: formatDateForInput(employee.joiningDate),
     endingDate: formatDateForInput(employee.endingDate),
     experience: employee.experience || '',
+    baseSalary: employee.baseSalary || 0,
+    baseSalaryCurrency: employee.baseSalaryCurrency || 'PKR',
     gender: employee.gender || '',
     officialMail: employee.officialMail || '',
     officialMailPassword: employee.officialMailPassword || '',
@@ -96,6 +105,24 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
       otherDocs: []
     }
   });
+
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+
+  useEffect(() => {
+    const fetchSettings = () => {
+      const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as GlobalSettings;
+          setGlobalSettings({
+            ...data,
+            departments: Array.isArray(data.departments) ? data.departments : []
+          });
+        }
+      });
+      return unsubscribe;
+    };
+    return fetchSettings();
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: string) => {
     const file = e.target.files?.[0];
@@ -243,8 +270,10 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
 
       await updateDoc(doc(db, 'users', employee.id), {
         ...formData,
+        photoURL: formData.photoURL || formData.attachments.photo || (formData.gender === 'Female' ? DEFAULT_IMAGES.FEMALE_STAFF : ''),
         updatedAt: serverTimestamp()
       });
+      toast.success('Changes saved successfully');
       setIsSaved(true);
       setTimeout(() => {
         setIsSaved(false);
@@ -252,17 +281,9 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
       }, 500);
     } catch (err: any) {
       console.error("Error updating employee:", err);
-      let message = "Failed to save changes. Please try again.";
-      
-      if (err.message && err.message.includes('quota')) {
-        message = "Storage quota exceeded. Please contact support.";
-      } else if (err.code === 'permission-denied') {
-        message = "You don't have permission to update this record.";
-      } else if (err.message && err.message.includes('too large')) {
-        message = "The record is too large to save. Try removing some attachments.";
-      }
-
-      setError(message);
+      const friendlyMessage = getErrorMessage(err);
+      setError(friendlyMessage);
+      toast.error(friendlyMessage);
       
       try {
         handleFirestoreError(err, OperationType.UPDATE, 'users');
@@ -293,14 +314,14 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center">
+                  <label className="crm-label flex items-center">
                     Employee ID
                     <HelpIcon policyTitle="Employee ID Policy" />
                   </label>
                   <button 
                     type="button"
                     onClick={() => generateEmployeeId()}
-                    className="text-[8px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider flex items-center gap-1"
+                    className="text-[8px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 uppercase tracking-wider flex items-center gap-1"
                   >
                     <RefreshCw size={8} />
                     Regenerate
@@ -309,48 +330,39 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                 <input 
                   required
                   type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.employeeId}
+                  className="crm-input"
+                  value={formData.employeeId || ''}
                   onChange={e => setFormData(prev => ({ ...prev, employeeId: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Profile Photo URL</label>
+                <label className="crm-label">Profile Photo URL</label>
                 <input 
                   type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.photoURL}
+                  className="crm-input"
+                  value={formData.photoURL || ''}
                   onChange={e => setFormData(prev => ({ ...prev, photoURL: e.target.value }))}
                   placeholder="https://example.com/photo.jpg"
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Full Name</label>
+                <label className="crm-label">Full Name</label>
                 <input 
                   required
                   type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.name}
+                  className="crm-input"
+                  value={formData.name || ''}
                   onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
                 />
               </div>
             </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Login Username</label>
-              <input 
-                required
-                type="text"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.email}
-                onChange={e => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              />
-            </div>
+            {/* Login Username removed to be synchronized with Official Mail */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Role</label>
+                <label className="crm-label">Role</label>
                 <select 
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.role}
+                  className="crm-input"
+                  value={formData.role || ''}
                   onChange={e => setFormData(prev => ({ ...prev, role: e.target.value as any }))}
                 >
                   <option value="Employee">Employee</option>
@@ -359,10 +371,10 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Mode of Working</label>
+                <label className="crm-label">Mode of Working</label>
                 <select 
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.modeOfWorking}
+                  className="crm-input"
+                  value={formData.modeOfWorking || ''}
                   onChange={e => setFormData(prev => ({ ...prev, modeOfWorking: e.target.value as any }))}
                 >
                   <option value="On-site">On-site</option>
@@ -381,26 +393,59 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
             Professional Profile
           </h3>
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Department</label>
-              <input 
-                type="text"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.department}
-                onChange={e => setFormData(prev => ({ ...prev, department: e.target.value }))}
-              />
+            <div className="space-y-1 col-span-2 md:col-span-1">
+              <label className="crm-label">Salary Configuration</label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
+                    {formData.baseSalaryCurrency === 'USD' ? '$' : 'Rs.'}
+                  </div>
+                  <input 
+                    type="number"
+                    placeholder="Base Salary"
+                    className="crm-input pl-9"
+                    value={formData.baseSalary || ''}
+                    onChange={e => setFormData(prev => ({ ...prev, baseSalary: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+                <select 
+                  className="px-3 py-2 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold text-slate-900 dark:text-slate-100"
+                  value={formData.baseSalaryCurrency || ''}
+                  onChange={e => setFormData(prev => ({ ...prev, baseSalaryCurrency: e.target.value as any }))}
+                >
+                  <option value="PKR">PKR</option>
+                  <option value="USD">USD</option>
+                </select>
+              </div>
+              <p className="text-[8px] text-slate-400 dark:text-slate-500 mt-1 italic leading-tight">Minimum monthly salary. Final salary is max(pointsValue, baseSalary).</p>
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Assignments</label>
+              <label className="crm-label">Department</label>
+              <select 
+                className="crm-input bg-slate-50 border border-slate-200"
+                value={formData.department || ''}
+                onChange={e => setFormData(prev => ({ ...prev, department: e.target.value }))}
+              >
+                <option value="">Select Department</option>
+                {((globalSettings?.departments && globalSettings.departments.length > 0)
+                  ? globalSettings.departments
+                  : ['Management', 'Editorial', 'Technical', 'Sales', 'Support', 'Finance', 'HR', 'IT', 'Marketing', 'Operations']
+                ).map(dept => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="crm-label">Assignments</label>
               <input 
                 type="text"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.assignments}
+                className="crm-input"
+                value={formData.assignments || ''}
                 onChange={e => setFormData(prev => ({ ...prev, assignments: e.target.value }))}
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Portal Access</label>
+              <label className="crm-label">Portal Access</label>
               <div className="flex items-center gap-3 h-[42px]">
                 <button
                   type="button"
@@ -408,7 +453,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   onClick={() => setFormData(prev => ({ ...prev, portalEnabled: !prev.portalEnabled }))}
                   className={cn(
                     "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
-                    formData.portalEnabled ? "bg-indigo-600" : "bg-slate-200",
+                    formData.portalEnabled ? "bg-indigo-600" : "bg-slate-200 dark:bg-slate-700",
                     !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
                   )}
                 >
@@ -419,7 +464,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                     )}
                   />
                 </button>
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                   Portal: {formData.portalEnabled ? 'On' : 'Off'}
                 </span>
                 
@@ -429,7 +474,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   onClick={() => setFormData(prev => ({ ...prev, isActive: !prev.isActive }))}
                   className={cn(
                     "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
-                    formData.isActive ? "bg-emerald-600" : "bg-slate-200",
+                    formData.isActive ? "bg-emerald-600" : "bg-slate-200 dark:bg-slate-700",
                     !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
                   )}
                 >
@@ -440,7 +485,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                     )}
                   />
                 </button>
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                   Active: {formData.isActive ? 'Yes' : 'No'}
                 </span>
 
@@ -450,7 +495,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                   onClick={() => setFormData(prev => ({ ...prev, isHidden: !prev.isHidden }))}
                   className={cn(
                     "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
-                    formData.isHidden ? "bg-rose-600" : "bg-slate-200",
+                    formData.isHidden ? "bg-rose-600" : "bg-slate-200 dark:bg-slate-700",
                     !check('employees', 'edit') && "opacity-50 cursor-not-allowed"
                   )}
                 >
@@ -461,7 +506,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                     )}
                   />
                 </button>
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
                   Hidden: {formData.isHidden ? 'Yes' : 'No'}
                 </span>
               </div>
@@ -471,7 +516,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.qualification}
+                value={formData.qualification || ''}
                 onChange={e => setFormData(prev => ({ ...prev, qualification: e.target.value }))}
               />
             </div>
@@ -480,7 +525,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.experience}
+                value={formData.experience || ''}
                 onChange={e => setFormData(prev => ({ ...prev, experience: e.target.value }))}
               />
             </div>
@@ -499,7 +544,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="date"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.joiningDate}
+                value={formData.joiningDate || ''}
                 onChange={e => setFormData(prev => ({ ...prev, joiningDate: e.target.value }))}
               />
             </div>
@@ -509,9 +554,20 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                 <input 
                   type="date"
                   className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.endingDate}
+                  value={formData.endingDate || ''}
                   onChange={e => setFormData(prev => ({ ...prev, endingDate: e.target.value }))}
                 />
+                {formData.endingDate && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, endingDate: '' }))}
+                    className="p-2 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl text-[10px] font-bold uppercase tracking-wider hover:bg-rose-100 transition-all flex items-center gap-1"
+                    title="Clear Ending Date"
+                  >
+                    <X size={14} />
+                    Clear
+                  </button>
+                )}
                 {formData.endingDate && (
                   <button
                     type="button"
@@ -529,13 +585,12 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gender</label>
               <select 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.gender}
+                value={formData.gender || ''}
                 onChange={e => setFormData(prev => ({ ...prev, gender: e.target.value }))}
               >
                 <option value="">Select Gender</option>
                 <option value="Male">Male</option>
                 <option value="Female">Female</option>
-                <option value="Other">Other</option>
               </select>
             </div>
             <div className="space-y-1">
@@ -543,7 +598,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.cnic}
+                value={formData.cnic || ''}
                 onChange={e => setFormData(prev => ({ ...prev, cnic: e.target.value }))}
               />
             </div>
@@ -558,29 +613,39 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
           </h3>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Official Mail</label>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Official Mail (Portal Login Email)</label>
               <input 
                 type="email"
+                required
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.officialMail}
-                onChange={e => setFormData(prev => ({ ...prev, officialMail: e.target.value }))}
+                value={formData.officialMail || ''}
+                onChange={e => setFormData(prev => ({ ...prev, officialMail: e.target.value, email: e.target.value }))}
               />
             </div>
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Mail Password</label>
-              <input 
-                type="text"
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.officialMailPassword}
-                onChange={e => setFormData(prev => ({ ...prev, officialMailPassword: e.target.value }))}
-              />
+              <div className="relative">
+                <input 
+                  type={showMailPassword ? "text" : "password"}
+                  className="w-full pl-4 pr-12 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={formData.officialMailPassword || ''}
+                  onChange={e => setFormData(prev => ({ ...prev, officialMailPassword: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowMailPassword(prev => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
+                >
+                  {showMailPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">WhatsApp</label>
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.whatsappPersonal}
+                value={formData.whatsappPersonal || ''}
                 onChange={e => setFormData(prev => ({ ...prev, whatsappPersonal: e.target.value }))}
               />
             </div>
@@ -589,7 +654,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.homePhone}
+                value={formData.homePhone || ''}
                 onChange={e => setFormData(prev => ({ ...prev, homePhone: e.target.value }))}
               />
             </div>
@@ -608,7 +673,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <input 
                 type="text"
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.pcAllotted}
+                value={formData.pcAllotted || ''}
                 onChange={e => setFormData(prev => ({ ...prev, pcAllotted: e.target.value }))}
               />
             </div>
@@ -618,18 +683,27 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
                 <input 
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.pcUsername}
+                  value={formData.pcUsername || ''}
                   onChange={e => setFormData(prev => ({ ...prev, pcUsername: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">PC Password</label>
-                <input 
-                  type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={formData.pcPassword}
-                  onChange={e => setFormData(prev => ({ ...prev, pcPassword: e.target.value }))}
-                />
+                <div className="relative">
+                  <input 
+                    type={showPcPassword ? "text" : "password"}
+                    className="w-full pl-4 pr-12 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={formData.pcPassword || ''}
+                    onChange={e => setFormData(prev => ({ ...prev, pcPassword: e.target.value }))}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPcPassword(prev => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
+                  >
+                    {showPcPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -647,7 +721,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <textarea 
                 rows={2}
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.address}
+                value={formData.address || ''}
                 onChange={e => setFormData(prev => ({ ...prev, address: e.target.value }))}
               />
             </div>
@@ -656,7 +730,7 @@ export const EmployeeEditForm: React.FC<EmployeeEditFormProps> = ({ employee, cu
               <textarea 
                 rows={2}
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={formData.remarks}
+                value={formData.remarks || ''}
                 onChange={e => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
               />
             </div>

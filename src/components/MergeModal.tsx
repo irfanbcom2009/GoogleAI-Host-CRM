@@ -51,11 +51,26 @@ export const MergeModal: React.FC<MergeModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (initialSourceItem) {
-      setSourceItem(initialSourceItem);
-      setStep(2);
+    if (isOpen) {
+      setStep(initialSourceItem ? 2 : 1);
+      setSourceItem(initialSourceItem || null);
+      setTargetItem(null);
+      setSearchQuery('');
+      setSearchResults([]);
+      setError(null);
     }
-  }, [initialSourceItem]);
+  }, [isOpen, initialSourceItem]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchQuery.trim().length >= 2) {
+        handleSearch();
+      } else if (searchQuery.trim().length === 0) {
+        setSearchResults([]);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -63,26 +78,39 @@ export const MergeModal: React.FC<MergeModalProps> = ({
     setError(null);
     try {
       const collectionName = (type === 'clients' || type === 'employees') ? 'users' : type;
-      const q = query(
-        collection(db, collectionName),
-        where(type === 'clients' ? 'role' : (type === 'employees' ? 'role' : 'status'), '!=', 'deleted') // Basic filter
-      );
+      
+      let q;
+      if (type === 'clients') {
+        q = query(collection(db, 'users'), where('role', '==', 'Client'));
+      } else if (type === 'employees') {
+        // Fetch all and filter in memory to avoid index requirements for 'in' operator across roles
+        q = query(collection(db, 'users'));
+      } else {
+        // For other types, fetch all and filter in memory to avoid index issues or missing fields
+        q = query(collection(db, collectionName));
+      }
       
       const snapshot = await getDocs(q);
       const results = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .map(doc => ({ id: doc.id, ...(doc.data() as any) }))
         .filter((item: any) => {
           if (type === 'clients' && item.role !== 'Client') return false;
-          if (type === 'employees' && !['Employee', 'Manager'].includes(item.role)) return false;
+          // More inclusive for employees
+          if (type === 'employees' && (item.role === 'Client' || !item.role)) return false;
           if (sourceItem && item.id === sourceItem.id) return false;
           
           const searchLower = searchQuery.toLowerCase();
           if (type === 'clients' || type === 'employees') {
-            return item.name?.toLowerCase().includes(searchLower) || item.email?.toLowerCase().includes(searchLower);
+            const matchesName = (item.name || '').toLowerCase().includes(searchLower);
+            const matchesEmail = (item.email || '').toLowerCase().includes(searchLower);
+            const matchesEmpId = (item.employeeId || '').toLowerCase().includes(searchLower);
+            return matchesName || matchesEmail || matchesEmpId;
           } else if (type === 'journals') {
-            return item.title?.toLowerCase().includes(searchLower) || item.issnPrint?.includes(searchQuery);
+            const matchesTitle = (item.title || '').toLowerCase().includes(searchLower);
+            const matchesISSN = (item.issnPrint || '').includes(searchQuery) || (item.issnOnline || '').includes(searchQuery);
+            return matchesTitle || matchesISSN;
           } else {
-            return item.domainName?.toLowerCase().includes(searchLower);
+            return (item.domainName || '').toLowerCase().includes(searchLower);
           }
         });
       
@@ -132,6 +160,20 @@ export const MergeModal: React.FC<MergeModalProps> = ({
           batch.update(d.ref, { clientId: targetItem.id, clientName: targetItem.name });
         });
 
+        // Transfer Orders
+        const ordersQ = query(collection(db, 'orders'), where('clientId', '==', sourceItem.id));
+        const ordersSnap = await getDocs(ordersQ);
+        ordersSnap.forEach(d => {
+          batch.update(d.ref, { clientId: targetItem.id, clientName: targetItem.name });
+        });
+
+        // Transfer Activity Logs
+        const logsQ = query(collection(db, 'activity_logs'), where('userId', '==', sourceItem.id));
+        const logsSnap = await getDocs(logsQ);
+        logsSnap.forEach(d => {
+          batch.update(d.ref, { userId: targetItem.id, userName: targetItem.name });
+        });
+
         // Merge Points
         const totalPoints = (targetItem.points || 0) + (sourceItem.points || 0);
         batch.update(doc(db, 'users', targetItem.id), { points: totalPoints });
@@ -154,6 +196,27 @@ export const MergeModal: React.FC<MergeModalProps> = ({
           batch.update(d.ref, { assignedEmployeeId: targetItem.id });
         });
 
+        // Transfer Point History
+        const pointsHistoryQ = query(collection(db, 'pointHistory'), where('userId', '==', sourceItem.id));
+        const pointsHistorySnap = await getDocs(pointsHistoryQ);
+        pointsHistorySnap.forEach(d => {
+          batch.update(d.ref, { userId: targetItem.id });
+        });
+
+        // Transfer Salary Payments
+        const paymentsQ = query(collection(db, 'salaryPayments'), where('employeeId', '==', sourceItem.id));
+        const paymentsSnap = await getDocs(paymentsQ);
+        paymentsSnap.forEach(d => {
+          batch.update(d.ref, { employeeId: targetItem.id });
+        });
+
+        // Transfer Activity Logs
+        const logsQ = query(collection(db, 'activity_logs'), where('userId', '==', sourceItem.id));
+        const logsSnap = await getDocs(logsQ);
+        logsSnap.forEach(d => {
+          batch.update(d.ref, { userId: targetItem.id, userName: targetItem.name });
+        });
+
         // Merge Points
         const totalPoints = (targetItem.points || 0) + (sourceItem.points || 0);
         batch.update(doc(db, 'users', targetItem.id), { points: totalPoints });
@@ -162,26 +225,27 @@ export const MergeModal: React.FC<MergeModalProps> = ({
         batch.delete(doc(db, 'users', sourceItem.id));
       }
       else if (type === 'journals') {
-        // Transfer Tasks
-        const tasksQ = query(collection(db, 'tasks'), where('journalId', '==', sourceItem.id));
-        const tasksSnap = await getDocs(tasksQ);
-        tasksSnap.forEach(d => {
-          batch.update(d.ref, { journalId: targetItem.id, journalTitle: targetItem.title });
-        });
+        // Essential collections to transfer
+        const collectionsToTransfer = [
+          { name: 'tasks', updateFields: { journalId: targetItem.id, journalTitle: targetItem.title } },
+          { name: 'invoices', updateFields: { journalId: targetItem.id, journalTitle: targetItem.title } },
+          { name: 'journal_indexing', updateFields: { journalId: targetItem.id } },
+          { name: 'hec_workflows', updateFields: { journalId: targetItem.id } },
+          { name: 'google_scholar_history', updateFields: { journalId: targetItem.id } },
+          { name: 'issn_requests', updateFields: { journalId: targetItem.id } },
+          { name: 'journal_activities', updateFields: { journalId: targetItem.id } },
+          { name: 'client_services', updateFields: { journalId: targetItem.id } },
+          { name: 'doi_records', updateFields: { journalId: targetItem.id } },
+          { name: 'vault', updateFields: { journalId: targetItem.id } }
+        ];
 
-        // Transfer Invoices
-        const invoicesQ = query(collection(db, 'invoices'), where('journalId', '==', sourceItem.id));
-        const invoicesSnap = await getDocs(invoicesQ);
-        invoicesSnap.forEach(d => {
-          batch.update(d.ref, { journalId: targetItem.id, journalTitle: targetItem.title });
-        });
-
-        // Transfer Indexing
-        const indexingQ = query(collection(db, 'journalIndexing'), where('journalId', '==', sourceItem.id));
-        const indexingSnap = await getDocs(indexingQ);
-        indexingSnap.forEach(d => {
-          batch.update(d.ref, { journalId: targetItem.id });
-        });
+        for (const coll of collectionsToTransfer) {
+          const q = query(collection(db, coll.name), where('journalId', '==', sourceItem.id));
+          const snap = await getDocs(q);
+          snap.forEach(d => {
+            batch.update(d.ref, coll.updateFields);
+          });
+        }
 
         // Delete Source Journal
         batch.delete(doc(db, 'journals', sourceItem.id));
@@ -217,18 +281,23 @@ export const MergeModal: React.FC<MergeModalProps> = ({
     return (
       <div className={cn(
         "p-4 rounded-2xl border transition-all",
-        isTarget ? "bg-indigo-50 border-indigo-200" : "bg-slate-50 border-slate-200"
+        isTarget 
+          ? "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800" 
+          : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600"
       )}>
         <div className="flex items-center gap-3">
           <div className={cn(
             "w-10 h-10 rounded-xl flex items-center justify-center",
-            isTarget ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
+            isTarget ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100 dark:shadow-none" : "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400"
           )}>
             <Icon size={20} />
           </div>
           <div className="min-w-0">
-            <p className="font-bold text-slate-900 truncate">{name}</p>
-            <p className="text-xs text-slate-500 truncate">{sub}</p>
+            <p className={cn(
+              "font-bold truncate",
+              isTarget ? "text-indigo-900 dark:text-indigo-100" : "text-slate-900 dark:text-white"
+            )}>{name}</p>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase truncate">{sub}</p>
           </div>
         </div>
       </div>
@@ -250,16 +319,16 @@ export const MergeModal: React.FC<MergeModalProps> = ({
             initial={{ opacity: 0, scale: 0.9, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="relative w-full max-w-xl bg-white rounded-3xl shadow-2xl overflow-hidden"
+            className="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl overflow-hidden"
           >
-            <div className="px-8 py-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-8 py-6 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-100 text-indigo-600 rounded-xl">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-xl">
                   <GitMerge size={20} />
                 </div>
-                <h3 className="text-xl font-bold text-slate-900">Merge {type.charAt(0).toUpperCase() + type.slice(1)}</h3>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Merge {type.charAt(0).toUpperCase() + type.slice(1)}</h3>
               </div>
-              <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-all">
+              <button onClick={onClose} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-all text-slate-400">
                 <X size={20} />
               </button>
             </div>
@@ -267,20 +336,20 @@ export const MergeModal: React.FC<MergeModalProps> = ({
             <div className="p-8">
               {step === 1 && (
                 <div className="space-y-6">
-                  <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3">
-                    <AlertTriangle className="text-amber-600 flex-shrink-0" size={20} />
-                    <p className="text-sm text-amber-800 font-medium">
+                  <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-2xl flex gap-3">
+                    <AlertTriangle className="text-amber-600 dark:text-amber-400 flex-shrink-0" size={20} />
+                    <p className="text-sm text-amber-800 dark:text-amber-300 font-medium font-sans">
                       Select the <span className="font-bold">Source</span> item. This item will be deleted, and all its data will be moved to the target.
                     </p>
                   </div>
                   
                   <div className="relative">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={20} />
                     <input 
                       type="text"
                       placeholder={`Search ${type} to merge...`}
-                      className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={searchQuery}
+                      className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                      value={searchQuery || ''}
                       onChange={e => setSearchQuery(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleSearch()}
                     />
@@ -309,7 +378,7 @@ export const MergeModal: React.FC<MergeModalProps> = ({
                       </button>
                     ))}
                     {searchResults.length === 0 && searchQuery && !loading && (
-                      <p className="text-center py-8 text-slate-400 font-medium">No results found</p>
+                      <p className="text-center py-8 text-slate-400 dark:text-slate-500 font-medium font-sans">No results found</p>
                     )}
                   </div>
                 </div>
@@ -319,14 +388,14 @@ export const MergeModal: React.FC<MergeModalProps> = ({
                 <div className="space-y-6">
                   <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-4">
                     <div className="space-y-2">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">Source (Delete)</p>
+                      <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest text-center">Source (Delete)</p>
                       {renderItemCard(sourceItem)}
                     </div>
-                    <ArrowRight className="text-slate-300 mt-6" size={24} />
+                    <ArrowRight className="text-slate-300 dark:text-slate-700 mt-6" size={24} />
                     <div className="space-y-2">
-                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest text-center">Target (Keep)</p>
+                      <p className="text-[10px] font-bold text-indigo-400 dark:text-indigo-500 uppercase tracking-widest text-center">Target (Keep)</p>
                       {targetItem ? renderItemCard(targetItem, true) : (
-                        <div className="h-[74px] border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 text-xs font-medium">
+                        <div className="h-[74px] border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl flex items-center justify-center text-slate-400 dark:text-slate-500 text-xs font-medium font-sans text-center px-4">
                           Select Target
                         </div>
                       )}
@@ -336,12 +405,12 @@ export const MergeModal: React.FC<MergeModalProps> = ({
                   {!targetItem ? (
                     <div className="space-y-4">
                       <div className="relative">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={20} />
                         <input 
                           type="text"
                           placeholder={`Search target ${type}...`}
-                          className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                          value={searchQuery}
+                          className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                          value={searchQuery || ''}
                           onChange={e => setSearchQuery(e.target.value)}
                           onKeyDown={e => e.key === 'Enter' && handleSearch()}
                         />
@@ -368,24 +437,24 @@ export const MergeModal: React.FC<MergeModalProps> = ({
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3">
-                        <AlertTriangle className="text-rose-600 flex-shrink-0" size={20} />
-                        <p className="text-xs text-rose-800 font-medium">
-                          Warning: This action is irreversible. All data from <span className="font-bold">{type === 'clients' ? sourceItem.name : type === 'journals' ? sourceItem.title : sourceItem.domainName}</span> will be moved to <span className="font-bold">{type === 'clients' ? targetItem.name : type === 'journals' ? targetItem.title : targetItem.domainName}</span> and the source will be permanently deleted.
+                      <div className="p-4 bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30 rounded-2xl flex gap-3">
+                        <AlertTriangle className="text-rose-600 dark:text-rose-400 flex-shrink-0" size={20} />
+                        <p className="text-xs text-rose-800 dark:text-rose-300 font-medium font-sans leading-relaxed">
+                          Warning: This action is irreversible. All data from <span className="font-bold text-rose-900 dark:text-rose-100">{type === 'clients' || type === 'employees' ? sourceItem.name : type === 'journals' ? sourceItem.title : sourceItem.domainName}</span> will be moved to <span className="font-bold text-rose-900 dark:text-rose-100">{type === 'clients' || type === 'employees' ? targetItem.name : type === 'journals' ? targetItem.title : targetItem.domainName}</span> and the source will be permanently deleted.
                         </p>
                       </div>
                       
                       <div className="flex gap-3">
                         <button 
                           onClick={() => setTargetItem(null)}
-                          className="flex-1 px-6 py-3 bg-white text-slate-700 border border-slate-200 rounded-2xl font-bold hover:bg-slate-50 transition-all"
+                          className="flex-1 px-6 py-3 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-sans"
                         >
                           Change Target
                         </button>
                         <button 
                           onClick={executeMerge}
                           disabled={merging}
-                          className="flex-[2] px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+                          className="flex-[2] px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none flex items-center justify-center gap-2"
                         >
                           {merging ? <Loader2 className="animate-spin" size={20} /> : <GitMerge size={20} />}
                           Confirm Merge
@@ -398,16 +467,16 @@ export const MergeModal: React.FC<MergeModalProps> = ({
 
               {step === 3 && (
                 <div className="text-center py-8 space-y-6">
-                  <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                  <div className="w-20 h-20 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto">
                     <CheckCircle2 size={40} />
                   </div>
                   <div>
-                    <h4 className="text-2xl font-bold text-slate-900">Merge Successful!</h4>
-                    <p className="text-slate-500 mt-2">All data has been transferred and the source item has been removed.</p>
+                    <h4 className="text-2xl font-black text-slate-900 dark:text-white">Merge Successful!</h4>
+                    <p className="text-slate-500 dark:text-slate-400 mt-2 font-medium font-sans">All data has been transferred and the source item has been removed.</p>
                   </div>
                   <button 
                     onClick={onClose}
-                    className="w-full px-6 py-3 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all"
+                    className="w-full px-6 py-3 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 rounded-2xl font-black hover:bg-slate-800 dark:hover:bg-white transition-all font-sans"
                   >
                     Close
                   </button>
@@ -415,10 +484,11 @@ export const MergeModal: React.FC<MergeModalProps> = ({
               )}
 
               {error && (
-                <p className="mt-4 text-center text-sm font-bold text-rose-600">{error}</p>
+                <p className="mt-4 text-center text-sm font-bold text-rose-600 dark:text-rose-400">{error}</p>
               )}
             </div>
           </motion.div>
+
         </div>
       )}
     </AnimatePresence>

@@ -53,6 +53,9 @@ export const ClientDashboard: React.FC<ClientDashboardProps> = ({ currentUser, s
     const unsubInvoices = onSnapshot(invoicesQuery, (snapshot) => {
       setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as Invoice));
       setLoading(false);
+    }, (error) => {
+      console.error("Error fetching client invoices:", error);
+      setLoading(false);
     });
 
     return () => {

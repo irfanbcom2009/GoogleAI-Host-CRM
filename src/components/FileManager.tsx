@@ -23,14 +23,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, addDoc, serverTimestamp, deleteDoc, doc, Timestamp } from 'firebase/firestore';
-import { Folder, FileRecord, Client } from '../types';
+import { Folder, FileRecord, Client, User as CRMUser } from '../types';
 import { FileRequests } from './FileRequests';
 
 interface FileManagerProps {
   searchQuery?: string;
+  currentUser?: CRMUser | null;
 }
 
-export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) => {
+export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '', currentUser = null }) => {
   const [activeTab, setActiveTab] = useState<'files' | 'requests'>('files');
   const [folders, setFolders] = useState<Folder[]>([]);
   const [files, setFiles] = useState<FileRecord[]>([]);
@@ -47,7 +48,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
   const [newFileUrl, setNewFileUrl] = useState('');
 
   useEffect(() => {
-    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client)));
     });
 
@@ -57,26 +58,82 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
   useEffect(() => {
     setLoading(true);
     
-    let folderQuery = query(collection(db, 'folders'), orderBy('createdAt', 'desc'));
+    let folderQuery;
     if (currentFolderId) {
-      folderQuery = query(collection(db, 'folders'), where('parentId', '==', currentFolderId), orderBy('createdAt', 'desc'));
+      if (currentUser?.role === 'Client') {
+        folderQuery = query(
+          collection(db, 'folders'),
+          where('parentId', '==', currentFolderId),
+          where('clientId', '==', currentUser.id)
+        );
+      } else {
+        folderQuery = query(
+          collection(db, 'folders'),
+          where('parentId', '==', currentFolderId)
+        );
+      }
     } else {
-      folderQuery = query(collection(db, 'folders'), where('parentId', '==', null), orderBy('createdAt', 'desc'));
+      if (currentUser?.role === 'Client') {
+        folderQuery = query(
+          collection(db, 'folders'),
+          where('parentId', '==', null),
+          where('clientId', '==', currentUser.id)
+        );
+      } else {
+        folderQuery = query(
+          collection(db, 'folders'),
+          where('parentId', '==', null)
+        );
+      }
     }
 
     const unsubFolders = onSnapshot(folderQuery, (snapshot) => {
-      setFolders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Folder)));
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Folder));
+      fetched.sort((a, b) => {
+        const tA = a.createdAt?.seconds || 0;
+        const tB = b.createdAt?.seconds || 0;
+        return tB - tA;
+      });
+      setFolders(fetched);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'folders'));
 
-    let fileQuery = query(collection(db, 'files'), orderBy('createdAt', 'desc'));
+    let fileQuery;
     if (currentFolderId) {
-      fileQuery = query(collection(db, 'files'), where('folderId', '==', currentFolderId), orderBy('createdAt', 'desc'));
+      if (currentUser?.role === 'Client') {
+        fileQuery = query(
+          collection(db, 'files'),
+          where('folderId', '==', currentFolderId),
+          where('clientId', '==', currentUser.id)
+        );
+      } else {
+        fileQuery = query(
+          collection(db, 'files'),
+          where('folderId', '==', currentFolderId)
+        );
+      }
     } else {
-      fileQuery = query(collection(db, 'files'), where('folderId', '==', null), orderBy('createdAt', 'desc'));
+      if (currentUser?.role === 'Client') {
+        fileQuery = query(
+          collection(db, 'files'),
+          where('folderId', '==', null),
+          where('clientId', '==', currentUser.id)
+        );
+      } else {
+        fileQuery = query(
+          collection(db, 'files'),
+          where('folderId', '==', null)
+        );
+      }
     }
 
     const unsubFiles = onSnapshot(fileQuery, (snapshot) => {
-      setFiles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FileRecord)));
+      const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FileRecord));
+      fetched.sort((a, b) => {
+        const tA = a.createdAt?.seconds || 0;
+        const tB = b.createdAt?.seconds || 0;
+        return tB - tA;
+      });
+      setFiles(fetched);
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'files'));
 
@@ -84,7 +141,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
       unsubFolders();
       unsubFiles();
     };
-  }, [currentFolderId]);
+  }, [currentFolderId, currentUser]);
 
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,8 +227,8 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
     <div className="p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">File Manager</h2>
-          <p className="text-slate-500 mt-1">Organize and manage client documents in a structured way.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">File Manager</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Organize and manage client documents in a structured way.</p>
         </div>
         <div className="flex gap-3">
           <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 mr-4">
@@ -361,7 +418,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
                     type="text" 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="Enter folder name"
-                    value={newFolderName}
+                    value={newFolderName || ''}
                     onChange={e => setNewFolderName(e.target.value)}
                   />
                 </div>
@@ -370,7 +427,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
                   <select 
                     required
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={selectedClientId}
+                    value={selectedClientId || ''}
                     onChange={e => setSelectedClientId(e.target.value)}
                   >
                     <option value="">Select Client</option>
@@ -436,7 +493,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
                     type="text" 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. document.pdf"
-                    value={newFileName}
+                    value={newFileName || ''}
                     onChange={e => setNewFileName(e.target.value)}
                   />
                 </div>
@@ -469,7 +526,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ searchQuery = '' }) =>
                   <select 
                     required
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={selectedClientId}
+                    value={selectedClientId || ''}
                     onChange={e => setSelectedClientId(e.target.value)}
                   >
                     <option value="">Select Client</option>

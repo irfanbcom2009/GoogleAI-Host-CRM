@@ -21,6 +21,8 @@ import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, doc, u
 import { Modal } from './Modal';
 import { SearchableSelect } from './ui/SearchableSelect';
 import { ColumnSelector } from './ColumnSelector';
+import { DEFAULT_IMAGES } from '../constants/images';
+import toast from 'react-hot-toast';
 
 import { usePermissions } from '../hooks/usePermissions';
 
@@ -34,12 +36,14 @@ const AVAILABLE_COLUMNS = [
   { id: 'role', label: 'Role' },
   { id: 'points', label: 'Points' },
   { id: 'status', label: 'Status' },
+  { id: 'subscriptions', label: 'Subscriptions' },
 ];
 
 export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, currentUser }) => {
   const { check } = usePermissions(currentUser);
   const [users, setUsers] = useState<CRMUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser.columnPreferences?.['users'] || AVAILABLE_COLUMNS.map(c => c.id)
@@ -50,7 +54,13 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
     name: '',
     email: '',
     role: 'Employee' as 'Admin' | 'Manager' | 'Employee' | 'Client',
-    points: 0
+    points: 0,
+    serviceSubscriptions: {
+      ojs: false,
+      issn: false,
+      hec: false,
+      doi: false
+    }
   });
 
   useEffect(() => {
@@ -81,8 +91,23 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
     }
   };
 
+  const handleToggleSubscription = async (targetUser: CRMUser, serviceKey: 'ojs' | 'issn' | 'hec' | 'doi') => {
+    try {
+      const currentVal = !!(targetUser.serviceSubscriptions?.[serviceKey]);
+      const userRef = doc(db, 'users', targetUser.id);
+      await updateDoc(userRef, {
+        [`serviceSubscriptions.${serviceKey}`]: !currentVal
+      });
+      toast.success(`${serviceKey.toUpperCase()} subscription ${!currentVal ? 'activated' : 'deactivated'} for ${targetUser.name}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    }
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, 'users'), {
         ...newUser,
@@ -93,10 +118,19 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
         name: '',
         email: '',
         role: 'Employee',
-        points: 0
+        points: 0,
+        serviceSubscriptions: {
+          ojs: false,
+          issn: false,
+          hec: false,
+          doi: false
+        }
       });
+      toast.success("User created successfully.");
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'users');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -113,8 +147,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
     <div className="p-8 space-y-6">
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">User Management</h2>
-          <p className="text-slate-500 mt-1">Manage CRM users, roles, and access permissions.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">User Management</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Manage CRM users, roles, and access permissions.</p>
         </div>
         <div className="flex gap-3">
           <ColumnSelector 
@@ -164,6 +198,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
                   {selectedColumns.includes('role') && <th className="px-6 py-4">Role</th>}
                   {selectedColumns.includes('points') && <th className="px-6 py-4">Points</th>}
                   {selectedColumns.includes('status') && <th className="px-6 py-4">Status</th>}
+                  {selectedColumns.includes('subscriptions') && <th className="px-6 py-4">Subscriptions</th>}
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -182,7 +217,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
                             <img 
-                              src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`} 
+                              src={user.photoURL || (user.gender === 'Female' ? DEFAULT_IMAGES.FEMALE_STAFF : `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}`)} 
                               className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 object-cover" 
                               alt="" 
                               referrerPolicy="no-referrer"
@@ -218,6 +253,33 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
                             <CheckCircle2 size={14} />
                             ACTIVE
                           </span>
+                        </td>
+                      )}
+                      {selectedColumns.includes('subscriptions') && (
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {(['ojs', 'issn', 'hec', 'doi'] as const).map(serviceKey => {
+                              const isActive = !!(user.serviceSubscriptions?.[serviceKey]);
+                              const canManage = currentUser.role === 'Admin' || check('clients', 'edit');
+                              return (
+                                <button
+                                  key={serviceKey}
+                                  type="button"
+                                  disabled={!canManage}
+                                  onClick={() => handleToggleSubscription(user, serviceKey)}
+                                  title={`${serviceKey.toUpperCase()} Subscription (${isActive ? 'Active - Click to disable' : 'Inactive - Click to enable'})`}
+                                  className={cn(
+                                    "px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider transition-all border cursor-pointer disabled:cursor-not-allowed",
+                                    isActive
+                                      ? "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800 shadow-xs hover:bg-emerald-200"
+                                      : "bg-slate-100 text-slate-400 border-slate-200 dark:bg-slate-800 dark:text-slate-500 dark:border-slate-700 opacity-60 hover:opacity-100 hover:bg-slate-200"
+                                  )}
+                                >
+                                  {serviceKey}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </td>
                       )}
                       <td className="px-6 py-4 text-right">
@@ -264,7 +326,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
               type="text" 
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
               placeholder="e.g. John Doe"
-              value={newUser.name}
+              value={newUser.name || ''}
               onChange={e => setNewUser(prev => ({ ...prev, name: e.target.value }))}
             />
           </div>
@@ -275,7 +337,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
               type="email" 
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
               placeholder="e.g. john@hostajournal.com"
-              value={newUser.email}
+              value={newUser.email || ''}
               onChange={e => setNewUser(prev => ({ ...prev, email: e.target.value }))}
             />
           </div>
@@ -300,17 +362,52 @@ export const UserManagement: React.FC<UserManagementProps> = ({ onImpersonate, c
                 required
                 type="number" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newUser.points}
+                value={newUser.points || ''}
                 onChange={e => setNewUser(prev => ({ ...prev, points: parseInt(e.target.value) }))}
               />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700">Service Subscriptions</label>
+            <div className="grid grid-cols-4 gap-2">
+              {(['ojs', 'issn', 'hec', 'doi'] as const).map(serviceKey => {
+                const isSelected = !!newUser.serviceSubscriptions?.[serviceKey];
+                return (
+                  <button
+                    key={serviceKey}
+                    type="button"
+                    onClick={() => setNewUser(prev => ({
+                      ...prev,
+                      serviceSubscriptions: {
+                        ...prev.serviceSubscriptions,
+                        [serviceKey]: !isSelected
+                      }
+                    }))}
+                    className={cn(
+                      "py-2 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all border text-center cursor-pointer",
+                      isSelected
+                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                        : "bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300"
+                    )}
+                  >
+                    {serviceKey}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="pt-4">
             <button 
               type="submit"
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              disabled={isSubmitting}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Create User
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Creating...
+                </>
+              ) : 'Create User'}
             </button>
           </div>
         </form>

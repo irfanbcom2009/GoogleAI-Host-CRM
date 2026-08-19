@@ -10,7 +10,7 @@ import { Points } from './components/Points';
 import { Notifications } from './components/Notifications';
 import { Publishers } from './components/Publishers';
 import { HEC } from './components/HEC';
-import { InvoiceModule } from './components/InvoiceModule';
+import { PaymentTaskLedger } from './components/PaymentTaskLedger';
 import { TrashManagement } from './components/TrashManagement';
 import { FileManager } from './components/FileManager';
 import { FileRequests } from './components/FileRequests';
@@ -29,10 +29,15 @@ import { FAQ } from './components/FAQ';
 import { ClientDashboard } from './components/ClientDashboard';
 import { ChatBoard } from './components/ChatBoard';
 import { ServiceCatalog } from './components/ServiceCatalog';
+import { ServiceOrderSystem } from './components/ServiceOrderSystem';
+import { ServiceOrderWizard } from './components/ServiceOrderWizard';
+import { DynamicServiceRequester } from './components/DynamicServiceRequester';
 import { Services } from './components/Services';
-import { CatalogManager } from './components/CatalogManager';
 import { OrderManagement } from './components/OrderManagement';
 import { FinanceDashboard } from './components/FinanceDashboard';
+import { PayrollManager } from './components/PayrollManager';
+import { OperationsFinanceManager } from './components/OperationsFinanceManager';
+import { WorkflowHub } from './components/WorkflowHub';
 import { LandingPage } from './components/LandingPage';
 import { GlobalAddButton } from './components/GlobalAddButton';
 import { StandaloneChat } from './components/StandaloneChat';
@@ -43,17 +48,75 @@ import { ActivityHistory } from './components/ActivityHistory';
 import { PermissionDenied } from './components/PermissionDenied';
 import { CommandPalette } from './components/CommandPalette';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
-import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck, MessageSquare, UserPlus, ShieldAlert, Command, Keyboard } from 'lucide-react';
+import { Search, Bell, LogOut, Loader2, Shield, Layers, Sparkles, Send, X, CheckCircle2, ArrowRight, ShieldCheck, MessageSquare, UserPlus, ShieldAlert, Command, Keyboard, Home, BookOpen, ClipboardList, Menu, Sun, Moon } from 'lucide-react';
 import { cn } from './lib/utils';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserRole, User as CRMUser, UserPermissions } from './types';
 import { geminiService } from './services/geminiService';
-import { FULL_MODULE_PERMISSIONS } from './lib/permissions';
+import { FULL_MODULE_PERMISSIONS, canAccessModule } from './lib/permissions';
 
 import { PerformanceLeaderboard } from './components/PerformanceLeaderboard';
+
+interface MobileBottomNavigationProps {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  unreadCount?: number;
+}
+
+const MobileBottomNavigation: React.FC<MobileBottomNavigationProps> = ({ activeTab, setActiveTab, unreadCount = 0 }) => {
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: Home },
+    { id: 'journals', label: 'Journals', icon: BookOpen },
+    { id: 'tasks', label: 'Tasks', icon: ClipboardList },
+    { id: 'chat', label: 'Chat', icon: MessageSquare, badge: unreadCount },
+    { id: 'more', label: 'More', icon: Menu, action: () => {
+      window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'));
+    }}
+  ];
+
+  return (
+    <div className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 h-16 flex items-center justify-around px-2 shrink-0 z-50">
+      {navItems.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeTab === item.id;
+        return (
+          <button
+            key={item.id}
+            onClick={() => {
+              if (item.action) {
+                item.action();
+              } else {
+                setActiveTab(item.id);
+              }
+            }}
+            className="flex flex-col items-center justify-center flex-1 h-full py-1 relative group focus:outline-none cursor-pointer"
+          >
+            <div className={cn(
+              "px-5 py-1 rounded-full transition-all duration-300 relative flex items-center justify-center",
+              isActive ? "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 font-bold" : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50"
+            )}>
+              <Icon size={20} className={cn("transition-transform duration-200 group-active:scale-90", isActive ? "scale-110" : "")} />
+              {item.badge && item.badge > 0 ? (
+                <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900 animate-pulse">
+                  {item.badge}
+                </span>
+              ) : null}
+            </div>
+            <span className={cn(
+              "text-[10px] tracking-tight mt-1 transition-colors duration-200",
+              isActive ? "text-indigo-700 dark:text-indigo-400 font-semibold" : "text-slate-500 dark:text-slate-400"
+            )}>
+              {item.label}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -63,13 +126,16 @@ export default function App() {
   const [userRole, setUserRole] = useState<UserRole>('Employee');
   const [loading, setLoading] = useState(true);
   const [impersonatedUser, setImpersonatedUser] = useState<{ id: string, role: UserRole, name: string, email: string } | null>(null);
+  const [impersonatedUserDoc, setImpersonatedUserDoc] = useState<CRMUser | null>(null);
   const [selectedChatClientId, setSelectedChatClientId] = useState<string | null>(null);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedPublisherId, setSelectedPublisherId] = useState<string | null>(null);
   const [selectedJournalId, setSelectedJournalId] = useState<string | null>(null);
   const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null);
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [commandPaletteShowInfo, setCommandPaletteShowInfo] = useState(false);
   const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [aiAssistantQuery, setAiAssistantQuery] = useState('');
@@ -81,19 +147,54 @@ export default function App() {
   const [isUnauthorized, setIsUnauthorized] = useState(false);
   const [unauthorizedUser, setUnauthorizedUser] = useState<User | null>(null);
   const [branding, setBranding] = useState<{ name: string, logoUrl?: string, primaryColor?: string }>({ name: 'Host A Journal' });
+  const [isDbConnected, setIsDbConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark') {
+    const checkConnection = async () => {
+      const { checkFirestoreConnection } = await import('./lib/firebase');
+      const connected = await checkFirestoreConnection();
+      setIsDbConnected(connected);
+    };
+    checkConnection();
+    const connectionInterval = setInterval(checkConnection, 15000);
+    return () => clearInterval(connectionInterval);
+  }, []);
+
+  const [currentTheme, setCurrentTheme] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
+  });
+
+  const toggleGlobalTheme = () => {
+    setCurrentTheme(prev => {
+      const nextTheme = prev === 'dark' ? 'light' : 'dark';
+      if (nextTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      localStorage.setItem('theme', nextTheme);
+      return nextTheme;
+    });
+  };
+
+  useEffect(() => {
+    if (currentTheme === 'dark') {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
+    localStorage.setItem('theme', currentTheme);
     
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'chat') {
       setIsStandaloneChat(true);
     }
+  }, [currentTheme]);
+
+  useEffect(() => {
+    const handleToggle = () => toggleGlobalTheme();
+    window.addEventListener('toggle-global-theme', handleToggle);
+    return () => window.removeEventListener('toggle-global-theme', handleToggle);
   }, []);
 
   const handleAiAssistantAsk = async (e: React.FormEvent) => {
@@ -120,7 +221,10 @@ export default function App() {
             const userData = docSnap.data() as CRMUser;
             
             // Check if portal access is enabled or user is inactive/hidden
-            if (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true) {
+            const systemAdminEmails = ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
+            const isSystemAdmin = systemAdminEmails.includes(user.email || '');
+
+            if (!isSystemAdmin && (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true)) {
               const reason = userData.isHidden === true ? "access has been restricted" : 
                             userData.isActive === false ? "account is inactive" : 
                             "portal access has been disabled";
@@ -175,6 +279,49 @@ export default function App() {
               }
             }
 
+            // Special handling for Tayyaba Riasat - ensure journals and indexing agencies access
+            const tayyabaEmails = ['taiba000120@gmail.com'];
+            if (user.email && tayyabaEmails.includes(user.email.toLowerCase())) {
+              const currentPerms = (userData.permissions || {}) as any;
+              const needsUpdate = !currentPerms.journals || 
+                                 !currentPerms.journals.view || 
+                                 !currentPerms.journals.add ||
+                                 !currentPerms.journals.edit ||
+                                 !currentPerms.journals.delete ||
+                                 !currentPerms.indexingAgencies ||
+                                 !currentPerms.indexingAgencies.view ||
+                                 !currentPerms.indexingAgencies.add ||
+                                 !currentPerms.indexingAgencies.edit ||
+                                 !currentPerms.indexingAgencies.delete ||
+                                 !currentPerms.hecApplications ||
+                                 !currentPerms.hecApplications.view ||
+                                 !currentPerms.doajApplications ||
+                                 !currentPerms.doajApplications.view ||
+                                 !currentPerms.issnRequests ||
+                                 !currentPerms.issnRequests.view ||
+                                 !currentPerms.doiManagement ||
+                                 !currentPerms.doiManagement.view;
+              
+              if (needsUpdate) {
+                const updatedPerms: UserPermissions = {
+                  ...(userData.permissions || {} as any),
+                  journals: FULL_MODULE_PERMISSIONS,
+                  indexingAgencies: FULL_MODULE_PERMISSIONS,
+                  hecApplications: FULL_MODULE_PERMISSIONS,
+                  doajApplications: FULL_MODULE_PERMISSIONS,
+                  issnRequests: FULL_MODULE_PERMISSIONS,
+                  doiManagement: FULL_MODULE_PERMISSIONS
+                };
+                
+                await updateDoc(userRef, { 
+                  permissions: updatedPerms,
+                  updatedAt: serverTimestamp()
+                });
+                // Update local state as well
+                setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
+              }
+            }
+
             setLoading(false);
           } else {
             // If doc doesn't exist by UID, check by email (legacy or first-time)
@@ -187,7 +334,10 @@ export default function App() {
               const userData = { ...userDoc.data() as CRMUser, id: userDoc.id };
               
               // Check status for legacy users found by email
-              if (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true) {
+              const systemAdminEmails = ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'];
+              const isSystemAdmin = systemAdminEmails.includes(user.email || '');
+
+              if (!isSystemAdmin && (userData.portalEnabled === false || userData.isActive === false || userData.isHidden === true)) {
                 const reason = userData.isHidden === true ? "access has been restricted" : 
                               userData.isActive === false ? "account is inactive" : 
                               "portal access has been disabled";
@@ -206,6 +356,12 @@ export default function App() {
                   uid: user.uid,
                   updatedAt: serverTimestamp()
                 });
+                try {
+                  await deleteDoc(doc(db, 'users', userDoc.id));
+                  console.log(`Successfully deleted legacy unlinked user doc ${userDoc.id}`);
+                } catch (delErr) {
+                  console.error("Error deleting legacy unlinked user doc:", delErr);
+                }
               }
 
               setCurrentUserDoc({ ...userData, id: user.uid });
@@ -242,13 +398,56 @@ export default function App() {
                     expenses: FULL_MODULE_PERMISSIONS,
                     publishers: FULL_MODULE_PERMISSIONS
                   };
-                  await updateDoc(doc(db, 'users', userData.id), { 
+                  await updateDoc(doc(db, 'users', user.uid), { 
                     permissions: updatedPerms,
                     role: 'Admin', // Upgrade her role to Admin
                     updatedAt: serverTimestamp()
                   });
                   // Update local state as well
                   setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms, role: 'Admin' } : null);
+                }
+              }
+
+              // Special handling for Tayyaba Riasat - ensure journals and indexing agencies access
+              const tayyabaEmails = ['taiba000120@gmail.com'];
+              if (user.email && tayyabaEmails.includes(user.email.toLowerCase())) {
+                const currentPerms = (userData.permissions || {}) as any;
+                const needsUpdate = !currentPerms.journals || 
+                                   !currentPerms.journals.view || 
+                                   !currentPerms.journals.add ||
+                                   !currentPerms.journals.edit ||
+                                   !currentPerms.journals.delete ||
+                                   !currentPerms.indexingAgencies ||
+                                   !currentPerms.indexingAgencies.view ||
+                                   !currentPerms.indexingAgencies.add ||
+                                   !currentPerms.indexingAgencies.edit ||
+                                   !currentPerms.indexingAgencies.delete ||
+                                   !currentPerms.hecApplications ||
+                                   !currentPerms.hecApplications.view ||
+                                   !currentPerms.doajApplications ||
+                                   !currentPerms.doajApplications.view ||
+                                   !currentPerms.issnRequests ||
+                                   !currentPerms.issnRequests.view ||
+                                   !currentPerms.doiManagement ||
+                                   !currentPerms.doiManagement.view;
+                
+                if (needsUpdate) {
+                  const updatedPerms: UserPermissions = {
+                    ...(userData.permissions || {} as any),
+                    journals: FULL_MODULE_PERMISSIONS,
+                    indexingAgencies: FULL_MODULE_PERMISSIONS,
+                    hecApplications: FULL_MODULE_PERMISSIONS,
+                    doajApplications: FULL_MODULE_PERMISSIONS,
+                    issnRequests: FULL_MODULE_PERMISSIONS,
+                    doiManagement: FULL_MODULE_PERMISSIONS
+                  };
+                  
+                  await updateDoc(doc(db, 'users', user.uid), { 
+                    permissions: updatedPerms,
+                    updatedAt: serverTimestamp()
+                  });
+                  // Update local state as well
+                  setCurrentUserDoc(prev => prev ? { ...prev, permissions: updatedPerms } : null);
                 }
               }
 
@@ -300,6 +499,7 @@ export default function App() {
         }, (err) => {
           console.error("User doc listener error:", err);
           setLoading(false);
+          handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
         });
 
         return () => unsubDoc();
@@ -312,6 +512,39 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Synchronize full target user document when impersonating
+  useEffect(() => {
+    if (!impersonatedUser) {
+      setImpersonatedUserDoc(null);
+      return;
+    }
+
+    const targetUserRef = doc(db, 'users', impersonatedUser.id);
+    const unsubscribe = onSnapshot(targetUserRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setImpersonatedUserDoc({
+          ...docSnap.data() as CRMUser,
+          id: docSnap.id
+        });
+      } else {
+        // Fallback if user doc doesn't exist yet in DB
+        setImpersonatedUserDoc({
+          id: impersonatedUser.id,
+          role: impersonatedUser.role,
+          name: impersonatedUser.name,
+          email: impersonatedUser.email,
+          points: 0,
+          createdAt: new Date().toISOString()
+        } as CRMUser);
+      }
+    }, (error) => {
+      console.error("Error listening to impersonated user doc:", error);
+      handleFirestoreError(error, OperationType.GET, `users/${impersonatedUser.id}`);
+    });
+
+    return () => unsubscribe();
+  }, [impersonatedUser]);
+
   useEffect(() => {
     const fetchBranding = async () => {
       try {
@@ -323,11 +556,105 @@ export default function App() {
           }
         }
       } catch (error) {
-        console.error("Error fetching branding:", error);
+        // If offline or connection fails, log a friendly warning instead of a blocking error.
+        console.warn("Could not load global branding server-side (operating in offline-friendly mode with client defaults):", (error as any).message || error);
       }
     };
     fetchBranding();
   }, []);
+
+  useEffect(() => {
+    if (!currentUserDoc) return;
+    
+    const runDeduplication = async () => {
+      const isSystemAdmin = currentUserDoc.role === 'Admin' || 
+                           ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUserDoc.email || '');
+      
+      if (!isSystemAdmin) return;
+      
+      try {
+        console.log("[Deduplication] Running proactive database deduplication...");
+        const usersRef = collection(db, 'users');
+        const querySnapshot = await getDocs(usersRef);
+        const allUsers = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+        
+        // Group by email (case-insensitive)
+        const grouped: { [email: string]: any[] } = {};
+        allUsers.forEach(u => {
+          if (u.email) {
+            const email = u.email.toLowerCase().trim();
+            if (!grouped[email]) grouped[email] = [];
+            grouped[email].push(u);
+          }
+        });
+        
+        for (const email of Object.keys(grouped)) {
+          const docs = grouped[email];
+          if (docs.length > 1) {
+            console.log(`[Deduplication] Found ${docs.length} duplicates for ${email}`);
+            
+            // Sort:
+            // 1. Prioritize fully linked/migrated documents where document ID matches the Firebase UID
+            // 2. Docs with uid property next
+            // 3. Active status
+            // 4. Higher points first
+            const sorted = [...docs].sort((a, b) => {
+              const aIsLinked = a.uid && a.id === a.uid;
+              const bIsLinked = b.uid && b.id === b.uid;
+              if (aIsLinked && !bIsLinked) return -1;
+              if (!aIsLinked && bIsLinked) return 1;
+
+              if (a.uid && !b.uid) return -1;
+              if (!a.uid && b.uid) return 1;
+              if (a.status === 'active' && b.status !== 'active') return -1;
+              if (a.status !== 'active' && b.status === 'active') return 1;
+              return (b.points || 0) - (a.points || 0);
+            });
+            
+            const keep = sorted[0];
+            const toDelete = sorted.slice(1);
+            
+            console.log(`[Deduplication] Keeping doc: ${keep.id} with points: ${keep.points || 0}`);
+            
+            let extraPoints = 0;
+            for (const delDoc of toDelete) {
+              // Never delete the currently logged-in user's document
+              if (currentUserDoc && delDoc.id === currentUserDoc.id) {
+                console.log(`[Deduplication] Skipping deletion of currently logged-in user doc: ${delDoc.id}`);
+                continue;
+              }
+              extraPoints += (delDoc.points || 0);
+              console.log(`[Deduplication] Deleting duplicate doc: ${delDoc.id} with points: ${delDoc.points || 0}`);
+              try {
+                await deleteDoc(doc(db, 'users', delDoc.id));
+              } catch (delErr) {
+                console.error(`[Deduplication] Failed to delete duplicate doc ${delDoc.id}:`, delErr);
+              }
+            }
+            
+            // Also ensure the kept document is properly active and has combined points
+            try {
+              await updateDoc(doc(db, 'users', keep.id), {
+                points: (keep.points || 0) + extraPoints,
+                status: 'active',
+                portalEnabled: true,
+                isActive: true,
+                isHidden: false,
+                endingDate: '',
+                updatedAt: serverTimestamp()
+              });
+            } catch (updErr) {
+              console.error(`[Deduplication] Failed to update kept doc ${keep.id}:`, updErr);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[Deduplication] Error during deduplication:", err);
+      }
+    };
+    
+    runDeduplication();
+  }, [currentUserDoc]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -335,6 +662,7 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setIsCommandPaletteOpen(prev => !prev);
+        setCommandPaletteShowInfo(false);
       }
       
       // Keyboard Shortcuts (?)
@@ -381,10 +709,22 @@ export default function App() {
       if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
+        setCommandPaletteShowInfo(false);
       }
     };
+    
+    const handleOpenPalette = (e: Event) => {
+      setIsCommandPaletteOpen(true);
+      const customEvent = e as CustomEvent;
+      setCommandPaletteShowInfo(customEvent.detail?.showInfo ?? false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('open-command-palette', handleOpenPalette);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('open-command-palette', handleOpenPalette);
+    };
   }, []);
 
   useEffect(() => {
@@ -486,7 +826,7 @@ export default function App() {
     return <LandingPage onLogin={() => setShowLogin(true)} />;
   }
 
-  const currentUser = (impersonatedUser || currentUserDoc || {
+  const currentUser = (impersonatedUserDoc || impersonatedUser || currentUserDoc || {
     id: user?.uid || '',
     name: user?.displayName || 'Admin User',
     email: user?.email || '',
@@ -531,24 +871,22 @@ export default function App() {
       'access-logs': 'approvalRequests',
       'orders': 'invoices',
       'finance-dashboard': 'invoices',
+      'payroll': 'payroll',
       'points': 'resources',
       'settings': 'settings'
     };
 
     const requiredPermission = tabToPermissionMap[activeTab];
-    if (requiredPermission && currentUser.permissions) {
-      const modulePerms = (currentUser.permissions as any)[requiredPermission];
-      if (modulePerms && typeof modulePerms === 'object') {
-        if (modulePerms.view === false) {
-          return <PermissionDenied onBack={() => setActiveTab('dashboard')} />;
-        }
+    if (requiredPermission) {
+      if (!canAccessModule(currentUser, requiredPermission)) {
+        return <PermissionDenied onBack={() => setActiveTab('dashboard')} />;
       }
     }
 
     switch (activeTab) {
       case 'dashboard': 
         if (currentUser.role === 'Client') return <ClientDashboard currentUser={currentUser} setActiveTab={setActiveTab} />;
-        return currentUser.role === 'Employee' ? <EmployeeDashboard currentUser={currentUser} setActiveTab={setActiveTab} /> : <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />;
+        return currentUser.role === 'Employee' ? <EmployeeDashboard currentUser={currentUser} setActiveTab={setActiveTab} /> : <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} onSelectClient={setSelectedClientId} />;
       case 'chat': return (
         <div className="p-8 h-full">
           <ChatBoard 
@@ -570,6 +908,8 @@ export default function App() {
             setSelectedChatClientId(clientId);
             setActiveTab('chat');
           }}
+          initialClientId={selectedClientId || undefined}
+          onClearInitialId={() => setSelectedClientId(null)}
         />
       );
       case 'domains': return (
@@ -601,26 +941,76 @@ export default function App() {
           onNavigate={(tab, id) => {
             if (tab === 'journals') setSelectedJournalId(id);
             if (tab === 'domains') setSelectedDomainId(id);
+            if (tab === 'clients') setSelectedClientId(id);
             setActiveTab(tab as any);
           }}
         />
       );
-      case 'hec': return <HEC searchQuery={searchQuery} currentUser={currentUser} />;
+      case 'hec': return (
+        <HEC 
+          searchQuery={searchQuery} 
+          currentUser={currentUser} 
+          onNavigateToPublisher={(id) => {
+            setSelectedPublisherId(id);
+            setActiveTab('publishers');
+          }}
+        />
+      );
       case 'doaj': return <DOAJApplications searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'issn': return <ISSNRequests searchQuery={searchQuery} currentUser={currentUser} />;
+      case 'issn': return (
+        <ISSNRequests 
+          searchQuery={searchQuery} 
+          currentUser={currentUser} 
+          onNavigateToPublisher={(id) => {
+            setSelectedPublisherId(id);
+            setActiveTab('publishers');
+          }}
+        />
+      );
       case 'doi': return <DOIManagement currentUser={currentUser} />;
-      case 'invoices': return <InvoiceModule currentUser={currentUser} />;
-      case 'expenses': return <Expenses currentUser={currentUser} />;
-      case 'files': return <FileManager searchQuery={searchQuery} />;
-      case 'file-requests': return <FileRequests searchQuery={searchQuery} />;
-      case 'tasks': return <Tasks searchQuery={searchQuery} currentUser={currentUser} />;
-      case 'catalog': return <ServiceCatalog currentUser={currentUser} />;
-      case 'catalog-manager': return <CatalogManager currentUser={currentUser} />;
-      case 'registration-requests': return <RegistrationRequests />;
-      case 'access-logs': return <AccessLogs />;
-      case 'orders': return <OrderManagement currentUser={currentUser} />;
-      case 'finance-dashboard': return <FinanceDashboard currentUser={currentUser} />;
-      case 'points': return <Points />;
+      case 'workflow-dashboard':
+      case 'workflow-orders':
+      case 'workflow-team':
+      case 'workflow-logs':
+        return (
+          <WorkflowHub 
+            currentUser={currentUser} 
+            activeSection={
+              activeTab === 'workflow-dashboard' ? 'dashboard' :
+              activeTab === 'workflow-orders' ? 'orders' :
+              activeTab === 'workflow-team' ? 'team' :
+              activeTab === 'workflow-logs' ? 'logs' :
+              'dashboard'
+            } 
+          />
+        );
+      case 'invoices': 
+      case 'expenses': 
+      case 'catalog': 
+      case 'orders': 
+      case 'tasks':
+      case 'finance-dashboard': 
+      case 'payroll': 
+      case 'points': 
+      case 'ops-finance-hub':
+        return (
+          <OperationsFinanceManager 
+            currentUser={currentUser} 
+            activeSection={
+              activeTab === 'ops-finance-hub' ? 'hub' : 
+              activeTab === 'catalog' ? 'catalog' : 
+              activeTab === 'orders' ? 'orders' : 
+              activeTab === 'tasks' ? 'tasks' :
+              activeTab === 'invoices' ? 'invoices' :
+              activeTab === 'payroll' ? 'payroll' :
+              activeTab === 'expenses' ? 'expenses' :
+              activeTab === 'points' ? 'points' :
+              'hub'
+            }
+            onSectionChange={setActiveTab}
+          />
+        );
+      case 'files': return <FileManager searchQuery={searchQuery} currentUser={currentUser} />;
       case 'leaderboard': return <PerformanceLeaderboard />;
       case 'policies': return <Policies currentUser={currentUser} />;
       case 'employees': return (
@@ -637,13 +1027,15 @@ export default function App() {
       case 'activity-history': return <ActivityHistory currentUser={currentUser} />;
       case 'trash': return <TrashManagement />;
       case 'settings': return <Settings currentUser={currentUser} onImpersonate={handleImpersonate} setActiveTab={setActiveTab} />;
-      case 'faq': return <FAQ />;
-      default: return <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />;
+      case 'dynamic-service': return <DynamicServiceRequester currentUser={currentUser} onComplete={() => setActiveTab('dashboard')} />;
+      case 'service-wizard': return <ServiceOrderWizard currentUser={currentUser} onComplete={() => setActiveTab('dashboard')} />;
+      case 'faq': return <FAQ currentUser={currentUser} />;
+      default: return <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} onSelectClient={setSelectedClientId} />;
     }
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-100 overflow-hidden">
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
@@ -652,6 +1044,7 @@ export default function App() {
         userEmail={currentUser.email}
         userPhotoURL={currentUser.photoURL}
         userDepartment={currentUser.department}
+        userSubscriptions={currentUser.subscriptions}
         onLogout={handleLogout}
         isImpersonating={!!impersonatedUser}
         onStopImpersonating={() => setImpersonatedUser(null)}
@@ -677,62 +1070,104 @@ export default function App() {
         )}
 
         {/* Header */}
-        <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between shrink-0 z-10 gap-8">
-          <div className="flex items-center gap-4 flex-1">
+        <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between shrink-0 z-10 gap-4 md:gap-8">
+          <div className="flex items-center gap-4">
+            {/* Mobile Sidebar Hamburger Toggle */}
             <button 
-              onClick={() => setIsCommandPaletteOpen(true)}
-              className="relative w-full group transition-all"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('toggle-mobile-sidebar'));
+              }}
+              className="p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all md:hidden shrink-0 cursor-pointer"
             >
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-indigo-500 transition-colors" size={20} />
-              <div className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-slate-500 group-hover:bg-white group-hover:border-indigo-300 group-hover:shadow-md transition-all cursor-text">
-                <span className="text-sm font-medium tracking-tight">Search for anything... (Employee, Journal, ISSN, Domain, Client)</span>
-                <div className="flex items-center gap-1.5 px-2">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-2">Quick Search</span>
-                  <kbd className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold shadow-sm">⌘ K</kbd>
-                  <kbd className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold shadow-sm">/</kbd>
-                </div>
-              </div>
+              <Menu size={20} />
             </button>
+
+            {/* Path Indicator Breadcrumb */}
+            <div className="flex items-center gap-2 select-none">
+              <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Portal</span>
+              <span className="text-slate-300 dark:text-slate-700">/</span>
+              <span className="text-xs md:text-sm font-extrabold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                {activeTab.replace('-', ' ')}
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-3">
+            {/* Global Theme Toggle Switch */}
+            <button
+              onClick={toggleGlobalTheme}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer shrink-0 shadow-2xs group",
+                currentTheme === 'dark'
+                  ? "bg-slate-800 text-amber-300 border-slate-700 hover:bg-slate-750 hover:border-amber-500/50"
+                  : "bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-200 hover:border-indigo-300"
+              )}
+              title={`Switch to ${currentTheme === 'dark' ? 'White (Light) Theme' : 'Black (Dark) Theme'}`}
+            >
+              {currentTheme === 'dark' ? (
+                <>
+                  <Sun size={18} className="text-amber-400 group-hover:rotate-45 transition-transform duration-300 shrink-0" />
+                  <span className="hidden sm:inline font-extrabold text-slate-100">White Mode</span>
+                </>
+              ) : (
+                <>
+                  <Moon size={18} className="text-indigo-600 group-hover:-rotate-12 transition-transform duration-300 shrink-0" />
+                  <span className="hidden sm:inline font-extrabold text-slate-800">Black Mode</span>
+                </>
+              )}
+            </button>
+
+            {/* Unified Search Icon Only */}
+            <button 
+              onClick={() => {
+                setIsCommandPaletteOpen(true);
+                setCommandPaletteShowInfo(true);
+              }}
+              className="p-2.5 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-850 rounded-xl transition-all cursor-pointer relative group flex items-center justify-center shrink-0"
+              title="Search System (⌘ K or /)"
+            >
+              <Search size={20} className="group-hover:scale-110 transition-transform duration-200" />
+            </button>
+
             <button 
               onClick={() => setIsKeyboardShortcutsOpen(true)}
-              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-xl transition-all group relative"
+              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all group relative cursor-pointer"
               title="Keyboard Shortcuts (?)"
             >
               <Keyboard size={20} />
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-slate-200 text-slate-600 text-[8px] font-black rounded flex items-center justify-center border border-white">?</span>
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[8px] font-black rounded flex items-center justify-center border border-white dark:border-slate-900">?</span>
             </button>
             <button 
               onClick={() => setIsAiAssistantOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+              className="hidden sm:flex items-center justify-center p-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none cursor-pointer shrink-0"
+              title="AI Assistant"
             >
               <Sparkles size={18} />
-              AI Assistant
             </button>
             <button 
               onClick={() => setActiveTab('workflow')}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl font-bold text-sm hover:bg-indigo-100 transition-all border border-indigo-100"
+              className="hidden lg:flex items-center justify-center p-2.5 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600 dark:text-indigo-400 rounded-xl hover:bg-indigo-100 dark:hover:bg-indigo-950/50 transition-all border border-indigo-100 dark:border-indigo-900/30 cursor-pointer shrink-0"
+              title="Quick Start"
             >
               <Layers size={18} />
-              Quick Start
             </button>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-full text-xs font-bold border border-emerald-100">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-              LIVE CRM
+            <div 
+              className="hidden xl:flex items-center justify-center p-2.5 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 rounded-full border border-emerald-100 dark:border-emerald-900/30 shrink-0"
+              title="LIVE CRM"
+            >
+              <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span>
             </div>
             <div className="relative">
               <button 
                 onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
                 className={cn(
-                  "p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-all relative",
-                  isNotificationsOpen && "bg-slate-100 text-indigo-600"
+                  "p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-all relative cursor-pointer",
+                  isNotificationsOpen && "bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400"
                 )}
               >
                 <Bell size={20} />
                 {(pendingApprovalsCount > 0) && (
-                  <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border-2 border-white"></span>
+                  <span className="absolute top-2 right-2 w-2 h-2 bg-rose-500 rounded-full border-2 border-white dark:border-slate-900"></span>
                 )}
               </button>
 
@@ -747,16 +1182,16 @@ export default function App() {
                       initial={{ opacity: 0, y: 10, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-100 z-40 overflow-hidden"
+                      className="absolute right-0 mt-2 w-80 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 z-40 overflow-hidden"
                     >
-                      <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                        <h3 className="font-bold text-sm text-slate-900">Notifications</h3>
+                      <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 flex items-center justify-between">
+                        <h3 className="font-bold text-sm text-slate-900 dark:text-white">Notifications</h3>
                         <button 
                           onClick={() => {
                             setActiveTab('notifications');
                             setIsNotificationsOpen(false);
                           }}
-                          className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 uppercase tracking-wider"
+                          className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 uppercase tracking-wider"
                         >
                           View All
                         </button>
@@ -764,20 +1199,20 @@ export default function App() {
                       
                       <div className="max-h-[400px] overflow-y-auto">
                         {(userRole === 'Admin' || userRole === 'Manager') && pendingApprovalsCount > 0 && (
-                          <div className="p-4 border-b border-slate-100 bg-amber-50/30">
+                          <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-amber-50/30 dark:bg-amber-950/10">
                             <div className="flex items-start gap-3">
-                              <div className="p-2 bg-amber-100 text-amber-600 rounded-lg">
+                              <div className="p-2 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-lg">
                                 <CheckCircle2 size={16} />
                               </div>
                               <div className="flex-1">
-                                <p className="text-xs font-bold text-slate-900">Pending Approvals</p>
-                                <p className="text-[10px] text-slate-500 mt-0.5">You have {pendingApprovalsCount} items awaiting your review.</p>
+                                <p className="text-xs font-bold text-slate-900 dark:text-white">Pending Approvals</p>
+                                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">You have {pendingApprovalsCount} items awaiting your review.</p>
                                 <button 
                                   onClick={() => {
                                     setActiveTab('approvals');
                                     setIsNotificationsOpen(false);
                                   }}
-                                  className="mt-2 text-[10px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 uppercase tracking-wider"
+                                  className="mt-2 text-[10px] font-bold text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 flex items-center gap-1 uppercase tracking-wider cursor-pointer"
                                 >
                                   Review Now <ArrowRight size={10} />
                                 </button>
@@ -787,10 +1222,10 @@ export default function App() {
                         )}
                         
                         <div className="p-8 text-center space-y-2">
-                          <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mx-auto text-slate-300">
+                          <div className="w-12 h-12 bg-slate-50 dark:bg-slate-850 rounded-full flex items-center justify-center mx-auto text-slate-300 dark:text-slate-600">
                             <Bell size={24} />
                           </div>
-                          <p className="text-xs font-medium text-slate-500">No new system notifications</p>
+                          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">No new system notifications</p>
                         </div>
                       </div>
                     </motion.div>
@@ -798,22 +1233,22 @@ export default function App() {
                 )}
               </AnimatePresence>
             </div>
-            <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
-              <div className="text-right hidden sm:block">
+            <div className="flex items-center gap-3 pl-4 border-l border-slate-200 dark:border-slate-800">
+              <div className="text-right hidden md:block">
                 <p className="text-sm font-bold">{currentUser.name}</p>
-                <p className="text-xs text-slate-500">{currentUser.email}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{currentUser.email}</p>
               </div>
               <div className="relative group">
                 <img 
                   src={currentUser.photoURL || user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`} 
                   alt="Avatar" 
-                  className="w-10 h-10 rounded-full bg-indigo-100 border border-slate-200 cursor-pointer object-cover"
+                  className="w-10 h-10 rounded-full bg-indigo-100 border border-slate-200 dark:border-slate-800 cursor-pointer object-cover"
                   referrerPolicy="no-referrer"
                 />
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 p-2">
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-100 dark:border-slate-800 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 p-2">
                   <button 
                     onClick={handleLogout}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 rounded-lg transition-all font-bold"
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg transition-all font-bold cursor-pointer"
                   >
                     <LogOut size={16} />
                     Logout
@@ -825,6 +1260,14 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto">
+          {isDbConnected === false && (
+            <div className="bg-amber-500/10 border-b border-amber-500/20 px-8 py-3 flex items-start gap-3 text-amber-800 dark:text-amber-300">
+              <ShieldAlert size={20} className="shrink-0 mt-0.5 text-amber-500 animate-pulse" />
+              <div className="text-xs leading-normal">
+                <span className="font-bold">Database Connection Notice:</span> The app is currently operating in offline-friendly mode. If you are using an adblocker (like uBlock Origin or standard AdBlock) or a VPN, please consider disabling it or allowing connection to Google Firebase services, as they are likely blocking the connection to the Firestore servers.
+              </div>
+            </div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -837,6 +1280,15 @@ export default function App() {
               {renderContent()}
             </motion.div>
           </AnimatePresence>
+        </div>
+
+        {/* Responsive Mobile Bottom Navigation Bar */}
+        <div className="md:hidden block shrink-0 z-40">
+          <MobileBottomNavigation 
+            activeTab={activeTab} 
+            setActiveTab={setActiveTab} 
+            unreadCount={0} 
+          />
         </div>
       </main>
 
@@ -851,6 +1303,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenShortcuts={() => setIsKeyboardShortcutsOpen(true)}
         userRole={currentUser.role}
+        showInfo={commandPaletteShowInfo}
       />
 
       <KeyboardShortcutsModal 
@@ -928,7 +1381,7 @@ export default function App() {
                     type="text" 
                     placeholder="Ask a question..."
                     className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm shadow-sm"
-                    value={aiAssistantQuery}
+                    value={aiAssistantQuery || ''}
                     onChange={e => setAiAssistantQuery(e.target.value)}
                   />
                   <button 

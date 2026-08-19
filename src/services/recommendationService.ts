@@ -20,7 +20,7 @@ export const recommendationService = {
     filterJournalId?: string
   ): Recommendation[] => {
     const recommendations: Recommendation[] = [];
-    const subscribedServices = client.subscriptions.map(s => s.service);
+    const subscribedServices = (client.subscriptions || []).map(s => s.service);
 
     // 1. Client Stage
     if (!filterJournalId && publishers.length === 0) {

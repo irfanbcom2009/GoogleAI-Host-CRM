@@ -77,7 +77,7 @@ export const HECWorkflowTracker: React.FC<HECWorkflowTrackerProps> = ({ currentU
       setEmployees(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserType[]);
     });
 
-    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Client[]);
     });
 
@@ -223,7 +223,7 @@ export const HECWorkflowTracker: React.FC<HECWorkflowTrackerProps> = ({ currentU
             type="text"
             placeholder="Search application..."
             className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-2xl w-64 outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-xs font-bold"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
@@ -441,7 +441,7 @@ export const HECWorkflowTracker: React.FC<HECWorkflowTrackerProps> = ({ currentU
               <select 
                 required
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                value={newWorkflow.journalId}
+                value={newWorkflow.journalId || ''}
                 onChange={(e) => setNewWorkflow({ ...newWorkflow, journalId: e.target.value })}
               >
                 <option value="">Select a Journal...</option>
@@ -456,7 +456,7 @@ export const HECWorkflowTracker: React.FC<HECWorkflowTrackerProps> = ({ currentU
                 type="text"
                 required
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                value={newWorkflow.username}
+                value={newWorkflow.username || ''}
                 onChange={(e) => setNewWorkflow({ ...newWorkflow, username: e.target.value })}
               />
             </div>
@@ -466,7 +466,7 @@ export const HECWorkflowTracker: React.FC<HECWorkflowTrackerProps> = ({ currentU
                 type="password"
                 required
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                value={newWorkflow.password}
+                value={newWorkflow.password || ''}
                 onChange={(e) => setNewWorkflow({ ...newWorkflow, password: e.target.value })}
               />
             </div>

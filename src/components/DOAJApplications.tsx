@@ -37,6 +37,7 @@ import * as XLSX from 'xlsx';
 interface DOAJApplicationsProps {
   searchQuery?: string;
   currentUser: UserType;
+  journalId?: string;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -49,7 +50,7 @@ const AVAILABLE_COLUMNS = [
   { id: 'credentials', label: 'Credentials' },
 ];
 
-export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery = '', currentUser }) => {
+export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery = '', currentUser, journalId }) => {
   const { check } = usePermissions(currentUser);
   const [applications, setApplications] = useState<DOAJApplication[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -75,14 +76,45 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
     status: 'Pending' as DOAJApplication['status'],
     objectionReason: '',
     objectionDate: '',
-    remarks: ''
+    remarks: '',
+    journalId: ''
   });
+
+  const [journal, setJournal] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!journalId) return;
+    const unsubscribeJournal = onSnapshot(doc(db, 'journals', journalId), (snapshot) => {
+      if (snapshot.exists()) {
+        setJournal({ id: snapshot.id, ...snapshot.data() });
+      }
+    });
+    return () => unsubscribeJournal();
+  }, [journalId]);
+
+  useEffect(() => {
+    if (journal) {
+      setFormData(prev => ({
+        ...prev,
+        journalName: journal.title || journal.name || '',
+        journalLink: journal.url || '',
+        clientId: journal.clientId || '',
+        journalId: journal.id
+      }));
+    }
+  }, [journal]);
 
   useEffect(() => {
     let q = query(collection(db, 'doaj_applications'), orderBy('submissionDate', 'desc'));
     
     if (currentUser.role === 'Client') {
-      q = query(collection(db, 'doaj_applications'), where('clientId', '==', currentUser.id), orderBy('submissionDate', 'desc'));
+      if (journalId) {
+        q = query(collection(db, 'doaj_applications'), where('clientId', '==', currentUser.id), where('journalId', '==', journalId), orderBy('submissionDate', 'desc'));
+      } else {
+        q = query(collection(db, 'doaj_applications'), where('clientId', '==', currentUser.id), orderBy('submissionDate', 'desc'));
+      }
+    } else if (journalId) {
+      q = query(collection(db, 'doaj_applications'), where('journalId', '==', journalId), orderBy('submissionDate', 'desc'));
     }
 
     const unsubscribeApps = onSnapshot(q, (snapshot) => {
@@ -101,7 +133,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
       handleFirestoreError(error, OperationType.LIST, 'doaj_applications');
     });
 
-    const unsubscribeClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubscribeClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       const clientData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -113,7 +145,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
       unsubscribeApps();
       unsubscribeClients();
     };
-  }, [currentUser]);
+  }, [currentUser, journalId]);
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -140,6 +172,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
       const payload = {
         ...formData,
         clientName: client?.name || '',
+        journalId: journalId || formData.journalId || '',
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name,
         updatedById: currentUser.id
@@ -167,9 +200,9 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
   const resetForm = () => {
     setFormData({
       invoiceNo: '',
-      clientId: '',
-      journalName: '',
-      journalLink: '',
+      clientId: journal ? journal.clientId || '' : '',
+      journalName: journal ? journal.title || journal.name || '' : '',
+      journalLink: journal ? journal.url || '' : '',
       submissionDate: new Date().toISOString().split('T')[0],
       doajLoginEmail: '',
       doajPassword: '',
@@ -178,7 +211,8 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
       status: 'Pending',
       objectionReason: '',
       objectionDate: '',
-      remarks: ''
+      remarks: '',
+      journalId: journal ? journal.id || '' : ''
     });
   };
 
@@ -197,7 +231,8 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
       status: app.status,
       objectionReason: app.objectionReason || '',
       objectionDate: app.objectionDate || '',
-      remarks: app.remarks || ''
+      remarks: app.remarks || '',
+      journalId: app.journalId || ''
     });
     setIsModalOpen(true);
   };
@@ -269,15 +304,27 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
   }
 
   return (
-    <div className="p-8 space-y-6">
+    <div className={cn(journalId ? "p-0 space-y-4" : "p-8 space-y-6")}>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-black tracking-tight text-slate-900 flex items-center gap-3">
-            <Globe className="text-indigo-600" size={32} />
-            DOAJ Applications
-          </h2>
-          <p className="text-slate-500 font-medium mt-1">Manage journal indexing applications for Directory of Open Access Journals.</p>
-        </div>
+        {journalId ? (
+          <div>
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Globe className="text-indigo-600" size={18} />
+              DOAJ Applications ({filteredApps.length})
+            </h3>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+              Manage DOAJ indexing applications for this journal
+            </p>
+          </div>
+        ) : (
+          <div>
+            <h2 className="text-3xl font-black tracking-tight text-slate-900 dark:text-white flex items-center gap-3">
+              <Globe className="text-indigo-600 dark:text-indigo-400" size={32} />
+              DOAJ Applications
+            </h2>
+            <p className="text-slate-500 dark:text-slate-400 font-medium mt-1">Manage journal indexing applications for Directory of Open Access Journals.</p>
+          </div>
+        )}
         <div className="flex gap-3">
           <button 
             onClick={exportToExcel}
@@ -418,16 +465,23 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                     )}
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                        <button 
-                          onClick={() => {
-                            const msg = `DOAJ Credentials:\nEmail: ${app.doajLoginEmail}\nPassword: ${app.doajPassword}\n\nEditor Credentials:\nEmail: ${app.editorEmailLogin}\nPassword: ${app.editorPassword}`;
-                            alert(msg);
-                          }}
-                          className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
-                          title="View Credentials"
-                        >
-                          <Key size={18} />
-                        </button>
+                        {currentUser.role === 'Admin' && (
+                          <button 
+                            onClick={() => {
+                              const hasTaiba = (app.doajPassword?.toLowerCase().includes('taiba@0045') || app.editorPassword?.toLowerCase().includes('taiba@0045'));
+                              if (hasTaiba) {
+                                alert('Access Denied');
+                                return;
+                              }
+                              const msg = `DOAJ Credentials:\nEmail: ${app.doajLoginEmail}\nPassword: ${app.doajPassword}\n\nEditor Credentials:\nEmail: ${app.editorEmailLogin}\nPassword: ${app.editorPassword}`;
+                              alert(msg);
+                            }}
+                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+                            title="View Credentials"
+                          >
+                            <Key size={18} />
+                          </button>
+                        )}
                         {check('doajApplications', 'edit') && (
                           <button 
                             onClick={() => handleEdit(app)}
@@ -496,7 +550,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                       required
                       type="text"
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold"
-                      value={formData.invoiceNo}
+                      value={formData.invoiceNo || ''}
                       onChange={e => setFormData(prev => ({ ...prev, invoiceNo: e.target.value }))}
                       placeholder="Enter invoice number"
                     />
@@ -506,11 +560,11 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                     <select 
                       required
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold appearance-none"
-                      value={formData.clientId}
+                      value={formData.clientId || ''}
                       onChange={e => setFormData(prev => ({ ...prev, clientId: e.target.value }))}
                     >
                       <option value="">Select Client</option>
-                      {clients.map(c => (
+                      {[...clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
@@ -521,7 +575,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                       required
                       type="date" 
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold"
-                      value={formData.submissionDate}
+                      value={formData.submissionDate || ''}
                       onChange={e => setFormData(prev => ({ ...prev, submissionDate: e.target.value }))}
                     />
                   </div>
@@ -534,7 +588,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                       required
                       type="text"
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold"
-                      value={formData.journalName}
+                      value={formData.journalName || ''}
                       onChange={e => setFormData(prev => ({ ...prev, journalName: e.target.value }))}
                       placeholder="Enter journal title"
                     />
@@ -545,7 +599,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                       required
                       type="url"
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold"
-                      value={formData.journalLink}
+                      value={formData.journalLink || ''}
                       onChange={e => setFormData(prev => ({ ...prev, journalLink: e.target.value }))}
                       placeholder="https://example.com"
                     />
@@ -565,7 +619,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                           required
                           type="email"
                           className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
-                          value={formData.doajLoginEmail}
+                          value={formData.doajLoginEmail || ''}
                           onChange={e => setFormData(prev => ({ ...prev, doajLoginEmail: e.target.value }))}
                         />
                       </div>
@@ -575,7 +629,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                           <input 
                             type={showPasswords['doaj'] ? 'text' : 'password'}
                             className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium pr-10"
-                            value={formData.doajPassword}
+                            value={formData.doajPassword || ''}
                             onChange={e => setFormData(prev => ({ ...prev, doajPassword: e.target.value }))}
                           />
                           <button 
@@ -595,7 +649,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                           required
                           type="email"
                           className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
-                          value={formData.editorEmailLogin}
+                          value={formData.editorEmailLogin || ''}
                           onChange={e => setFormData(prev => ({ ...prev, editorEmailLogin: e.target.value }))}
                         />
                       </div>
@@ -605,7 +659,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                           <input 
                             type={showPasswords['editor'] ? 'text' : 'password'}
                             className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium pr-10"
-                            value={formData.editorPassword}
+                            value={formData.editorPassword || ''}
                             onChange={e => setFormData(prev => ({ ...prev, editorPassword: e.target.value }))}
                           />
                           <button 
@@ -627,7 +681,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                     <select 
                       required
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold appearance-none"
-                      value={formData.status}
+                      value={formData.status || ''}
                       onChange={e => setFormData(prev => ({ ...prev, status: e.target.value as DOAJApplication['status'] }))}
                     >
                       <option value="Pending">Pending</option>
@@ -644,7 +698,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                         required
                         type="date" 
                         className="w-full px-4 py-3 bg-rose-50 border border-rose-200 rounded-2xl focus:ring-2 focus:ring-rose-500 outline-none transition-all font-bold text-rose-700"
-                        value={formData.objectionDate}
+                        value={formData.objectionDate || ''}
                         onChange={e => setFormData(prev => ({ ...prev, objectionDate: e.target.value }))}
                       />
                     </div>
@@ -658,7 +712,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                       required
                       rows={3}
                       className="w-full px-4 py-3 bg-rose-50 border border-rose-200 rounded-2xl focus:ring-2 focus:ring-rose-500 outline-none transition-all font-medium text-rose-700 placeholder:text-rose-300"
-                      value={formData.objectionReason}
+                      value={formData.objectionReason || ''}
                       onChange={e => setFormData(prev => ({ ...prev, objectionReason: e.target.value }))}
                       placeholder="Explain why the application was rejected..."
                     />
@@ -670,7 +724,7 @@ export const DOAJApplications: React.FC<DOAJApplicationsProps> = ({ searchQuery 
                   <textarea 
                     rows={3}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
-                    value={formData.remarks}
+                    value={formData.remarks || ''}
                     onChange={e => setFormData(prev => ({ ...prev, remarks: e.target.value }))}
                     placeholder="Add any additional notes..."
                   />

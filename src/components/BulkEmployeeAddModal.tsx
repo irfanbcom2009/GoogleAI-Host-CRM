@@ -60,7 +60,7 @@ export const BulkEmployeeAddModal: React.FC<BulkEmployeeAddModalProps> = ({ isOp
       };
 
       // Basic validation for gender
-      if (!['Male', 'Female', 'Other'].includes(employee.gender)) {
+      if (!['Male', 'Female'].includes(employee.gender)) {
         employee.gender = 'Male';
       }
 
@@ -122,7 +122,7 @@ export const BulkEmployeeAddModal: React.FC<BulkEmployeeAddModalProps> = ({ isOp
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Raw Data (Tab Separated)</label>
             <textarea
-              value={rawData}
+              value={rawData || ''}
               onChange={(e) => setRawData(e.target.value)}
               placeholder="Employee ID	Joining Date	Name..."
               className="w-full h-96 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none"

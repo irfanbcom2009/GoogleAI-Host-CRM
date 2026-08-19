@@ -1,5 +1,5 @@
 {
-  "name": "Host A Journal CRM",
-  "description": "A live CRM dashboard for Host A Journal Pvt Ltd to manage submissions, authors, and journal subscriptions.",
+  "name": "Host A Journal Flow-Control",
+  "description": "Enterprise workflow-based Flow Control Engine for managing journal services, ISSN applications, OJS setup, and DOI registration.",
   "requestFramePermissions": []
 }

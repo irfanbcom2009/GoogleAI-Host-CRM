@@ -21,7 +21,11 @@ import {
   ExternalLink,
   DollarSign,
   LayoutGrid,
-  List
+  List,
+  Hash,
+  CheckSquare,
+  Type,
+  Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -29,7 +33,7 @@ import {
   ServiceTier, 
   ClientService, 
   User as UserType, 
-  ClientChecklistItem, 
+  CatalogRequirement, 
   EmployeeTaskTemplate,
   AuditFields
 } from '../types';
@@ -57,6 +61,8 @@ interface ServiceCatalogProps {
   currentUser: UserType;
 }
 
+import { checkFieldUniqueness } from '../services/uniquenessService';
+
 export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) => {
   const { isAdmin, check } = usePermissions(currentUser);
   const [services, setServices] = useState<ServiceDefinition[]>([]);
@@ -69,9 +75,12 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
   const [selectedService, setSelectedService] = useState<ServiceDefinition | null>(null);
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedTier, setSelectedTier] = useState<ServiceTier | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [viewingClientService, setViewingClientService] = useState<ClientService | null>(null);
+  const [journals, setJournals] = useState<any[]>([]);
+  const [selectedJournalId, setSelectedJournalId] = useState<string>('');
 
   const calculateTotalPrice = () => {
     if (!selectedTier) return 0;
@@ -90,32 +99,55 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
 
     let clientServicesQuery;
     if (currentUser.role === 'Client') {
+      const journalsQuery = query(collection(db, 'journals'), where('clientId', '==', currentUser.id));
+      const unsubJournals = onSnapshot(journalsQuery, (snapshot) => {
+        setJournals(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+
       clientServicesQuery = query(
         collection(db, 'client_services'), 
         where('clientId', '==', currentUser.id),
         orderBy('createdAt', 'desc')
       );
+      
+      const unsubClientServices = onSnapshot(clientServicesQuery, (snapshot) => {
+        setClientServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as ClientService));
+        setLoading(false);
+      });
+
+      return () => {
+        unsubServices();
+        unsubClientServices();
+        unsubJournals();
+      };
     } else {
       clientServicesQuery = query(collection(db, 'client_services'), orderBy('createdAt', 'desc'));
+      
+      const unsubClientServices = onSnapshot(clientServicesQuery, (snapshot) => {
+        setClientServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as ClientService));
+        setLoading(false);
+      });
+
+      return () => {
+        unsubServices();
+        unsubClientServices();
+      };
     }
-
-    const unsubClientServices = onSnapshot(clientServicesQuery, (snapshot) => {
-      setClientServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as ClientService));
-      setLoading(false);
-    });
-
-    return () => {
-      unsubServices();
-      unsubClientServices();
-    };
   }, [currentUser]);
 
   const activateService = async (serviceId: string) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      await serviceCatalogService.activateService(serviceId);
+      await serviceCatalogService.activateService(serviceId, { 
+        id: currentUser.id, 
+        name: currentUser.name 
+      });
       toast.success('Service activated and tasks generated!');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'client_services');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -124,6 +156,9 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
       toast.error('Only clients can order services.');
       return;
     }
+
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     try {
       const totalPrice = calculateTotalPrice();
@@ -138,6 +173,7 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
       const clientServiceData = {
         clientId: currentUser.id,
         clientName: currentUser.name,
+        journalId: selectedJournalId,
         serviceId: service.id,
         serviceName: service.name,
         tierId: tier.id,
@@ -161,47 +197,53 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
       const docRef = await addDoc(collection(db, 'client_services'), clientServiceData);
 
       // Create Invoice with options
-      try {
-        const invoiceItems = [
-          {
-            description: `${service.name} - ${tier.name} Package`,
-            quantity: 1,
-            rate: tier.price,
-            amount: tier.price
-          },
-          ...(tier.options || [])
-            .filter(o => selectedOptionIds.includes(o.id))
-            .map(o => ({
-              description: `Add-on: ${o.name}`,
+      if (tier.workflowConfig.autoGenerateInvoice) {
+        try {
+          const upfrontPercentage = tier.workflowConfig.upfrontPaymentPercentage || 100;
+          const invoiceAmount = (totalPrice * upfrontPercentage) / 100;
+          
+          const invoiceItems = [
+            {
+              description: `${service.name} - ${tier.name} Package (${upfrontPercentage}% Upfront)`,
               quantity: 1,
-              rate: o.price,
-              amount: o.price
-            }))
-        ];
+              rate: invoiceAmount,
+              amount: invoiceAmount
+            },
+            ...(tier.options || [])
+              .filter(o => selectedOptionIds.includes(o.id))
+              .map(o => ({
+                description: `Add-on: ${o.name}`,
+                quantity: 1,
+                rate: o.price,
+                amount: o.price
+              }))
+          ];
 
-        const invoiceData = {
-          clientId: currentUser.id,
-          clientName: currentUser.name,
-          invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
-          date: new Date().toISOString().split('T')[0],
-          dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          items: invoiceItems,
-          subtotal: totalPrice,
-          tax: 0,
-          total: totalPrice,
-          balance: totalPrice,
-          status: 'unpaid',
-          currency: tier.currency,
-          notes: `Order for ${service.name} (${tier.name}) with options: ${selectedOptionIds.join(', ')}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          createdById: currentUser.id,
-          createdBy: currentUser.name
-        };
-        const invRef = await addDoc(collection(db, 'invoices'), invoiceData);
-        await updateDoc(docRef, { invoiceId: invRef.id });
-      } catch (invError) {
-        console.error('Error creating invoice:', invError);
+          const invoiceData = {
+            clientId: currentUser.id,
+            clientName: currentUser.name,
+            invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+            date: new Date().toISOString().split('T')[0],
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            items: invoiceItems,
+            subtotal: invoiceAmount + (totalPrice - invoiceAmount > 0 ? 0 : 0), // Simplifying for now
+            tax: 0,
+            total: invoiceAmount + (tier.options || []).filter(o => selectedOptionIds.includes(o.id)).reduce((s, o) => s + o.price, 0),
+            balance: invoiceAmount + (tier.options || []).filter(o => selectedOptionIds.includes(o.id)).reduce((s, o) => s + o.price, 0),
+            status: 'unpaid',
+            currency: tier.currency,
+            notes: `Order for ${service.name} (${tier.name}) with options: ${selectedOptionIds.join(', ')}`,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            createdById: currentUser.id,
+            createdBy: currentUser.name,
+            journalId: selectedJournalId
+          };
+          const invRef = await addDoc(collection(db, 'invoices'), invoiceData);
+          await updateDoc(docRef, { invoiceId: invRef.id });
+        } catch (invError) {
+          console.error('Error creating invoice:', invError);
+        }
       }
 
       // Notification
@@ -218,16 +260,55 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
         console.error('Error creating notification:', notifError);
       }
 
-      toast.success('Order placed! Please pay the invoice to activate service.');
+      toast.success('Order placed! Please pay the invoice to activate service!');
       setIsSubscriptionModalOpen(false);
+      setSelectedOptionIds([]);
+      setSelectedJournalId('');
       setActiveTab('my-services');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'client_services');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const updateChecklistProgress = async (clientService: ClientService, itemId: string, value: string, fileUrl?: string) => {
+  const updateChecklistProgress = async (clientService: ClientService, itemId: string, value: string, fileUrl?: string | null) => {
     try {
+      // Find the rule for this item
+      const service = services.find(s => s.id === clientService.serviceId);
+      const tier = service?.tiers.find(t => t.id === clientService.tierId);
+      const item = tier?.clientChecklist?.find(i => i.id === itemId);
+
+      if (item?.validationRegex) {
+        try {
+          const regex = new RegExp(item.validationRegex);
+          if (!regex.test(value)) {
+            toast.error(`Validation Error: "${item.label}" format is invalid.`);
+            return;
+          }
+        } catch (re) {
+          console.error('Invalid regex:', item.validationRegex);
+        }
+      }
+
+      if (item?.uniquenessRule && item.uniquenessRule !== 'None') {
+        const { isUnique, conflictId } = await checkFieldUniqueness(
+          item.uniquenessRule, 
+          value, 
+          { 
+            fieldName: item.label,
+            clientId: clientService.clientId,
+            serviceId: clientService.serviceId,
+            currentRecordId: clientService.id
+          }
+        );
+
+        if (!isUnique) {
+          toast.error(`Uniqueness Error: The value for "${item.label}" must be ${item.uniquenessRule === 'Global' ? 'globally unique' : item.uniquenessRule === 'Service' ? 'unique within this service' : 'unique for this client'}.`);
+          return;
+        }
+      }
+
       const newProgress = { ...clientService.clientChecklistProgress };
       newProgress[itemId] = {
         ...newProgress[itemId],
@@ -256,19 +337,19 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
   };
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
+    <div className="p-8 space-y-8 w-full px-4 md:px-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-black text-slate-900 tracking-tight">Service Catalog</h2>
-          <p className="text-slate-500 mt-1 font-medium">Explore and manage our professional services and automated workflows.</p>
+          <h2 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Service Catalog</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1 font-medium">Explore and manage our professional services and automated workflows.</p>
         </div>
         
-        <div className="flex items-center gap-2 bg-white p-1 rounded-2xl border border-slate-200 shadow-sm w-fit">
+        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 p-1 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm w-fit flex-wrap">
           <button 
             onClick={() => setActiveTab('catalog')}
             className={cn(
-              "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
-              activeTab === 'catalog' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-600 hover:bg-slate-50"
+              "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer",
+              activeTab === 'catalog' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none" : "text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
             )}
           >
             <BookOpen size={18} />
@@ -278,8 +359,8 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
             <button 
               onClick={() => setActiveTab('my-services')}
               className={cn(
-                "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
-                activeTab === 'my-services' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-600 hover:bg-slate-50"
+                "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer",
+                activeTab === 'my-services' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none" : "text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
               )}
             >
               <Package size={18} />
@@ -291,8 +372,8 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
               <button 
                 onClick={() => setActiveTab('all-subscriptions')}
                 className={cn(
-                  "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
-                  activeTab === 'all-subscriptions' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-600 hover:bg-slate-50"
+                  "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer",
+                  activeTab === 'all-subscriptions' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none" : "text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
                 )}
               >
                 <Users size={18} />
@@ -301,8 +382,8 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
               <button 
                 onClick={() => setActiveTab('management')}
                 className={cn(
-                  "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
-                  activeTab === 'management' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200" : "text-slate-600 hover:bg-slate-50"
+                  "px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 cursor-pointer",
+                  activeTab === 'management' ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 dark:shadow-none" : "text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
                 )}
               >
                 <Settings2 size={18} />
@@ -319,8 +400,8 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
           <input 
             type="text"
             placeholder="Search services..."
-            className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium shadow-sm"
-            value={searchQuery}
+            className="w-full pl-12 pr-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium shadow-sm"
+            value={searchQuery || ''}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
@@ -330,7 +411,7 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
               setSelectedService(null);
               setIsServiceModalOpen(true);
             }}
-            className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center gap-2"
+            className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-none flex items-center gap-2 cursor-pointer"
           >
             <Plus size={20} />
             Create Service
@@ -345,23 +426,23 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6"
           >
             {services.filter(s => s.isActive && s.name.toLowerCase().includes(searchQuery.toLowerCase())).map(service => (
-              <div key={service.id} className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-all group">
+              <div key={service.id} className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden hover:shadow-md transition-all group">
                 <div className="p-6">
-                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
                     <Package size={24} />
                   </div>
-                  <h3 className="text-xl font-black text-slate-900">{service.name}</h3>
-                  <p className="text-slate-500 text-sm mt-2 line-clamp-2 font-medium">{service.description}</p>
+                  <h3 className="text-xl font-black text-slate-900 dark:text-white">{service.name}</h3>
+                  <p className="text-slate-500 dark:text-slate-400 text-sm mt-2 line-clamp-2 font-medium">{service.description}</p>
                   
                   <div className="mt-6 space-y-3">
                     {service.tiers.map(tier => (
-                      <div key={tier.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                      <div key={tier.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-700 flex items-center justify-between">
                         <div>
-                          <p className="font-bold text-slate-900">{tier.name}</p>
-                          <p className="text-xs text-indigo-600 font-black">{tier.currency} {tier.price.toLocaleString()}</p>
+                          <p className="font-bold text-slate-900 dark:text-white">{tier.name}</p>
+                          <p className="text-xs text-indigo-600 dark:text-indigo-400 font-black">{tier.currency} {tier.price.toLocaleString()}</p>
                         </div>
                         <button 
                           onClick={() => {
@@ -518,10 +599,11 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
                         <div className="flex items-center justify-end gap-2">
                           {!cs.isActivated && (
                             <button 
+                              disabled={isSubmitting}
                               onClick={() => activateService(cs.id)}
-                              className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm"
+                              className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                             >
-                              Activate
+                              {isSubmitting ? <Clock size={12} className="animate-spin" /> : 'Activate'}
                             </button>
                           )}
                           <button 
@@ -629,6 +711,7 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
           setSelectedOptionIds([]);
         }} 
         title={selectedService?.name || 'Service Details'}
+        maxWidth="5xl"
       >
         {selectedService && selectedTier && (
           <div className="space-y-6">
@@ -685,7 +768,12 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
                 {selectedTier.clientChecklist.map(item => (
                   <div key={item.id} className="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
                     <div className="p-2 bg-white rounded-xl border border-slate-200 text-slate-400">
-                      {item.type === 'document' ? <Upload size={16} /> : item.type === 'input' ? <FileText size={16} /> : <CheckCircle2 size={16} />}
+                      {item.type === 'file' ? <Upload size={16} /> : 
+                       item.type === 'number' ? <Hash size={16} /> :
+                       item.type === 'date' ? <Calendar size={16} /> :
+                       item.type === 'select' ? <List size={16} /> :
+                       item.type === 'checkbox' ? <CheckSquare size={16} /> :
+                       <FileText size={16} />}
                     </div>
                     <div>
                       <p className="text-sm font-bold text-slate-900">{item.label}</p>
@@ -696,7 +784,21 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
               </div>
             </div>
 
-            <div className="pt-4 flex gap-3">
+            <div className="space-y-4">
+          <label className="text-sm font-bold text-slate-700">Link to Journal (Optional)</label>
+          <select 
+            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
+            value={selectedJournalId || ''}
+            onChange={e => setSelectedJournalId(e.target.value)}
+          >
+            <option value="">No Journal (General Service)</option>
+            {journals.map(j => (
+              <option key={j.id} value={j.id}>{j.title}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="pt-4 flex gap-3">
               <button 
                 onClick={() => setIsSubscriptionModalOpen(false)}
                 className="flex-1 px-6 py-3 bg-slate-100 text-slate-700 rounded-2xl font-bold hover:bg-slate-200 transition-all"
@@ -704,10 +806,16 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
                 Cancel
               </button>
               <button 
+                disabled={isSubmitting}
                 onClick={() => handleSubscribe(selectedService, selectedTier)}
-                className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+                className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Subscribe Now
+                {isSubmitting ? (
+                  <>
+                    <Clock size={18} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : 'Subscribe Now'}
               </button>
             </div>
           </div>
@@ -719,6 +827,7 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
         isOpen={!!viewingClientService} 
         onClose={() => setViewingClientService(null)} 
         title={viewingClientService?.serviceName || 'Service Progress'}
+        maxWidth="3xl"
       >
         {viewingClientService && (
           <div className="space-y-6">
@@ -781,7 +890,12 @@ export const ServiceCatalog: React.FC<ServiceCatalogProps> = ({ currentUser }) =
                             "p-2 rounded-xl border transition-all",
                             isCompleted ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-400 border-slate-200"
                           )}>
-                            {item.type === 'document' ? <Upload size={16} /> : item.type === 'input' ? <FileText size={16} /> : <CheckCircle2 size={16} />}
+                            {item.type === 'file' ? <Upload size={16} /> : 
+                             item.type === 'number' ? <Hash size={16} /> :
+                             item.type === 'date' ? <Calendar size={16} /> :
+                             item.type === 'select' ? <List size={16} /> :
+                             item.type === 'checkbox' ? <CheckSquare size={16} /> :
+                             <FileText size={16} />}
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">{item.label}</p>
@@ -831,6 +945,7 @@ interface ServiceManagementModalProps {
 }
 
 const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen, onClose, service }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState<Partial<ServiceDefinition>>({
     name: '',
     description: '',
@@ -841,7 +956,18 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
 
   useEffect(() => {
     if (service) {
-      setFormData(service);
+      // Ensure existing tiers have default workflowConfig if missing
+      const sanitizedTiers = (service.tiers || []).map(t => ({
+        ...t,
+        workflowConfig: t.workflowConfig || {
+          autoGenerateInvoice: true,
+          upfrontPaymentPercentage: 100,
+          generateTasksOnActivation: true,
+          enableCommissions: true,
+          employeeCommissionPercentage: 50
+        }
+      }));
+      setFormData({ ...service, tiers: sanitizedTiers });
     } else {
       setFormData({
         name: '',
@@ -858,6 +984,9 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
       toast.error('Service name is required');
       return;
     }
+
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     try {
       if (service) {
@@ -877,6 +1006,8 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
       onClose();
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'catalog');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -890,7 +1021,14 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
       clientChecklist: [],
       employeeChecklist: [],
       options: [],
-      employeeSharePercentage: 50
+      employeeSharePercentage: 50,
+      workflowConfig: {
+        autoGenerateInvoice: true,
+        upfrontPaymentPercentage: 100,
+        generateTasksOnActivation: true,
+        enableCommissions: true,
+        employeeCommissionPercentage: 50
+      }
     };
     setFormData(prev => ({ ...prev, tiers: [...(prev.tiers || []), newTier] }));
   };
@@ -910,7 +1048,12 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={service ? 'Edit Service' : 'Create New Service'}>
+    <Modal 
+      isOpen={isOpen} 
+      onClose={onClose} 
+      title={service ? 'Edit Service' : 'Create New Service'}
+      maxWidth="7xl"
+    >
       <div className="space-y-6 max-h-[80vh] overflow-y-auto pr-2">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -918,7 +1061,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
             <input 
               type="text"
               className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
-              value={formData.name}
+              value={formData.name || ''}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
             />
           </div>
@@ -926,7 +1069,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
             <label className="text-sm font-bold text-slate-700">Category</label>
             <select 
               className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
-              value={formData.category}
+              value={formData.category || ''}
               onChange={e => setFormData({ ...formData, category: e.target.value })}
             >
               <option>General</option>
@@ -942,7 +1085,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
           <textarea 
             className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500"
             rows={3}
-            value={formData.description}
+            value={formData.description || ''}
             onChange={e => setFormData({ ...formData, description: e.target.value })}
           />
         </div>
@@ -975,7 +1118,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                     <input 
                       type="text"
                       className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                      value={tier.name}
+                      value={tier.name || ''}
                       onChange={e => updateTier(tier.id, { name: e.target.value })}
                     />
                   </div>
@@ -985,12 +1128,12 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                       <input 
                         type="number"
                         className="flex-1 p-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                        value={tier.price}
+                        value={tier.price || ''}
                         onChange={e => updateTier(tier.id, { price: Number(e.target.value) })}
                       />
                       <select 
                         className="w-20 p-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                        value={tier.currency}
+                        value={tier.currency || ''}
                         onChange={e => updateTier(tier.id, { currency: e.target.value as any })}
                       >
                         <option>PKR</option>
@@ -1005,11 +1148,62 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                   <input 
                     type="number"
                     className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                    value={tier.employeeSharePercentage}
+                    value={tier.employeeSharePercentage || ''}
                     onChange={e => updateTier(tier.id, { employeeSharePercentage: Number(e.target.value) })}
                     min="0"
                     max="100"
                   />
+                </div>
+
+                <div className="space-y-4 pt-4 border-t border-slate-200">
+                  <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Workflow Triggers</h5>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer">
+                      <input 
+                        type="checkbox"
+                        className="w-4 h-4 rounded text-indigo-600"
+                        checked={tier.workflowConfig?.autoGenerateInvoice}
+                        onChange={e => updateTier(tier.id, { workflowConfig: { ...tier.workflowConfig, autoGenerateInvoice: e.target.checked } })}
+                      />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">Auto-Invoice</p>
+                        <p className="text-[10px] text-slate-500">Generate invoice on order</p>
+                      </div>
+                    </label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Upfront %</label>
+                      <input 
+                        type="number"
+                        className="w-full p-2 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                        value={tier.workflowConfig?.upfrontPaymentPercentage || ''}
+                        onChange={e => updateTier(tier.id, { workflowConfig: { ...tier.workflowConfig, upfrontPaymentPercentage: Number(e.target.value) } })}
+                      />
+                    </div>
+                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer">
+                      <input 
+                        type="checkbox"
+                        className="w-4 h-4 rounded text-indigo-600"
+                        checked={tier.workflowConfig?.generateTasksOnActivation}
+                        onChange={e => updateTier(tier.id, { workflowConfig: { ...tier.workflowConfig, generateTasksOnActivation: e.target.checked } })}
+                      />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">Auto-Tasks</p>
+                        <p className="text-[10px] text-slate-500">Create employee tasks</p>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer">
+                      <input 
+                        type="checkbox"
+                        className="w-4 h-4 rounded text-indigo-600"
+                        checked={tier.workflowConfig?.enableCommissions}
+                        onChange={e => updateTier(tier.id, { workflowConfig: { ...tier.workflowConfig, enableCommissions: e.target.checked } })}
+                      />
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">Commissions</p>
+                        <p className="text-[10px] text-slate-500">Calculate employee earnings</p>
+                      </div>
+                    </label>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -1032,7 +1226,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                           type="text"
                           className="flex-1 bg-transparent border-none text-xs outline-none"
                           placeholder="Option name"
-                          value={option.name}
+                          value={option.name || ''}
                           onChange={e => {
                             const newOptions = tier.options.map(o => o.id === option.id ? { ...o, name: e.target.value } : o);
                             updateTier(tier.id, { options: newOptions });
@@ -1042,7 +1236,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                           type="number"
                           className="w-20 bg-slate-50 border-none text-xs rounded-lg px-2 py-1 outline-none font-bold text-indigo-600"
                           placeholder="Price"
-                          value={option.price}
+                          value={option.price || ''}
                           onChange={e => {
                             const newOptions = tier.options.map(o => o.id === option.id ? { ...o, price: Number(e.target.value) } : o);
                             updateTier(tier.id, { options: newOptions });
@@ -1067,11 +1261,13 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Client Checklist</h5>
                     <button 
                       onClick={() => {
-                        const newItem: ClientChecklistItem = {
+                        const newItem: any = {
                           id: Math.random().toString(36).substr(2, 9),
                           label: 'New Requirement',
-                          type: 'document',
-                          required: true
+                          type: 'text',
+                          required: true,
+                          uniquenessRule: 'None',
+                          isTemporary: false
                         };
                         updateTier(tier.id, { clientChecklist: [...tier.clientChecklist, newItem] });
                       }}
@@ -1085,25 +1281,81 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                       <div key={item.id} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-100">
                         <select 
                           className="bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
-                          value={item.type}
+                          value={item.type || ''}
                           onChange={e => {
                             const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, type: e.target.value as any } : i);
                             updateTier(tier.id, { clientChecklist: newChecklist });
                           }}
                         >
-                          <option value="document">Doc</option>
-                          <option value="input">Input</option>
-                          <option value="step">Step</option>
+                          <option value="text">Text</option>
+                          <option value="number">Number</option>
+                          <option value="date">Date</option>
+                          <option value="file">File</option>
+                          <option value="select">Select</option>
+                          <option value="textarea">Textarea</option>
+                          <option value="checkbox">Checkbox</option>
                         </select>
                         <input 
                           type="text"
-                          className="flex-1 bg-transparent border-none text-xs outline-none"
-                          value={item.label}
+                          className="flex-1 bg-transparent border-none text-xs outline-none min-w-[150px]"
+                          placeholder="Label (e.g. Journal Title)"
+                          value={item.label || ''}
                           onChange={e => {
                             const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, label: e.target.value } : i);
                             updateTier(tier.id, { clientChecklist: newChecklist });
                           }}
                         />
+                        <select 
+                          className="bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none text-indigo-600"
+                          value={item.linkedField || ''}
+                          onChange={e => {
+                            const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, linkedField: e.target.value || undefined } : i);
+                            updateTier(tier.id, { clientChecklist: newChecklist });
+                          }}
+                        >
+                          <option value="">No Link</option>
+                          <option value="journals.title">Journal Title</option>
+                          <option value="journals.issnPrint">Print ISSN</option>
+                          <option value="journals.issnOnline">Online ISSN</option>
+                          <option value="domains.domainName">Domain Name</option>
+                          <option value="users.email">User Email</option>
+                          <option value="users.phone">User Phone</option>
+                        </select>
+                        <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
+                          <span className="text-[8px] font-black uppercase text-slate-400">Temp</span>
+                          <input 
+                            type="checkbox"
+                            className="w-3 h-3 accent-indigo-600"
+                            checked={item.isTemporary}
+                            onChange={e => {
+                              const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, isTemporary: e.target.checked } : i);
+                              updateTier(tier.id, { clientChecklist: newChecklist });
+                            }}
+                          />
+                        </div>
+                        <input 
+                          type="text"
+                          className="w-24 bg-slate-50 border-none text-[10px] rounded-lg px-2 py-1 outline-none font-mono"
+                          placeholder="Regex (e.g. ^[0-9]+$)"
+                          value={item.validationRegex || ''}
+                          onChange={e => {
+                            const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, validationRegex: e.target.value } : i);
+                            updateTier(tier.id, { clientChecklist: newChecklist });
+                          }}
+                        />
+                        <select 
+                          className="bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none text-indigo-600"
+                          value={item.uniquenessRule || 'None'}
+                          onChange={e => {
+                            const newChecklist = tier.clientChecklist.map(i => i.id === item.id ? { ...i, uniquenessRule: e.target.value as any } : i);
+                            updateTier(tier.id, { clientChecklist: newChecklist });
+                          }}
+                        >
+                          <option value="None">No Rule</option>
+                          <option value="Global">Global Unique</option>
+                          <option value="Service">Service Unique</option>
+                          <option value="Client">Client Unique</option>
+                        </select>
                         <button 
                           onClick={() => {
                             const newChecklist = tier.clientChecklist.filter(i => i.id !== item.id);
@@ -1120,7 +1372,7 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
 
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Employee Tasks</h5>
+                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Employee Tasks Workflow</h5>
                     <button 
                       onClick={() => {
                         const newItem: EmployeeTaskTemplate = {
@@ -1128,49 +1380,109 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
                           label: 'New Task',
                           department: 'Technical',
                           priority: 'medium',
-                          daysToComplete: 3
+                          daysToComplete: 3,
+                          assignedRole: 'Employee',
+                          points: 10,
+                          order: (tier.employeeChecklist?.length || 0) + 1
                         };
-                        updateTier(tier.id, { employeeChecklist: [...tier.employeeChecklist, newItem] });
+                        updateTier(tier.id, { employeeChecklist: [...(tier.employeeChecklist || []), newItem] });
                       }}
                       className="text-[10px] font-bold text-indigo-600 hover:underline"
                     >
-                      + Add Task
+                      + Add Task Step
                     </button>
                   </div>
                   <div className="space-y-2">
-                    {tier.employeeChecklist.map(task => (
-                      <div key={task.id} className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-100">
-                        <input 
-                          type="text"
-                          className="flex-1 bg-transparent border-none text-xs outline-none"
-                          value={task.label}
-                          onChange={e => {
-                            const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, label: e.target.value } : t);
-                            updateTier(tier.id, { employeeChecklist: newTasks });
-                          }}
-                        />
-                        <select 
-                          className="bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
-                          value={task.department}
-                          onChange={e => {
-                            const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, department: e.target.value as any } : t);
-                            updateTier(tier.id, { employeeChecklist: newTasks });
-                          }}
-                        >
-                          <option>Technical</option>
-                          <option>Accounts</option>
-                          <option>Editorial</option>
-                          <option>General</option>
-                        </select>
-                        <button 
-                          onClick={() => {
-                            const newTasks = tier.employeeChecklist.filter(t => t.id !== task.id);
-                            updateTier(tier.id, { employeeChecklist: newTasks });
-                          }}
-                          className="text-slate-300 hover:text-rose-500"
-                        >
-                          <X size={14} />
-                        </button>
+                    {(tier.employeeChecklist || []).map(task => (
+                      <div key={task.id} className="flex flex-col gap-2 bg-white p-3 rounded-xl border border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <input 
+                            type="number"
+                            className="w-12 p-1 bg-slate-50 border border-slate-100 rounded text-[10px] font-bold text-center"
+                            value={task.order || ''}
+                            onChange={e => {
+                              const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, order: Number(e.target.value) } : t);
+                              updateTier(tier.id, { employeeChecklist: newTasks });
+                            }}
+                            title="Step Order"
+                          />
+                          <input 
+                            type="text"
+                            className="flex-1 bg-transparent border-none text-xs outline-none font-bold"
+                            value={task.label || ''}
+                            onChange={e => {
+                              const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, label: e.target.value } : t);
+                              updateTier(tier.id, { employeeChecklist: newTasks });
+                            }}
+                            placeholder="Task Name"
+                          />
+                          <button 
+                            onClick={() => {
+                              const newTasks = tier.employeeChecklist.filter(t => t.id !== task.id);
+                              updateTier(tier.id, { employeeChecklist: newTasks });
+                            }}
+                            className="text-slate-300 hover:text-rose-500"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="space-y-1">
+                            <span className="text-[8px] font-black uppercase text-slate-400">Department</span>
+                            <select 
+                              className="w-full bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
+                              value={task.department || ''}
+                              onChange={e => {
+                                const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, department: e.target.value as any } : t);
+                                updateTier(tier.id, { employeeChecklist: newTasks });
+                              }}
+                            >
+                              <option>Technical</option>
+                              <option>Accounts</option>
+                              <option>Editorial</option>
+                              <option>General</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[8px] font-black uppercase text-slate-400">Assigned Role</span>
+                            <select 
+                              className="w-full bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
+                              value={task.assignedRole || ''}
+                              onChange={e => {
+                                const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, assignedRole: e.target.value as any } : t);
+                                updateTier(tier.id, { employeeChecklist: newTasks });
+                              }}
+                            >
+                              <option>Admin</option>
+                              <option>Manager</option>
+                              <option>Employee</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[8px] font-black uppercase text-slate-400">Points</span>
+                            <input 
+                              type="number"
+                              className="w-full bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
+                              value={task.points || 0 || ''}
+                              onChange={e => {
+                                const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, points: Number(e.target.value) } : t);
+                                updateTier(tier.id, { employeeChecklist: newTasks });
+                              }}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-[8px] font-black uppercase text-slate-400">Days</span>
+                            <input 
+                              type="number"
+                              className="w-full bg-slate-50 border-none text-[10px] font-bold rounded-lg px-2 py-1 outline-none"
+                              value={task.daysToComplete || ''}
+                              onChange={e => {
+                                const newTasks = tier.employeeChecklist.map(t => t.id === task.id ? { ...t, daysToComplete: Number(e.target.value) } : t);
+                                updateTier(tier.id, { employeeChecklist: newTasks });
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1188,10 +1500,11 @@ const ServiceManagementModal: React.FC<ServiceManagementModalProps> = ({ isOpen,
             Cancel
           </button>
           <button 
+            disabled={isSubmitting}
             onClick={handleSave}
-            className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+            className="flex-1 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            {service ? 'Update Service' : 'Create Service'}
+            {isSubmitting ? <Clock size={18} className="animate-spin" /> : (service ? 'Update Service' : 'Create Service')}
           </button>
         </div>
       </div>

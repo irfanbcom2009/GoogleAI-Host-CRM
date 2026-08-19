@@ -19,12 +19,14 @@ import {
   TrendingDown,
   Layout,
   ShoppingCart,
+  Activity,
   UserPlus,
   ShieldAlert,
   Bell,
   FileText,
   Search,
-  History
+  History,
+  Database
 } from 'lucide-react';
 import { UserRole, UserPermissions } from '../types';
 
@@ -51,6 +53,7 @@ export const MENU_CONFIG: MenuGroup[] = [
     label: 'Core Management',
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'Manager', 'Employee', 'Client'] },
+      { id: 'dynamic-service', label: 'Service Portal', icon: ShoppingCart, roles: ['Admin', 'Client'] },
       { id: 'approvals', label: 'Approval Requests', icon: FileCheck, roles: ['Admin', 'Manager', 'Employee'], permission: 'approvalRequests' },
       { id: 'leaderboard', label: 'Performance Rank', icon: Trophy, roles: ['Admin', 'Manager', 'Employee'] },
       { id: 'clients', label: 'Clients', icon: Users, roles: ['Admin', 'Manager', 'Employee'], permission: 'clients' },
@@ -63,6 +66,7 @@ export const MENU_CONFIG: MenuGroup[] = [
     items: [
       { id: 'publishers', label: 'Publishers', icon: Building2, roles: ['Admin', 'Manager', 'Employee'], permission: 'publishers' },
       { id: 'journals', label: 'Journals', icon: BookOpen, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'journals' },
+      { id: 'domains', label: 'Domain Management', icon: Globe, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'domains' },
       { id: 'indexing', label: 'Indexing Agencies', icon: Building2, roles: ['Admin', 'Manager', 'Employee'], permission: 'indexingAgencies' },
       { id: 'hec', label: 'HEC Applications', icon: GraduationCap, roles: ['Admin', 'Manager', 'Employee'], permission: 'hecApplications' },
       { id: 'issn', label: 'ISSN Requests', icon: FileCheck, roles: ['Admin', 'Manager', 'Employee'], permission: 'issnRequests', recommendation: 'doi' },
@@ -70,37 +74,19 @@ export const MENU_CONFIG: MenuGroup[] = [
     ]
   },
   {
-    id: 'operations',
-    label: 'Operations Hub',
+    id: 'workflow-system',
+    label: 'Workflow System',
     items: [
-      { id: 'catalog', label: 'Service Catalog', icon: Layout, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'serviceCatalog' },
-      { id: 'orders', label: 'Service Orders', icon: ShoppingCart, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'clients' },
-      { id: 'tasks', label: 'Tasks & Workflow', icon: Briefcase, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'tasks' },
-      { id: 'points', label: 'Points & Rewards', icon: Trophy, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'clients' },
-    ]
-  },
-  {
-    id: 'data',
-    label: 'Data Tools',
-    items: [
-      { id: 'domains', label: 'Domains', icon: Globe, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'domains' },
-      { id: 'files', label: 'File Manager', icon: Layers, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
-    ]
-  },
-  {
-    id: 'finance',
-    label: 'Financials',
-    items: [
-      { id: 'finance-dashboard', label: 'Finance Hub', icon: DollarSign, roles: ['Admin', 'Manager', 'Employee'], department: 'Finance', permission: 'invoices' },
-      { id: 'invoices', label: 'Invoices', icon: CreditCard, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'invoices' },
-      { id: 'expenses', label: 'Expenses', icon: TrendingDown, roles: ['Admin', 'Manager', 'Employee'], permission: 'expenses' },
+      { id: 'workflow-dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'tasks' },
+      { id: 'workflow-orders', label: 'Orders & Tasks', icon: Briefcase, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'tasks' },
+      { id: 'workflow-team', label: 'Team', icon: Users, roles: ['Admin', 'Manager'], permission: 'employees' },
+      { id: 'workflow-logs', label: 'Activity Logs', icon: Activity, roles: ['Admin', 'Manager', 'Client'], permission: 'accessLogs' },
     ]
   },
   {
     id: 'admin',
     label: 'Administration',
     items: [
-      { id: 'catalog-manager', label: 'Catalog Manager', icon: Layers, roles: ['Admin', 'Manager'], permission: 'serviceCatalog' },
       { id: 'activity-history', label: 'Activity History', icon: History, roles: ['Admin', 'Manager'], permission: 'resources' },
       { id: 'resources', label: 'Resources', icon: FileText, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },
       { id: 'chat', label: 'Live Chat', icon: MessageSquare, roles: ['Admin', 'Manager', 'Employee', 'Client'], permission: 'resources' },

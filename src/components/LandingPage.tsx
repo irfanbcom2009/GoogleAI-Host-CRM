@@ -39,6 +39,7 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
   const [latestDomains, setLatestDomains] = useState<Domain[]>([]);
   const [latestIssn, setLatestIssn] = useState<ISSNRequest[]>([]);
   const [latestClients, setLatestClients] = useState<CRMUser[]>([]);
+  const [clientJournalNames, setClientJournalNames] = useState<{[clientId: string]: string}>({});
   const [latestHecJournals, setLatestHecJournals] = useState<HECEntry[]>([]);
   const [latestPublishers, setLatestPublishers] = useState<Publisher[]>([]);
   const [employees, setEmployees] = useState<CRMUser[]>([]);
@@ -71,11 +72,17 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
     );
 
     const unsubClients = onSnapshot(
-      query(collection(db, 'users'), where('role', '==', 'Client'), orderBy('createdAt', 'desc'), limit(5)),
+      query(collection(db, 'users'), where('role', '==', 'Client'), limit(10)),
       (snapshot) => {
         setLatestClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CRMUser)));
       },
-      (error) => console.error("Error fetching latest clients:", error)
+      (error) => {
+        if (error.message.includes('permission')) {
+          console.warn("Public client access restricted by rules.");
+        } else {
+          console.error("Error fetching latest clients:", error);
+        }
+      }
     );
 
     const unsubHec = onSnapshot(
@@ -113,6 +120,28 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
       unsubEmployees();
     };
   }, []);
+
+  useEffect(() => {
+    if (latestClients.length > 0) {
+      const clientIds = latestClients.map(c => c.id).filter(id => !!id);
+      if (clientIds.length > 0) {
+        const q = query(collection(db, 'journals'), where('clientId', 'in', clientIds));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+          const names: {[clientId: string]: string} = {};
+          snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            if (!names[data.clientId]) {
+              names[data.clientId] = data.title;
+            } else if (!names[data.clientId].includes(data.title)) {
+              names[data.clientId] += `, ${data.title}`;
+            }
+          });
+          setClientJournalNames(names);
+        }, (error) => console.error("Error fetching journals for clients:", error));
+        return () => unsubscribe();
+      }
+    }
+  }, [latestClients]);
 
   const renderSection = () => {
     switch (activeSection) {
@@ -376,11 +405,15 @@ export const LandingPage: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
                 <div className="p-6 space-y-3">
                   {latestClients.length > 0 ? latestClients.map(c => (
                     <div key={c.id} className="flex items-center justify-between p-4 bg-blue-50/30 rounded-2xl border border-blue-100 group/item hover:bg-blue-50 transition-all">
-                      <div className="truncate pr-4">
-                        <p className="text-sm font-black text-slate-900 truncate">{c.name}</p>
-                        <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest mt-0.5">{c.email}</p>
+                      <div className="truncate pr-4 flex-1">
+                        <p className="text-sm font-black text-slate-900 truncate">
+                          {c.salutation && `${c.salutation} `}{c.name}
+                        </p>
+                        <p className="text-[10px] text-blue-600 font-black uppercase tracking-widest mt-0.5 truncate">
+                          {clientJournalNames[c.id] || 'No Journal'}
+                        </p>
                       </div>
-                      <ArrowRight size={16} className="text-blue-300 group-hover/item:text-blue-500 transition-all" />
+                      <ArrowRight size={16} className="text-blue-300 group-hover/item:text-blue-500 transition-all shrink-0" />
                     </div>
                   )) : (
                     <div className="py-10 text-center text-slate-400 italic text-sm">No clients found</div>

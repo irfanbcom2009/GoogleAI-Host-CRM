@@ -26,7 +26,7 @@ interface RegistrationFlowProps {
 }
 
 const SERVICES: ServiceType[] = [
-  'Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Plagiarism', 'Domain', 'Marketing'
+  'Hosting', 'Hosting (External)', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Publisher', 'Domain', 'Domain (External)', 'Marketing'
 ];
 
 export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClose }) => {
@@ -168,7 +168,7 @@ export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClos
                     required
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
                     placeholder="Enter your name"
-                    value={formData.name}
+                    value={formData.name || ''}
                     onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
                   />
                 </div>
@@ -196,7 +196,7 @@ export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClos
                     required
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
                     placeholder="e.g. Global Research Journal"
-                    value={formData.organization}
+                    value={formData.organization || ''}
                     onChange={e => setFormData(prev => ({ ...prev, organization: e.target.value }))}
                   />
                 </div>
@@ -211,7 +211,7 @@ export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClos
                     required
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
                     placeholder="+92 300 1234567"
-                    value={formData.contactNumber}
+                    value={formData.contactNumber || ''}
                     onChange={e => setFormData(prev => ({ ...prev, contactNumber: e.target.value }))}
                   />
                 </div>
@@ -220,9 +220,9 @@ export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClos
               <div className="space-y-3">
                 <label className="text-sm font-bold text-slate-700">Required Services</label>
                 <div className="flex flex-wrap gap-2">
-                  {SERVICES.map(service => (
+                  {SERVICES.map((service, idx) => (
                     <button
-                      key={service}
+                      key={`${service}-${idx}`}
                       type="button"
                       onClick={() => toggleService(service)}
                       className={cn(
@@ -246,7 +246,7 @@ export const RegistrationFlow: React.FC<RegistrationFlowProps> = ({ user, onClos
                 <textarea 
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium min-h-[100px]"
                   placeholder="Tell us more about your requirements..."
-                  value={formData.notes}
+                  value={formData.notes || ''}
                   onChange={e => setFormData(prev => ({ ...prev, notes: e.target.value }))}
                 />
               </div>

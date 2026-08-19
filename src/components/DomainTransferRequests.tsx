@@ -119,7 +119,7 @@ export const DomainTransferRequests: React.FC<DomainTransferRequestsProps> = ({ 
                     <select 
                       required
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRequest.clientId}
+                      value={newRequest.clientId || ''}
                       onChange={e => setNewRequest(prev => ({ ...prev, clientId: e.target.value }))}
                     >
                       <option value="">Choose a client...</option>
@@ -134,7 +134,7 @@ export const DomainTransferRequests: React.FC<DomainTransferRequestsProps> = ({ 
                   <select 
                     required
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newRequest.type}
+                    value={newRequest.type || ''}
                     onChange={e => setNewRequest(prev => ({ ...prev, type: e.target.value as DomainTransferRequest['type'] }))}
                   >
                     <option value="Transfer In">Transfer In (To Host A Journal)</option>
@@ -150,7 +150,7 @@ export const DomainTransferRequests: React.FC<DomainTransferRequestsProps> = ({ 
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. example.com"
-                    value={newRequest.domainName}
+                    value={newRequest.domainName || ''}
                     onChange={e => setNewRequest(prev => ({ ...prev, domainName: e.target.value }))}
                   />
                 </div>
@@ -160,7 +160,7 @@ export const DomainTransferRequests: React.FC<DomainTransferRequestsProps> = ({ 
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="Auth code for transfer"
-                    value={newRequest.eppCode}
+                    value={newRequest.eppCode || ''}
                     onChange={e => setNewRequest(prev => ({ ...prev, eppCode: e.target.value }))}
                   />
                 </div>

@@ -130,7 +130,7 @@ export const FieldPermissionsDashboard: React.FC = () => {
               type="text"
               placeholder="Search employees..."
               className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition-all outline-none"
-              value={searchQuery}
+              value={searchQuery || ''}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>

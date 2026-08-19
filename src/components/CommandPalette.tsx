@@ -41,6 +41,7 @@ interface CommandPaletteProps {
   setActiveTab: (tab: string) => void;
   onOpenShortcuts?: () => void;
   userRole: UserRole;
+  showInfo?: boolean;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ 
@@ -48,13 +49,21 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose, 
   setActiveTab,
   onOpenShortcuts,
-  userRole 
+  userRole,
+  showInfo = false
 }) => {
   const [query_str, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [dataResults, setDataResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [showInfoPanel, setShowInfoPanel] = useState(showInfo);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setShowInfoPanel(showInfo);
+    }
+  }, [showInfo, isOpen]);
 
   const navigationItems = [
     { id: 'dashboard', label: 'Go to Dashboard', icon: LayoutDashboard, category: 'Navigation', roles: ['Admin', 'Manager', 'Employee', 'Client'] },
@@ -270,19 +279,144 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 type="text"
                 placeholder="Search anything: 'John', 'Journal of...', 'ISSN-123', 'example.com'..."
                 className="flex-1 bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 placeholder:text-slate-400 font-bold text-lg py-1"
-                value={query_str}
+                value={query_str || ''}
                 onChange={(e) => {
                   setQuery(e.target.value);
                   setSelectedIndex(0);
                 }}
               />
               <div className="flex items-center gap-2 ml-4">
+                <button
+                  type="button"
+                  onClick={() => setShowInfoPanel(!showInfoPanel)}
+                  className={cn(
+                    "p-1.5 rounded-lg transition-colors cursor-pointer text-xs font-bold flex items-center gap-1 shrink-0",
+                    showInfoPanel 
+                      ? "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/30" 
+                      : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  )}
+                  title="Toggle Search Information Guide"
+                >
+                  <AlertCircle size={16} />
+                  <span className="hidden sm:inline">Guide</span>
+                </button>
                 <kbd className="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-500 text-[10px] font-black rounded-lg border border-slate-200 dark:border-slate-700">ESC</kbd>
               </div>
             </div>
 
-            <div className="max-h-[500px] overflow-y-auto p-3">
-              {filteredItems.length > 0 ? (
+            <div className="max-h-[500px] overflow-y-auto p-4 md:p-6">
+              {query_str === '' ? (
+                showInfoPanel ? (
+                  <div className="space-y-6 py-2">
+                    <div className="bg-gradient-to-br from-indigo-50 to-indigo-100/50 dark:from-indigo-950/20 dark:to-indigo-900/10 rounded-2xl p-5 border border-indigo-100/40 dark:border-indigo-900/30">
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-2">
+                        <Search className="text-indigo-600 dark:text-indigo-400" size={16} />
+                        Universal Search Information Guide
+                      </h4>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                        This CRM utilizes a live-indexed search engine. Type at least 2 characters in the input field above to instantly search across all modules.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800/80 space-y-1.5 hover:border-indigo-100 dark:hover:border-indigo-950 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                            <Users size={14} />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 dark:text-slate-100 tracking-tight">Employees & Clients</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">Search by name, email address, or specific Employee ID.</p>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800/80 space-y-1.5 hover:border-indigo-100 dark:hover:border-indigo-950 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                            <BookOpen size={14} />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 dark:text-slate-100 tracking-tight">Journals Database</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">Search by full title, print ISSN, online ISSN, or editor email.</p>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800/80 space-y-1.5 hover:border-indigo-100 dark:hover:border-indigo-950 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                            <Globe size={14} />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 dark:text-slate-100 tracking-tight">Domains & Servers</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">Search by registered domain name or registrar name.</p>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800/80 space-y-1.5 hover:border-indigo-100 dark:hover:border-indigo-950 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                            <Key size={14} />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 dark:text-slate-100 tracking-tight">ISSN Requests</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">Search by request number, journal title, or assigned login.</p>
+                      </div>
+                    </div>
+
+                    <div className="h-px bg-slate-100 dark:bg-slate-800/80 my-2" />
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-500 bg-slate-50/50 dark:bg-slate-900/30 p-3 rounded-xl border border-slate-100/50 dark:border-slate-850">
+                      <span className="font-bold flex items-center gap-1.5">
+                        <Command size={12} />
+                        Tip: Keyboard Shortcuts
+                      </span>
+                      <span>Press <kbd className="px-1.5 py-0.5 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded font-mono font-bold">ALT + D</kbd> to jump to Dashboard instantly</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4 py-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-2">
+                      <span>Quick Navigation & Actions</span>
+                      <button 
+                        onClick={() => setShowInfoPanel(true)}
+                        className="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 normal-case font-semibold cursor-pointer"
+                      >
+                        <AlertCircle size={12} />
+                        Show Guide
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 gap-2">
+                      {allItems.map((item, idx) => {
+                        const isSelected = idx === selectedIndex;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => {
+                              const anyItem = item as any;
+                              if (anyItem.tab) setActiveTab(anyItem.tab);
+                              else if (item.id === 'shortcuts' && onOpenShortcuts) onOpenShortcuts();
+                              else setActiveTab(item.id);
+                              onClose();
+                            }}
+                            onMouseEnter={() => setSelectedIndex(idx)}
+                            className={cn(
+                              "w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all text-left border cursor-pointer",
+                              isSelected
+                                ? "bg-indigo-500/10 border-indigo-500/20 text-indigo-600 dark:text-indigo-400"
+                                : "bg-transparent border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-300"
+                            )}
+                          >
+                            <item.icon size={18} className={isSelected ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400"} />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-bold">{item.label}</p>
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">{item.category}</p>
+                            </div>
+                            <ChevronRight size={14} className="text-slate-300 dark:text-slate-600 shrink-0" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )
+              ) : filteredItems.length > 0 ? (
                 <div className="space-y-6">
                   {['Navigation', 'Actions', 'Help', 'Employees', 'Clients', 'Journals', 'Domains', 'ISSN Logins'].map(category => {
                     const categoryItems = filteredItems.filter(i => i.category === category);

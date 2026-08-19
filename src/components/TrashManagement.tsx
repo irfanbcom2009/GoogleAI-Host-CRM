@@ -16,6 +16,7 @@ import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, deleteDoc, doc, addDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { TrashItem } from '../types';
+import { toast } from 'react-hot-toast';
 
 export const TrashManagement: React.FC = () => {
   const [items, setItems] = useState<TrashItem[]>([]);
@@ -85,13 +86,32 @@ export const TrashManagement: React.FC = () => {
     <div className="p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Trash Management</h2>
-          <p className="text-slate-500 mt-1">Review and restore soft-deleted items. Items are permanently deleted after 30 days.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Trash Management</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Review and restore soft-deleted items. Items are permanently deleted after 30 days.</p>
         </div>
         <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 text-amber-700 rounded-xl border border-amber-100 text-sm font-bold">
           <AlertTriangle size={18} />
           Auto-cleanup enabled
         </div>
+        <button
+          onClick={async () => {
+            if (!confirm("Are you sure you want to permanently delete ALL items in the trash? This cannot be undone.")) return;
+            const loadingToast = toast.loading("Emptying trash...");
+            try {
+              for (const item of items) {
+                await deleteDoc(doc(db, 'trash', item.id));
+              }
+              toast.success("Trash emptied successfully.", { id: loadingToast });
+            } catch (error) {
+              console.error("Empty trash error:", error);
+              toast.error("Failed to empty trash.", { id: loadingToast });
+            }
+          }}
+          className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200"
+        >
+          <Trash2 size={20} />
+          Empty Trash
+        </button>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -102,7 +122,7 @@ export const TrashManagement: React.FC = () => {
               type="text" 
               placeholder="Search deleted items..."
               className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={searchQuery}
+              value={searchQuery || ''}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>

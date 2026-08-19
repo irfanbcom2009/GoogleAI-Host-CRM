@@ -12,8 +12,9 @@ import {
   Loader2
 } from 'lucide-react';
 import { Client, ServiceType, Subscription, Domain } from '../types';
-import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { db, auth, handleFirestoreError, OperationType, getErrorMessage } from '../lib/firebase';
+import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, getDoc, limit } from 'firebase/firestore';
+import { toast } from 'react-hot-toast';
 import { cn, formatDateForInput } from '../lib/utils';
 import { useFieldPermissions } from '../hooks/useFieldPermissions';
 import { Globe } from 'lucide-react';
@@ -44,7 +45,13 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
     isHidden: client.isHidden ?? false,
     endingDate: formatDateForInput(client.endingDate),
     photoURL: client.photoURL || '',
-    subscriptions: client.subscriptions || []
+    subscriptions: client.subscriptions || [],
+    serviceSubscriptions: client.serviceSubscriptions || {
+      ojs: false,
+      issn: false,
+      hec: false,
+      doi: false
+    }
   });
 
   const [subscriptionDates, setSubscriptionDates] = useState<Record<string, { startDate: string, expiryDate: string, domainId?: string }>>({});
@@ -94,6 +101,30 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
     }
 
     try {
+      // Uniqueness checks on Edit
+      const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
+      const globalSettings = settingsDoc.exists() ? settingsDoc.data() : null;
+
+      if (globalSettings?.uniquenessSettings?.clientEmail && formData.email) {
+        const emailQuery = query(collection(db, 'users'), where('email', '==', formData.email.toLowerCase().trim()), limit(1));
+        const emailSnapshot = await getDocs(emailQuery);
+        if (!emailSnapshot.empty && emailSnapshot.docs[0].id !== client.id) {
+          setError('Another client with this email already exists in the registry.');
+          setIsSaving(false);
+          return;
+        }
+      }
+
+      if (globalSettings?.uniquenessSettings?.clientPhone && formData.phone) {
+        const phoneQuery = query(collection(db, 'users'), where('phone', '==', formData.phone.trim()), limit(1));
+        const phoneSnapshot = await getDocs(phoneQuery);
+        if (!phoneSnapshot.empty && phoneSnapshot.docs[0].id !== client.id) {
+          setError('Another client with this phone number already exists in the registry.');
+          setIsSaving(false);
+          return;
+        }
+      }
+
       console.log("Starting client update for ID:", client.id);
       const updatedSubscriptions = formData.subscriptions.map(sub => {
         const service = typeof sub === 'string' ? sub : sub.service;
@@ -128,6 +159,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
         photoURL: formData.photoURL || '',
         status: finalStatus,
         subscriptions: updatedSubscriptions,
+        serviceSubscriptions: formData.serviceSubscriptions,
         updatedAt: serverTimestamp()
       };
 
@@ -141,6 +173,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
       await updateDoc(clientRef, updateData);
       
       console.log("Update successful");
+      toast.success('Changes saved successfully');
       setIsSaved(true);
       setTimeout(() => {
         setIsSaved(false);
@@ -148,7 +181,9 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
       }, 500);
     } catch (err: any) {
       console.error("Error updating client:", err);
-      setError(err.message || "Failed to save changes. Please try again.");
+      const friendlyMessage = getErrorMessage(err);
+      setError(friendlyMessage);
+      toast.error(friendlyMessage);
       try {
         handleFirestoreError(err, OperationType.UPDATE, 'users');
       } catch (e) {
@@ -205,7 +240,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
         <div className="flex gap-2">
           <input 
             type="text" 
-            value={formData.photoURL}
+            value={formData.photoURL || ''}
             onChange={e => setFormData({ ...formData, photoURL: e.target.value })}
             placeholder="https://example.com/photo.jpg"
             className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
@@ -220,7 +255,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           <label className="text-sm font-bold text-slate-700">Salutation</label>
           <select 
             className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-            value={formData.salutation}
+            value={formData.salutation || ''}
             onChange={(e) => setFormData({ ...formData, salutation: e.target.value })}
           >
             <option value="">None</option>
@@ -239,7 +274,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
                "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
                !canEdit('clients', 'name') && "opacity-50 cursor-not-allowed"
             )}
-            value={formData.name}
+            value={formData.name || ''}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           />
         </div>
@@ -249,7 +284,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
         <input 
           type="text"
           className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-          value={formData.careOf}
+          value={formData.careOf || ''}
           onChange={(e) => setFormData({ ...formData, careOf: e.target.value })}
           placeholder="e.g. Dr. Smith / Referral Name"
         />
@@ -265,7 +300,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
                "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
                !canEdit('clients', 'email') && "opacity-50 cursor-not-allowed"
             )}
-            value={formData.email}
+            value={formData.email || ''}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
           />
         </div>
@@ -278,7 +313,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
                "w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500",
                !canEdit('clients', 'phone') && "opacity-50 cursor-not-allowed"
             )}
-            value={formData.phone}
+            value={formData.phone || ''}
             onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
           />
         </div>
@@ -349,20 +384,69 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
         <label className="text-sm font-bold text-slate-700">Address</label>
         <textarea 
           className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 h-20"
-          value={formData.address}
+          value={formData.address || ''}
           onChange={(e) => setFormData({ ...formData, address: e.target.value })}
         />
       </div>
+      <div className="space-y-3 p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200/80 dark:border-slate-700">
+        <label className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+          <Shield size={18} className="text-indigo-600" />
+          Service Subscription Flags
+        </label>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Toggle boolean subscription status flags for core client services.</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {(['ojs', 'issn', 'hec', 'doi'] as const).map(serviceKey => {
+            const isChecked = !!formData.serviceSubscriptions?.[serviceKey];
+            return (
+              <label 
+                key={serviceKey} 
+                className={cn(
+                  "flex items-center justify-between p-3 rounded-xl border cursor-pointer transition-all select-none",
+                  isChecked 
+                    ? "bg-emerald-50 border-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-800" 
+                    : "bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700 hover:border-slate-300"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500"
+                    checked={isChecked}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setFormData(prev => ({
+                        ...prev,
+                        serviceSubscriptions: {
+                          ...prev.serviceSubscriptions,
+                          [serviceKey]: checked
+                        }
+                      }));
+                    }}
+                  />
+                  <span className="text-xs font-black uppercase text-slate-800 dark:text-slate-200">{serviceKey}</span>
+                </div>
+                <span className={cn(
+                  "text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded",
+                  isChecked ? "bg-emerald-200 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-400"
+                )}>
+                  {isChecked ? 'Subscribed' : 'Off'}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="space-y-4">
         <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
           <Shield size={18} className="text-indigo-600" />
           Subscriptions & Dates
         </label>
         <div className="grid grid-cols-1 gap-4">
-          {(['Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Plagiarism'] as ServiceType[]).map(service => {
+          {(['Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing'] as ServiceType[]).map((service, index) => {
             const isSelected = formData.subscriptions.some(s => (typeof s === 'string' ? s : s.service) === service);
             return (
-              <div key={service} className={cn(
+              <div key={`${service}-${index}`} className={cn(
                 "p-4 rounded-2xl border transition-all space-y-4",
                 isSelected ? "bg-indigo-50 border-indigo-200" : "bg-white border-slate-200"
               )}>
@@ -421,7 +505,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
                         onChange={(e) => handleDateChange(service, 'domainId', e.target.value)}
                       >
                         <option value="">No Domain Associated</option>
-                        {clientDomains.map(domain => (
+                        {clientDomains.sort((a, b) => (a.domainName || '').localeCompare(b.domainName || '')).map(domain => (
                           <option key={domain.id} value={domain.id}>{domain.domainName}</option>
                         ))}
                       </select>
@@ -441,7 +525,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           </label>
           <select
             className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-            value={formData.status}
+            value={formData.status || ''}
             onChange={e => setFormData({ ...formData, status: e.target.value as any })}
           >
             <option value="active">Active</option>
@@ -484,7 +568,7 @@ export const ClientEditForm: React.FC<ClientEditFormProps> = ({ client, currentU
           <input
             type="date"
             className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-            value={formData.endingDate}
+            value={formData.endingDate || ''}
             onChange={e => setFormData({ ...formData, endingDate: e.target.value })}
           />
           {formData.endingDate && (

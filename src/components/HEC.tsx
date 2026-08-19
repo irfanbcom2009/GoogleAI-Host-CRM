@@ -19,7 +19,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, addDoc, serverTimestamp, deleteDoc, doc, updateDoc, Timestamp, where } from 'firebase/firestore';
 import { HECEntry, Journal, Client, User as UserType } from '../types';
 import { ColumnSelector } from './ColumnSelector';
 import { JournalDetail } from './JournalDetail';
@@ -30,18 +30,21 @@ import { Settings2, Shield, Workflow } from 'lucide-react';
 import { Modal } from './Modal';
 import { HECWorkflowTracker } from './HECWorkflowTracker';
 import { usePermissions } from '../hooks/usePermissions';
+import { HECEntryDetail } from './HECEntryDetail';
 
 interface HECProps {
   searchQuery?: string;
   currentUser: UserType;
+  onNavigateToPublisher?: (id: string) => void;
+  journalId?: string;
 }
 
 const AVAILABLE_COLUMNS = [
+  { id: 'app_psid', label: 'App No / PSID' },
   { id: 'journal', label: 'Journal' },
   { id: 'client', label: 'Client' },
   { id: 'discipline', label: 'Discipline' },
   { id: 'category', label: 'Category' },
-  { id: 'app_psid', label: 'App No / PSID' },
   { id: 'applicationDate', label: 'App Date' },
   { id: 'year_freq', label: 'Year / Freq' },
   { id: 'status', label: 'Status' },
@@ -73,7 +76,7 @@ const HEC_DISCIPLINES: Record<string, Record<string, string[]>> = {
   }
 };
 
-export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
+export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser, onNavigateToPublisher, journalId }) => {
   const { check } = usePermissions(currentUser);
   const [entries, setEntries] = useState<HECEntry[]>([]);
   const [journals, setJournals] = useState<Journal[]>([]);
@@ -83,6 +86,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
   const [clients, setClients] = useState<Client[]>([]);
   const [viewingJournal, setViewingJournal] = useState<{ id: string, editMode?: boolean } | null>(null);
   const [viewingClient, setViewingClient] = useState<Client | null>(null);
+  const [viewingEntry, setViewingEntry] = useState<HECEntry | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'workflows'>('list');
   const [selectedColumns, setSelectedColumns] = useState<string[]>(
     currentUser.columnPreferences?.['hec'] || AVAILABLE_COLUMNS.map(c => c.id)
@@ -106,7 +110,9 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
   });
 
   useEffect(() => {
-    const q = query(collection(db, 'hec_entries'), orderBy('expirationDate', 'asc'));
+    const q = journalId
+      ? query(collection(db, 'hec_entries'), where('journalId', '==', journalId), orderBy('expirationDate', 'asc'))
+      : query(collection(db, 'hec_entries'), orderBy('expirationDate', 'asc'));
     const unsubscribeEntries = onSnapshot(q, (snapshot) => {
       const entryData = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -130,7 +136,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
       setJournals(journalData);
     });
 
-    const unsubscribeClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubscribeClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       const clientData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -143,7 +149,20 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
       unsubscribeJournals();
       unsubscribeClients();
     };
-  }, []);
+  }, [journalId]);
+
+  useEffect(() => {
+    if (journalId && journals.length > 0) {
+      const j = journals.find(x => x.id === journalId);
+      if (j) {
+        setNewEntry(prev => ({
+          ...prev,
+          journalId: j.id,
+          clientId: j.clientId
+        }));
+      }
+    }
+  }, [journalId, journals]);
 
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
@@ -246,6 +265,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
         initialEditMode={viewingJournal.editMode}
         onBack={() => setViewingJournal(null)} 
         currentUser={currentUser}
+        onNavigateToPublisher={onNavigateToPublisher}
       />
     );
   }
@@ -260,19 +280,47 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
     );
   }
 
+  if (viewingEntry) {
+    return (
+      <HECEntryDetail 
+        entry={viewingEntry}
+        currentUser={currentUser}
+        journals={journals}
+        clients={clients}
+        onBack={() => setViewingEntry(null)}
+        onUpdateEntry={(updated) => {
+          setViewingEntry(updated);
+          // Also update the local state entries array so the list has it updated immediately
+          setEntries(prev => prev.map(e => e.id === updated.id ? updated : e));
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="p-8 space-y-6">
+    <div className={cn(journalId ? "p-0 space-y-4" : "p-8 space-y-6")}>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
-            {viewMode === 'list' ? 'HEC Applications' : 'Workflow Tracker'}
-          </h2>
-          <p className="text-slate-500 mt-1">
-            {viewMode === 'list' 
-              ? 'Track HEC approvals, credentials, and compliance for journals.'
-              : 'Multi-stage HEC application management system.'}
-          </p>
-        </div>
+        {journalId ? (
+          <div>
+            <h3 className="text-base font-bold text-slate-900">
+              {viewMode === 'list' ? 'HEC Applications' : 'Workflow Tracker'} ({filteredEntries.length})
+            </h3>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+              Track HEC approvals and workflows for this journal
+            </p>
+          </div>
+        ) : (
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+              {viewMode === 'list' ? 'HEC Applications' : 'Workflow Tracker'}
+            </h2>
+            <p className="text-slate-500 mt-1">
+              {viewMode === 'list' 
+                ? 'Track HEC approvals, credentials, and compliance for journals.'
+                : 'Multi-stage HEC application management system.'}
+            </p>
+          </div>
+        )}
         <div className="flex gap-3">
           <div className="flex bg-slate-100 p-1 rounded-xl items-center mr-2 h-fit self-center">
             <button 
@@ -301,7 +349,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                 selectedColumns={selectedColumns}
                 onChange={handleColumnChange}
               />
-              {currentUser.role === 'Admin' && (
+              {currentUser.role === 'Admin' && !journalId && (
                 <button 
                   onClick={() => setIsConfigOpen(true)}
                   className="p-3 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm h-[46px]"
@@ -330,11 +378,11 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
             <table className="w-full text-left border-collapse">
             <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
               <tr className="border-b border-slate-200">
+                {selectedColumns.includes('app_psid') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App No / PSID</th>}
                 {selectedColumns.includes('journal') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Journal</th>}
                 {selectedColumns.includes('client') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Client</th>}
                 {selectedColumns.includes('discipline') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Discipline</th>}
                 {selectedColumns.includes('category') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>}
-                {selectedColumns.includes('app_psid') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App No / PSID</th>}
                 {selectedColumns.includes('applicationDate') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">App Date</th>}
                 {selectedColumns.includes('year_freq') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Year / Freq</th>}
                 {selectedColumns.includes('status') && <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>}
@@ -366,6 +414,26 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
               ) : (
                 filteredEntries.map((entry) => (
                   <tr key={entry.id} className="hover:bg-slate-50/50 transition-colors group">
+                    {selectedColumns.includes('app_psid') && (
+                      <td className="px-6 py-4">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setViewingEntry(entry);
+                          }}
+                          className="flex flex-col gap-1 text-left hover:text-indigo-600 transition-all cursor-pointer group/link"
+                        >
+                          <div className="flex items-center gap-1.5 text-xs font-black text-slate-900 group-hover/link:text-indigo-600 transition-colors">
+                            <span className="text-slate-400 font-bold">APP:</span>
+                            <span className="font-mono text-sm underline decoration-indigo-300 decoration-2">{entry.appNo || 'N/A'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600">
+                            <span className="text-slate-400 font-bold">PSID:</span>
+                            <span className="font-mono text-xs">{entry.psid || 'N/A'}</span>
+                          </div>
+                        </button>
+                      </td>
+                    )}
                     {selectedColumns.includes('journal') && (
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
@@ -420,18 +488,9 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                         ) : '-'}
                       </td>
                     )}
-                    {selectedColumns.includes('app_psid') && (
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2 text-xs font-mono">
-                            <span className="text-slate-400">APP:</span>
-                            <span className="text-slate-600">{entry.appNo}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-xs font-mono">
-                            <span className="text-slate-400">PSID:</span>
-                            <span className="text-slate-600">{entry.psid}</span>
-                          </div>
-                        </div>
+                    {selectedColumns.includes('applicationDate') && (
+                      <td className="px-6 py-4 text-xs font-mono text-slate-600">
+                        {entry.applicationDate || '—'}
                       </td>
                     )}
                     {selectedColumns.includes('year_freq') && (
@@ -468,14 +527,28 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
                         <button 
-                          onClick={() => {
-                            alert(`Credentials for ${getJournalTitle(entry.journalId)}:\nUsername: ${entry.loginCredentials.username}\nPassword: ${entry.loginCredentials.password}`);
-                          }}
+                          onClick={() => setViewingEntry(entry)}
                           className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                          title="View Credentials"
+                          title="Edit Detailed Application & Workflow"
                         >
-                          <Key size={18} />
+                          <Edit size={18} />
                         </button>
+                        {currentUser.role === 'Admin' && (
+                          <button 
+                            onClick={() => {
+                              const hasTaiba = (entry.loginCredentials.username?.toLowerCase().includes('taiba@0045') || entry.loginCredentials.password?.toLowerCase().includes('taiba@0045'));
+                              if (hasTaiba) {
+                                alert('Access Denied');
+                                return;
+                              }
+                              alert(`Credentials for ${getJournalTitle(entry.journalId)}:\nUsername: ${entry.loginCredentials.username}\nPassword: ${entry.loginCredentials.password}`);
+                            }}
+                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                            title="View Credentials"
+                          >
+                            <Key size={18} />
+                          </button>
+                        )}
                         {check('hecApplications', 'approve') && !entry.isVerified && (
                           <button 
                             onClick={() => handleVerifyEntry(entry.id)}
@@ -547,7 +620,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                     <select 
                       required
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.journalId}
+                      value={newEntry.journalId || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, journalId: e.target.value }))}
                     >
                       <option value="">Select Journal</option>
@@ -562,7 +635,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       type="number" 
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.year}
+                      value={newEntry.year || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, year: parseInt(e.target.value) }))}
                     />
                   </div>
@@ -572,7 +645,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       type="text" 
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.appNo}
+                      value={newEntry.appNo || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, appNo: e.target.value }))}
                     />
                   </div>
@@ -582,7 +655,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       type="text" 
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.psid}
+                      value={newEntry.psid || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, psid: e.target.value }))}
                     />
                   </div>
@@ -591,7 +664,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                     <select 
                       required
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.discipline}
+                      value={newEntry.discipline || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, discipline: e.target.value, subjectArea: '', subCategory: '' }))}
                     >
                       <option value="">Select Discipline</option>
@@ -606,7 +679,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       disabled={!newEntry.discipline}
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                      value={newEntry.subjectArea}
+                      value={newEntry.subjectArea || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, subjectArea: e.target.value, subCategory: '' }))}
                     >
                       <option value="">Select Subject Area</option>
@@ -621,7 +694,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       disabled={!newEntry.subjectArea}
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                      value={newEntry.subCategory}
+                      value={newEntry.subCategory || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, subCategory: e.target.value }))}
                     >
                       <option value="">Select Sub Category</option>
@@ -636,7 +709,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       required
                       type="date" 
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newEntry.expirationDate}
+                      value={newEntry.expirationDate || ''}
                       onChange={e => setNewEntry(prev => ({ ...prev, expirationDate: e.target.value }))}
                     />
                   </div>
@@ -650,7 +723,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       <input 
                         type="text" 
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                        value={newEntry.loginCredentials.username}
+                        value={newEntry.loginCredentials.username || ''}
                         onChange={e => setNewEntry(prev => ({ 
                           ...prev, 
                           loginCredentials: { ...prev.loginCredentials, username: e.target.value } 
@@ -662,7 +735,7 @@ export const HEC: React.FC<HECProps> = ({ searchQuery = '', currentUser }) => {
                       <input 
                         type="password" 
                         className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                        value={newEntry.loginCredentials.password}
+                        value={newEntry.loginCredentials.password || ''}
                         onChange={e => setNewEntry(prev => ({ 
                           ...prev, 
                           loginCredentials: { ...prev.loginCredentials, password: e.target.value } 

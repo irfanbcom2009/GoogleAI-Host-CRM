@@ -161,7 +161,7 @@ export const RegistrarManager: React.FC<RegistrarManagerProps> = ({ currentUser 
                 type="text"
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                 placeholder="e.g. Namecheap"
-                value={formData.name}
+                value={formData.name || ''}
                 onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
               />
             </div>
@@ -172,7 +172,7 @@ export const RegistrarManager: React.FC<RegistrarManagerProps> = ({ currentUser 
                 type="url"
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                 placeholder="https://..."
-                value={formData.link}
+                value={formData.link || ''}
                 onChange={e => setFormData(prev => ({ ...prev, link: e.target.value }))}
               />
             </div>
@@ -183,7 +183,7 @@ export const RegistrarManager: React.FC<RegistrarManagerProps> = ({ currentUser 
                 type="text"
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
                 placeholder="admin@example.com"
-                value={formData.email}
+                value={formData.email || ''}
                 onChange={e => setFormData(prev => ({ ...prev, email: e.target.value }))}
               />
             </div>
@@ -193,7 +193,7 @@ export const RegistrarManager: React.FC<RegistrarManagerProps> = ({ currentUser 
                 type="text"
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono"
                 placeholder="Registrar password"
-                value={formData.password}
+                value={formData.password || ''}
                 onChange={e => setFormData(prev => ({ ...prev, password: e.target.value }))}
               />
             </div>

@@ -175,8 +175,8 @@ export const SmartRecommendations: React.FC<SmartRecommendationsProps> = ({
 
                 {currentRec.requirements && currentRec.requirements.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-6">
-                    {currentRec.requirements.map(req => (
-                      <span key={req} className={cn(
+                    {currentRec.requirements.map((req, idx) => (
+                      <span key={`${req}-${idx}`} className={cn(
                         "text-xs px-3 py-1 rounded-lg font-medium flex items-center gap-1.5",
                         currentRec.isEligible === false ? "bg-slate-50 text-slate-300" : "bg-indigo-50 text-indigo-600"
                       )}>

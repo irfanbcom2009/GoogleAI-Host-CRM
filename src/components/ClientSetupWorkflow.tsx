@@ -30,7 +30,7 @@ const STEPS = [
 ];
 
 const AVAILABLE_SERVICES: ServiceType[] = [
-  'Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Plagiarism'
+  'Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Publisher'
 ];
 
 export const ClientSetupWorkflow: React.FC = () => {
@@ -141,7 +141,7 @@ export const ClientSetupWorkflow: React.FC = () => {
                 type="text" 
                 placeholder="Search or add client..." 
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={search}
+                value={search || ''}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
@@ -215,7 +215,7 @@ export const ClientSetupWorkflow: React.FC = () => {
                 type="text" 
                 placeholder="Search or add publisher..." 
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={search}
+                value={search || ''}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
@@ -296,7 +296,7 @@ export const ClientSetupWorkflow: React.FC = () => {
                 type="text" 
                 placeholder="Search or add domain..." 
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={search}
+                value={search || ''}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
@@ -377,7 +377,7 @@ export const ClientSetupWorkflow: React.FC = () => {
                 type="text" 
                 placeholder="Search or add journal..." 
                 className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={search}
+                value={search || ''}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
@@ -461,8 +461,8 @@ export const ClientSetupWorkflow: React.FC = () => {
                 Subscribed Services
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {subscribed.length > 0 ? subscribed.map(sub => (
-                  <div key={sub.service} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-between">
+                {subscribed.length > 0 ? subscribed.map((sub, idx) => (
+                  <div key={`${sub.service}-${idx}`} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 bg-white text-emerald-600 rounded-lg flex items-center justify-center shadow-sm">
                         <Check size={16} />
@@ -485,9 +485,9 @@ export const ClientSetupWorkflow: React.FC = () => {
                 Available Services to Order
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {unsubscribed.map(service => (
+                {unsubscribed.map((service, idx) => (
                   <button 
-                    key={service}
+                    key={`${service}-${idx}`}
                     onClick={() => handleOrderService(service)}
                     className="p-4 bg-white border border-slate-100 rounded-2xl flex items-center justify-between group hover:border-indigo-200 hover:bg-indigo-50/30 transition-all"
                   >

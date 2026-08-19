@@ -196,11 +196,11 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
   };
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-black text-slate-900 tracking-tight">Service Orders</h2>
-          <p className="text-slate-500 mt-1 font-medium">Manage client orders, deliverables, and rewards.</p>
+          <h2 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Service Orders</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1 font-medium">Manage client orders, deliverables, and rewards.</p>
         </div>
       </div>
 
@@ -211,7 +211,7 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
             type="text"
             placeholder="Search by order #, client, or service..."
             className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={e => setSearchQuery(e.target.value)}
           />
         </div>
@@ -408,7 +408,7 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
                 <input 
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-500 uppercase outline-none"
-                  value={key}
+                  value={key || ''}
                   onChange={e => {
                     const newKey = e.target.value;
                     const newDeliverables = { ...deliverables };
@@ -420,7 +420,7 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
                 <textarea 
                   rows={2}
                   className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                  value={value}
+                  value={value || ''}
                   onChange={e => setDeliverables(prev => ({ ...prev, [key]: e.target.value }))}
                   placeholder="Enter deliverable value or link..."
                 />
@@ -467,7 +467,7 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
               <input 
                 type="number"
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={pointsData.amount}
+                value={pointsData.amount || ''}
                 onChange={e => setPointsData(prev => ({ ...prev, amount: Number(e.target.value) }))}
               />
             </div>
@@ -476,7 +476,7 @@ export const OrderManagement: React.FC<OrderManagementProps> = ({ currentUser })
               <input 
                 type="text"
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={pointsData.reason}
+                value={pointsData.reason || ''}
                 onChange={e => setPointsData(prev => ({ ...prev, reason: e.target.value }))}
               />
             </div>

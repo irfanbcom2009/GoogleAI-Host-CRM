@@ -20,21 +20,24 @@ import {
   GitMerge,
   ArrowUpDown,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  Users,
+  Globe,
+  ShieldCheck,
+  FileWarning
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Client, ServiceType, User as UserType, Subscription, Domain, Journal } from '../types';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
-import { db, handleFirestoreError, OperationType, logActivity } from '../lib/firebase';
-import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, where, writeBatch } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, logActivity, moveToTrash, getErrorMessage } from '../lib/firebase';
+import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, where, writeBatch, getDoc, getDocs, limit } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
 import { ConfirmModal } from './ConfirmModal';
 import { HelpIcon } from './HelpIcon';
 import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ClientDetail } from './ClientDetail';
-import { moveToTrash } from '../lib/firebase';
 import { usePermissions } from '../hooks/usePermissions';
 import { MergeModal } from './MergeModal';
 import { SearchableSelect } from './ui/SearchableSelect';
@@ -46,6 +49,8 @@ interface ClientsProps {
   setActiveTab: (tab: string) => void;
   onImpersonate?: (user: { id: string; role: UserType['role']; name: string; email: string }) => void;
   onOpenChat?: (clientId: string) => void;
+  initialClientId?: string;
+  onClearInitialId?: () => void;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -67,7 +72,7 @@ const AVAILABLE_COLUMNS = [
   { id: 'createdAt', label: 'Registered On' },
 ];
 
-export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setActiveTab, onImpersonate, onOpenChat }) => {
+export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setActiveTab, onImpersonate, onOpenChat, initialClientId, onClearInitialId }) => {
   const { check, isClient: isClientRole } = usePermissions(currentUser);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,7 +93,28 @@ export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setA
   const [mergeSource, setMergeSource] = useState<Client | null>(null);
   const [duplicates, setDuplicates] = useState<Client[][]>([]);
   const [isScanning, setIsScanning] = useState(false);
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'createdAt', direction: 'desc' });
+  const [hasScanned, setHasScanned] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'name', direction: 'asc' });
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+
+  const executeBulkDelete = async () => {
+    const loadingToast = toast.loading(`Moving ${selectedClientIds.length} clients to trash...`);
+    try {
+      const selectedItems = clients.filter(c => selectedClientIds.includes(c.id));
+      for (const c of selectedItems) {
+        await moveToTrash('users', c.id, c, currentUser?.name || 'Unknown');
+      }
+      setSelectedClientIds([]);
+      toast.success(`Moved ${selectedItems.length} clients to trash.`, { id: loadingToast });
+    } catch (error) {
+      console.error("Bulk delete error:", error);
+      toast.error(getErrorMessage(error), { id: loadingToast });
+    }
+  };
+
+
   
   // Form state
   const [newClient, setNewClient] = useState({
@@ -103,13 +129,19 @@ export const Clients: React.FC<ClientsProps> = ({ searchQuery, currentUser, setA
     portalEnabled: false,
     isActive: true,
     isHidden: false,
-    subscriptions: [] as Subscription[]
+    subscriptions: [] as Subscription[],
+    serviceSubscriptions: {
+      ojs: false,
+      issn: false,
+      hec: false,
+      doi: false
+    }
   });
 
   const SALUTATIONS = ['Mr.', 'Miss', 'Mrs.', 'Dr.', 'Prof.', 'Dr. Prof.'];
 const DEPARTMENTS = ['Management', 'Editorial', 'Technical', 'Sales', 'Support', 'Finance', 'HR'];
 const WORK_MODES = ['Office', 'Remotely', 'Hybrid'];
-const GENDERS = ['Male', 'Female', 'Other'];
+const GENDERS = ['Male', 'Female'];
   const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
   const handleToggleStatus = async (client: Client) => {
@@ -193,6 +225,16 @@ const GENDERS = ['Male', 'Female', 'Other'];
     };
   }, [currentUser]);
 
+  useEffect(() => {
+    if (initialClientId && clients.length > 0) {
+      const client = clients.find(c => c.id === initialClientId);
+      if (client) {
+        setSelectedClient(client);
+      }
+      if (onClearInitialId) onClearInitialId();
+    }
+  }, [initialClientId, clients, onClearInitialId]);
+
   const handleColumnChange = async (columns: string[]) => {
     setSelectedColumns(columns);
     if (!currentUser) return;
@@ -206,11 +248,34 @@ const GENDERS = ['Male', 'Female', 'Other'];
     }
   };
 
+  const [assignedClientIds, setAssignedClientIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'Employee') return;
+
+    const qTasks = query(collection(db, 'tasks'), where('assignedTo', '==', currentUser.id));
+    const unsubscribeTasks = onSnapshot(qTasks, (snapshot) => {
+      const ids = new Set<string>();
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.clientId) ids.add(data.clientId);
+      });
+      setAssignedClientIds(ids);
+    });
+
+    return () => unsubscribeTasks();
+  }, [currentUser]);
+
   const filteredClients = clients.filter(client => {
     // Hidden logic
     const isHidden = client.isHidden === true;
     const canSeeHidden = currentUser?.role === 'Admin';
     if (isHidden && !canSeeHidden) return false;
+
+    // Employee Assignment Restriction
+    if (currentUser?.role === 'Employee' && !assignedClientIds.has(client.id)) {
+      return false;
+    }
 
     const matchesSearch = (client.name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
                          (client.email?.toLowerCase() || '').includes(searchQuery.toLowerCase());
@@ -282,6 +347,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
 
   const scanForDuplicates = () => {
     setIsScanning(true);
+    setHasScanned(true);
     const groups: Client[][] = [];
     const processedIds = new Set<string>();
 
@@ -327,17 +393,38 @@ const GENDERS = ['Male', 'Female', 'Other'];
 
   const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setError(null);
+
     console.log('Attempting to add client:', newClient);
     if (currentUser?.role === 'Client') {
       console.error('Permission denied: User is a client');
       return;
     }
 
-    // Restriction: Only admin can add clients with gmail address
-    const isSystemAdmin = currentUser?.role === 'Admin' || ['irfanbcom2009@gmail.com', 'ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com'].includes(currentUser?.email || '');
-    if (newClient.email.toLowerCase().endsWith('@gmail.com') && !isSystemAdmin) {
-      setError("Only administrators can add clients with @gmail.com addresses.");
-      return;
+    // Uniqueness Checks
+    const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
+    const globalSettings = settingsDoc.exists() ? settingsDoc.data() : null;
+
+    if (globalSettings?.uniquenessSettings?.clientEmail) {
+      const emailQuery = query(collection(db, 'users'), where('email', '==', newClient.email.toLowerCase()), limit(1));
+      const emailSnapshot = await getDocs(emailQuery);
+      if (!emailSnapshot.empty) {
+        toast.error('Client with this email already exists');
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
+    if (globalSettings?.uniquenessSettings?.clientPhone && newClient.phone) {
+      const phoneQuery = query(collection(db, 'users'), where('phone', '==', newClient.phone), limit(1));
+      const phoneSnapshot = await getDocs(phoneQuery);
+      if (!phoneSnapshot.empty) {
+        toast.error('Client with this phone number already exists');
+        setIsSubmitting(false);
+        return;
+      }
     }
 
     try {
@@ -367,11 +454,19 @@ const GENDERS = ['Male', 'Female', 'Other'];
         portalEnabled: false,
         isActive: true,
         isHidden: false,
-        subscriptions: []
+        subscriptions: [],
+        serviceSubscriptions: {
+          ojs: false,
+          issn: false,
+          hec: false,
+          doi: false
+        }
       });
     } catch (error) {
       console.error('Error adding client:', error);
       handleFirestoreError(error, OperationType.CREATE, 'clients');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -388,8 +483,9 @@ const GENDERS = ['Male', 'Female', 'Other'];
       if (currentUser) {
         logActivity(currentUser.id, currentUser.name, 'CLIENT_DELETE', `Moved client ${client.name} to trash`);
       }
+      toast.success(`${client.name} moved to trash.`);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'clients');
+      toast.error(getErrorMessage(error));
     }
   };
 
@@ -438,7 +534,10 @@ const GENDERS = ['Male', 'Female', 'Other'];
 
       <MergeModal
         isOpen={isMergeModalOpen}
-        onClose={() => setIsMergeModalOpen(false)}
+        onClose={() => {
+          setIsMergeModalOpen(false);
+          setMergeSource(null);
+        }}
         type="clients"
         initialSourceItem={mergeSource}
         onSuccess={() => {
@@ -460,57 +559,227 @@ const GENDERS = ['Male', 'Female', 'Other'];
         />
       ) : (
         <div className="p-8 space-y-6">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
             {isClient ? 'My Profile' : 'Clients Management'}
           </h2>
-          <p className="text-slate-500 mt-1">
+          <p className="text-slate-500 dark:text-slate-400 mt-1">
             {isClient ? 'View your account details and subscriptions.' : 'Manage your publishing partners and their subscriptions.'}
           </p>
         </div>
-        {(currentUser?.role === 'Admin' || currentUser?.role === 'Manager' || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com', 'irfanbcom2009@gmail.com'].includes(currentUser?.email || '')) && (
-          <div className="flex gap-3">
-            <ColumnSelector 
-              availableColumns={AVAILABLE_COLUMNS}
-              selectedColumns={selectedColumns}
-              onChange={handleColumnChange}
-            />
-            <button 
-              onClick={exportToExcel}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-            >
-              <Download size={18} />
-              Export Excel
-            </button>
-            <button
-              onClick={scanForDuplicates}
-              disabled={isScanning}
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-2.5 rounded-xl font-semibold hover:bg-slate-50 transition-all shadow-sm"
-              title="Scan for duplicates"
-            >
-              {isScanning ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
-              Scan Duplicates
-            </button>
-          </div>
-        )}
-        {!isClient && (
-          <div className="flex gap-3">
-            {check('clients', 'add') && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(currentUser?.role === 'Admin' || currentUser?.role === 'Manager' || ['ayeshatariq88991@gmail.com', 'ayeshatariq8836@gmail.com', 'irfanbcom2009@gmail.com'].includes(currentUser?.email || '')) && (
+            <>
+              <ColumnSelector 
+                availableColumns={AVAILABLE_COLUMNS}
+                selectedColumns={selectedColumns}
+                onChange={handleColumnChange}
+              />
               <button 
-                onClick={() => setIsModalOpen(true)}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                onClick={exportToExcel}
+                className="p-2.5 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm cursor-pointer"
+                title="Export Excel"
               >
-                <Plus size={20} />
-                Add Client
+                <Download size={18} />
               </button>
-            )}
-          </div>
-        )}
+              <button
+                onClick={scanForDuplicates}
+                disabled={isScanning}
+                className="p-2.5 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm disabled:opacity-50 cursor-pointer"
+                title="Scan Duplicates"
+              >
+                {isScanning ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
+              </button>
+              {check('clients', 'delete') && (
+                <>
+                  {selectedClientIds.length > 0 && (
+                    <button
+                      onClick={() => setIsBulkDeleteModalOpen(true)}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 dark:shadow-none cursor-pointer"
+                      title={`Delete (${selectedClientIds.length})`}
+                    >
+                      <Trash2 size={18} />
+                      <span className="text-xs font-bold">Delete ({selectedClientIds.length})</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </>
+          )}
+          {!isClient && check('clients', 'add') && (
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="p-2.5 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 dark:shadow-none cursor-pointer"
+              title="Add Client"
+            >
+              <Plus size={20} />
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Interactive KPI / Statistics Strip */}
+      {!isClient && (() => {
+        const totalCount = clients.length;
+        const activeCount = clients.filter(c => (c.status === 'active' || c.isActive !== false) && !c.endingDate).length;
+        const inactiveCount = totalCount - activeCount;
+
+        const subscribedCount = clients.filter(client => {
+          const clientDomains = allDomains.filter(d => d.clientId === client.id);
+          const clientJournals = allJournals.filter(j => j.clientId === client.id);
+          return clientDomains.some(d => d.isDomainSubscribedFromUs || d.isHostingSubscribedFromUs) ||
+                 clientJournals.some(j => j.isOjsSubscribedFromUs || j.isIssnSubscribedFromUs || j.isHecSubscribedFromUs || j.isDoiSubscribedFromUs);
+        }).length;
+
+        const externalCount = clients.filter(client => {
+          const clientDomains = allDomains.filter(d => d.clientId === client.id);
+          const clientJournals = allJournals.filter(j => j.clientId === client.id);
+          return clientDomains.some(d => (d.domainName && !d.isDomainSubscribedFromUs) || (d.hostingProvider && !d.isHostingSubscribedFromUs)) ||
+                 clientJournals.some(j => (j.url && !j.isOjsSubscribedFromUs) || ((j.issnOnline || j.issnPrint) && !j.isIssnSubscribedFromUs));
+        }).length;
+
+        const missingServicesCount = clients.filter(client => {
+          const clientDomains = allDomains.filter(d => d.clientId === client.id);
+          const clientJournals = allJournals.filter(j => j.clientId === client.id);
+          return clientDomains.length === 0 && clientJournals.length === 0;
+        }).length;
+
+        const statsItems = [
+          {
+            key: 'all-total',
+            label: 'Total Clients',
+            value: totalCount,
+            description: 'All registered publishing partners',
+            icon: Users,
+            color: 'bg-indigo-50/80 dark:bg-slate-900 border-indigo-200/80 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-600',
+            iconColor: 'bg-indigo-600 text-white',
+            onClick: () => {
+              setFilterStatus('all');
+              setSubscriptionFilter('all');
+              setLetterFilter(null);
+            }
+          },
+          {
+            key: 'status-active',
+            label: 'Active Clients',
+            value: activeCount,
+            description: 'Currently running active partnerships',
+            icon: CheckCircle2,
+            color: 'bg-emerald-50/80 dark:bg-slate-900 border-emerald-200/80 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-600',
+            iconColor: 'bg-emerald-600 text-white',
+            onClick: () => {
+              setFilterStatus('active');
+              setSubscriptionFilter('all');
+              setLetterFilter(null);
+            }
+          },
+          {
+            key: 'status-inactive',
+            label: 'Inactive Clients',
+            value: inactiveCount,
+            description: 'Partners on hold / expired contracts',
+            icon: XCircle,
+            color: 'bg-rose-50/80 dark:bg-slate-900 border-rose-200/80 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-600',
+            iconColor: 'bg-rose-600 text-white',
+            onClick: () => {
+              setFilterStatus('inactive');
+              setSubscriptionFilter('all');
+              setLetterFilter(null);
+            }
+          },
+          {
+            key: 'sub-subscribed',
+            label: 'Subscribed Clients',
+            value: subscribedCount,
+            description: 'Subscribed to our core services',
+            icon: ShieldCheck,
+            color: 'bg-blue-50/80 dark:bg-slate-900 border-blue-200/80 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-600',
+            iconColor: 'bg-blue-600 text-white',
+            onClick: () => {
+              setFilterStatus('all');
+              setSubscriptionFilter('subscribed');
+              setLetterFilter(null);
+            }
+          },
+          {
+            key: 'sub-external',
+            label: 'External Clients',
+            value: externalCount,
+            description: 'Using independent/external solutions',
+            icon: Globe,
+            color: 'bg-amber-50/80 dark:bg-slate-900 border-amber-200/80 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-600',
+            iconColor: 'bg-amber-600 text-white',
+            onClick: () => {
+              setFilterStatus('all');
+              setSubscriptionFilter('external');
+              setLetterFilter(null);
+            }
+          },
+          {
+            key: 'sub-missing',
+            label: 'No Services Clients',
+            value: missingServicesCount,
+            description: 'Unenlisted / No active service profile',
+            icon: FileWarning,
+            color: 'bg-slate-100/80 dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600',
+            iconColor: 'bg-slate-600 text-white',
+            onClick: () => {
+              setFilterStatus('all');
+              setSubscriptionFilter('missing');
+              setLetterFilter(null);
+            }
+          },
+        ];
+
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mt-2 animate-in fade-in slide-in-from-top-4 duration-300">
+            {statsItems.map((item) => {
+              const IconComponent = item.icon;
+              const isSelected = 
+                (item.key === 'all-total' && filterStatus === 'all' && subscriptionFilter === 'all') ||
+                (item.key === 'status-active' && filterStatus === 'active') ||
+                (item.key === 'status-inactive' && filterStatus === 'inactive') ||
+                (item.key === 'sub-subscribed' && subscriptionFilter === 'subscribed') ||
+                (item.key === 'sub-external' && subscriptionFilter === 'external') ||
+                (item.key === 'sub-missing' && subscriptionFilter === 'missing');
+                
+              return (
+                <button
+                  key={item.key}
+                  onClick={item.onClick}
+                  type="button"
+                  className={cn(
+                    "flex flex-col text-left p-4 rounded-2xl border transition-all duration-200 hover:shadow-md group/card active:scale-[0.98] outline-none relative overflow-hidden cursor-pointer",
+                    item.color,
+                    isSelected ? "ring-2 ring-indigo-500 shadow-md border-transparent" : "border-slate-200/80 dark:border-slate-800"
+                  )}
+                >
+                  <div className="flex items-center justify-between w-full mb-3">
+                    <div className={cn("p-2 rounded-xl transition-transform group-hover/card:scale-110 shadow-xs", item.iconColor)}>
+                      <IconComponent size={16} />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
+                      {item.value}
+                    </h4>
+                    <p className="text-xs font-black text-slate-800 dark:text-slate-200 leading-none">
+                      {item.label}
+                    </p>
+                    <p className="text-[10px] text-slate-600 dark:text-slate-400 font-medium leading-tight pt-1">
+                      {item.description}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {duplicates.length > 0 && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6 mt-6">
+        <div className="max-w-full mx-auto px-4 md:px-8 lg:px-12 mb-6 mt-6">
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -522,7 +791,10 @@ const GENDERS = ['Male', 'Female', 'Other'];
                 <h4 className="font-bold">Potential Duplicates Found ({duplicates.length} groups)</h4>
               </div>
               <button 
-                onClick={() => setDuplicates([])}
+                onClick={() => {
+                  setDuplicates([]);
+                  setHasScanned(false);
+                }}
                 className="text-xs font-bold text-amber-600 hover:text-amber-700"
               >
                 Dismiss
@@ -555,6 +827,27 @@ const GENDERS = ['Male', 'Female', 'Other'];
                 </div>
               ))}
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {hasScanned && duplicates.length === 0 && (
+        <div className="max-w-full mx-auto px-4 md:px-8 lg:px-12 mb-6 mt-6">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between shadow-sm"
+          >
+            <div className="flex items-center gap-2 text-emerald-800">
+              <CheckCircle2 size={20} />
+              <h4 className="font-bold text-sm text-emerald-700">Scan Complete: No duplicate clients found.</h4>
+            </div>
+            <button 
+              onClick={() => setHasScanned(false)}
+              className="text-xs font-bold text-emerald-600 hover:text-emerald-700 uppercase tracking-wider"
+            >
+              Dismiss
+            </button>
           </motion.div>
         </div>
       )}
@@ -652,11 +945,25 @@ const GENDERS = ['Male', 'Female', 'Other'];
             </div>
           ) : (
             <table className="w-full text-left border-collapse font-sans">
-              <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm border-b border-slate-100">
-                <tr className="text-slate-500 text-[10px] uppercase tracking-widest font-black">
+              <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 shadow-sm border-b border-slate-100 dark:border-slate-800">
+                <tr className="text-slate-500 dark:text-slate-400 text-[10px] uppercase tracking-widest font-black">
+                  <th className="px-6 py-4 w-10">
+                    <input 
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-indigo-600 focus:ring-indigo-500"
+                      checked={sortedClients.length > 0 && selectedClientIds.length === sortedClients.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedClientIds(sortedClients.map(c => c.id));
+                        } else {
+                          setSelectedClientIds([]);
+                        }
+                      }}
+                    />
+                  </th>
                   {selectedColumns.includes('info') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('name')}
                     >
                       <div className="flex items-center">
@@ -667,7 +974,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   )}
                   {selectedColumns.includes('salutation') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('salutation')}
                     >
                       <div className="flex items-center">
@@ -678,7 +985,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   )}
                   {selectedColumns.includes('careOf') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('careOf')}
                     >
                       <div className="flex items-center">
@@ -690,7 +997,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   {selectedColumns.includes('contact') && <th className="px-6 py-4">Basic Contact</th>}
                   {selectedColumns.includes('phone') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('phone')}
                     >
                       <div className="flex items-center">
@@ -701,7 +1008,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   )}
                   {selectedColumns.includes('email') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('email')}
                     >
                       <div className="flex items-center">
@@ -713,7 +1020,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   {selectedColumns.includes('subscriptions') && <th className="px-6 py-4">Subscriptions</th>}
                   {selectedColumns.includes('points') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('points')}
                     >
                       <div className="flex items-center">
@@ -724,7 +1031,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   )}
                   {selectedColumns.includes('status') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('status')}
                     >
                       <div className="flex items-center">
@@ -733,9 +1040,31 @@ const GENDERS = ['Male', 'Female', 'Other'];
                       </div>
                     </th>
                   )}
+                  {selectedColumns.includes('isActive') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
+                      onClick={() => requestSort('isActive')}
+                    >
+                      <div className="flex items-center">
+                        Active
+                        <SortIcon columnKey="isActive" />
+                      </div>
+                    </th>
+                  )}
+                  {selectedColumns.includes('isHidden') && (
+                    <th 
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
+                      onClick={() => requestSort('isHidden')}
+                    >
+                      <div className="flex items-center">
+                        Hidden
+                        <SortIcon columnKey="isHidden" />
+                      </div>
+                    </th>
+                  )}
                   {selectedColumns.includes('endingDate') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('endingDate')}
                     >
                       <div className="flex items-center">
@@ -746,7 +1075,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   )}
                   {selectedColumns.includes('country') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('country')}
                     >
                       <div className="flex items-center">
@@ -759,7 +1088,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   {selectedColumns.includes('portalEnabled') && <th className="px-6 py-4">Portal</th>}
                   {selectedColumns.includes('createdAt') && (
                     <th 
-                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group"
+                      className="px-6 py-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group"
                       onClick={() => requestSort('createdAt')}
                     >
                       <div className="flex items-center">
@@ -771,7 +1100,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   {!isClient && <th className="px-6 py-4 text-right">Actions</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 <AnimatePresence mode="popLayout">
                   {sortedClients.map((client) => (
                     <motion.tr 
@@ -781,12 +1110,26 @@ const GENDERS = ['Male', 'Female', 'Other'];
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       onClick={() => setSelectedClient(client)}
-                      className="hover:bg-slate-50/50 transition-all group cursor-pointer"
+                      className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-all group cursor-pointer"
                     >
+                      <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                        <input 
+                          type="checkbox"
+                          className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-indigo-600 focus:ring-indigo-500"
+                          checked={selectedClientIds.includes(client.id)}
+                          onChange={() => {
+                            setSelectedClientIds(prev => 
+                              prev.includes(client.id) 
+                                ? prev.filter(id => id !== client.id)
+                                : [...prev, client.id]
+                            );
+                          }}
+                        />
+                      </td>
                       {selectedColumns.includes('info') && (
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold overflow-hidden">
+                            <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-950/40 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-bold overflow-hidden">
                               {client.photoURL ? (
                                 <img src={client.photoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                               ) : (
@@ -799,17 +1142,17 @@ const GENDERS = ['Male', 'Female', 'Other'];
                                   e.stopPropagation();
                                   setSelectedClient(client);
                                 }}
-                                className="font-bold text-sm text-slate-900 hover:text-indigo-600 hover:underline text-left"
+                                className="font-bold text-sm text-slate-900 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline text-left"
                               >
-                                {client.salutation && <span className="mr-1 text-slate-500">{client.salutation}</span>}
+                                {client.salutation && <span className="mr-1 text-slate-500 dark:text-slate-450">{client.salutation}</span>}
                                 {client.name}
                                 {client.careOf && (
-                                  <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded border border-slate-200 uppercase tracking-tighter">
+                                  <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 uppercase tracking-tighter">
                                     C/O {client.careOf}
                                   </span>
                                 )}
                               </button>
-                              <p className="text-xs text-slate-500 flex items-center gap-1">
+                              <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
                                 <MapPin size={12} /> {client.address}
                               </p>
                             </div>
@@ -817,32 +1160,32 @@ const GENDERS = ['Male', 'Female', 'Other'];
                         </td>
                       )}
                       {selectedColumns.includes('salutation') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.salutation || 'N/A'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.salutation || 'N/A'}</td>
                       )}
                       {selectedColumns.includes('careOf') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.careOf || 'N/A'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.careOf || 'N/A'}</td>
                       )}
                       {selectedColumns.includes('contact') && (
                         <td className="px-6 py-4">
-                          <p className="text-sm text-slate-600 flex items-center gap-1.5">
-                            <Mail size={14} className="text-slate-400" /> {client.email}
+                          <p className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                            <Mail size={14} className="text-slate-400 dark:text-slate-500" /> {client.email}
                           </p>
-                          <p className="text-xs text-slate-500 flex items-center gap-1.5 mt-1">
-                            <Phone size={14} className="text-slate-400" /> {client.phone}
+                          <p className="text-xs text-slate-500 dark:text-slate-450 flex items-center gap-1.5 mt-1">
+                            <Phone size={14} className="text-slate-400 dark:text-slate-500" /> {client.phone}
                           </p>
                         </td>
                       )}
                       {selectedColumns.includes('phone') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.phone || 'N/A'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.phone || 'N/A'}</td>
                       )}
                       {selectedColumns.includes('email') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.email}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.email}</td>
                       )}
                       {selectedColumns.includes('subscriptions') && (
                         <td className="px-6 py-4">
                           <div className="flex flex-wrap gap-1">
-                            {client.subscriptions?.map(sub => (
-                              <span key={typeof sub === 'string' ? sub : sub.service} className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md border border-indigo-100">
+                            {client.subscriptions?.map((sub, idx) => (
+                              <span key={typeof sub === 'string' ? `${sub}-${idx}` : `${sub.service}-${idx}`} className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-300 rounded-md border border-indigo-100 dark:border-indigo-900/30">
                                 {typeof sub === 'string' ? sub : sub.service}
                               </span>
                             ))}
@@ -851,8 +1194,8 @@ const GENDERS = ['Male', 'Female', 'Other'];
                       )}
                       {selectedColumns.includes('points') && (
                         <td className="px-6 py-4">
-                          <span className="text-sm font-bold text-slate-900">{client.points}</span>
-                          <p className="text-[10px] text-slate-400 font-medium">REWARD PTS</p>
+                          <span className="text-sm font-bold text-slate-900 dark:text-slate-100">{client.points}</span>
+                          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">REWARD PTS</p>
                         </td>
                       )}
                       {selectedColumns.includes('status') && (
@@ -864,7 +1207,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                             }}
                             className={cn(
                               "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border transition-all hover:scale-105",
-                              client.status === 'active' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-slate-100 text-slate-600 border-slate-200"
+                              client.status === 'active' ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-100 dark:border-emerald-900/30" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700"
                             )}
                           >
                             {client.status === 'active' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
@@ -872,27 +1215,47 @@ const GENDERS = ['Male', 'Female', 'Other'];
                           </button>
                         </td>
                       )}
+                      {selectedColumns.includes('isActive') && (
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+                            client.isActive !== false ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-100 dark:border-emerald-900/30" : "bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border-rose-100 dark:border-rose-900/30"
+                          )}>
+                            {client.isActive !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                      )}
+                      {selectedColumns.includes('isHidden') && (
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+                            client.isHidden ? "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-100 dark:border-amber-900/30" : "bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+                          )}>
+                            {client.isHidden ? 'Yes' : 'No'}
+                          </span>
+                        </td>
+                      )}
                       {selectedColumns.includes('endingDate') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.endingDate || 'Lifetime'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.endingDate || 'Lifetime'}</td>
                       )}
                       {selectedColumns.includes('country') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">{client.country || 'N/A'}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{client.country || 'N/A'}</td>
                       )}
                       {selectedColumns.includes('address') && (
-                        <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[150px]">{client.address}</td>
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300 truncate max-w-[150px]">{client.address}</td>
                       )}
                       {selectedColumns.includes('portalEnabled') && (
                         <td className="px-6 py-4">
                           <span className={cn(
                             "px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                            client.portalEnabled ? "bg-emerald-50 text-emerald-700 font-bold" : "bg-slate-100 text-slate-500"
+                            client.portalEnabled ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-bold" : "bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400"
                           )}>
                             {client.portalEnabled ? 'Enabled' : 'Disabled'}
                           </span>
                         </td>
                       )}
                       {selectedColumns.includes('createdAt') && (
-                        <td className="px-6 py-4 text-sm text-slate-600">
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                           {client.createdAt && client.createdAt.toDate ? client.createdAt.toDate().toLocaleDateString() : 'N/A'}
                         </td>
                       )}
@@ -903,7 +1266,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                               e.stopPropagation();
                               setSelectedClient(client);
                             }}
-                            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                            className="p-2 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 rounded-lg transition-all"
                             title="View Details"
                           >
                             <FileSearch size={16} />
@@ -1016,16 +1379,28 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   />
                 </div>
                 <div className="col-span-3 space-y-2">
-                  <label className="text-sm font-bold text-slate-700 flex items-center">
-                    Full Name
-                    <HelpIcon policyTitle="Client Registration Policy" />
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-bold text-slate-700 flex items-center">
+                      Full Name
+                      <HelpIcon policyTitle="Client Registration Policy" />
+                    </label>
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        const tempName = `TEMP-CLIENT-${new Date().getTime().toString().slice(-6)}`;
+                        setNewClient(prev => ({ ...prev, name: tempName }));
+                      }}
+                      className="text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded hover:bg-amber-100 transition-all uppercase tracking-tight"
+                    >
+                      Set Temp
+                    </button>
+                  </div>
                   <input 
                     required
                     type="text" 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Sarah Chen"
-                    value={newClient.name}
+                    value={newClient.name || ''}
                     onChange={e => handleNameChange(e.target.value)}
                   />
                 </div>
@@ -1036,7 +1411,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   type="text" 
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   placeholder="e.g. Dr. Smith / Referral Name"
-                  value={newClient.careOf}
+                  value={newClient.careOf || ''}
                   onChange={e => setNewClient(prev => ({ ...prev, careOf: e.target.value }))}
                 />
               </div>
@@ -1051,7 +1426,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                     type="email" 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="sarah@example.com"
-                    value={newClient.email}
+                    value={newClient.email || ''}
                     onChange={e => setNewClient(prev => ({ ...prev, email: e.target.value }))}
                   />
                 </div>
@@ -1061,7 +1436,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   type="tel" 
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   placeholder="+1 (555) 000-0000"
-                  value={newClient.phone}
+                  value={newClient.phone || ''}
                   onChange={e => setNewClient(prev => ({ ...prev, phone: e.target.value }))}
                 />
               </div>
@@ -1073,7 +1448,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
                   type="text" 
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   placeholder="123 Academic Way, Boston, MA"
-                  value={newClient.address}
+                  value={newClient.address || ''}
                   onChange={e => setNewClient(prev => ({ ...prev, address: e.target.value }))}
                 />
               </div>
@@ -1082,23 +1457,23 @@ const GENDERS = ['Male', 'Female', 'Other'];
                 <input 
                   type="date" 
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  value={newClient.endingDate}
+                  value={newClient.endingDate || ''}
                   onChange={e => setNewClient(prev => ({ ...prev, endingDate: e.target.value }))}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Subscriptions</label>
+              <label className="text-sm font-bold text-slate-700">Subscriptions (Services)</label>
                         <div className="flex flex-wrap gap-2">
-                          {(['Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing', 'Plagiarism'] as ServiceType[]).map(service => {
+                          {(['Hosting', 'DOI', 'ISSN', 'OJS', 'Editorial', 'Indexing'] as ServiceType[]).map((service, idx) => {
                             const isSelected = newClient.subscriptions.some(s => s.service === service);
                             return (
                               <button
-                                key={service}
+                                key={`${service}-${idx}`}
                                 type="button"
                                 onClick={() => toggleSubscription(service)}
                                 className={cn(
-                                  "px-3 py-1.5 rounded-lg text-xs font-bold border transition-all",
+                                  "px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer",
                                   isSelected
                                     ? "bg-indigo-600 text-white border-indigo-600"
                                     : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"
@@ -1109,6 +1484,35 @@ const GENDERS = ['Male', 'Female', 'Other'];
                             );
                           })}
                         </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Service Subscription Flags</label>
+              <div className="grid grid-cols-4 gap-2">
+                {(['ojs', 'issn', 'hec', 'doi'] as const).map(serviceKey => {
+                  const isSelected = !!newClient.serviceSubscriptions?.[serviceKey];
+                  return (
+                    <button
+                      key={serviceKey}
+                      type="button"
+                      onClick={() => setNewClient(prev => ({
+                        ...prev,
+                        serviceSubscriptions: {
+                          ...prev.serviceSubscriptions,
+                          [serviceKey]: !isSelected
+                        }
+                      }))}
+                      className={cn(
+                        "py-2 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all border text-center cursor-pointer",
+                        isSelected
+                          ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300"
+                      )}
+                    >
+                      {serviceKey}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
@@ -1175,13 +1579,31 @@ const GENDERS = ['Male', 'Female', 'Other'];
             <div className="pt-4">
               <button 
                 type="submit"
-                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+                disabled={isSubmitting}
+                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                Save Client
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="animate-spin" size={20} />
+                    Saving...
+                  </>
+                ) : 'Save Client'}
               </button>
             </div>
           </form>
         </Modal>
+
+        <ConfirmModal
+          isOpen={isBulkDeleteModalOpen}
+          onClose={() => setIsBulkDeleteModalOpen(false)}
+          onConfirm={executeBulkDelete}
+          title="Bulk Move to Trash"
+          message={`Are you sure you want to move ${selectedClientIds.length} selected clients to trash?`}
+          confirmText="Move to Trash"
+          variant="danger"
+        />
+
+
     </>
   );
 };

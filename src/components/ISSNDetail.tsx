@@ -19,10 +19,10 @@ import {
   Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ISSNRequest, User as UserType } from '../types';
+import { ISSNRequest, User as UserType, Journal, Publisher, Domain, GlobalSettings } from '../types';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, moveToTrash } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { Shield, CheckCircle2, AlertTriangle, Trash2 } from 'lucide-react';
 import { FloatingActionBar } from './FloatingActionBar';
 import { toast } from 'react-hot-toast';
@@ -36,6 +36,10 @@ interface ISSNDetailProps {
 
 export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, currentUser }) => {
   const { check } = usePermissions(currentUser);
+  const [journals, setJournals] = useState<Journal[]>([]);
+  const [publishers, setPublishers] = useState<Publisher[]>([]);
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [isAddingInvoice, setIsAddingInvoice] = useState(false);
   const [newInvoice, setNewInvoice] = useState({
     invoiceNo: '',
@@ -49,9 +53,36 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
   const [isSaving, setIsSaving] = useState(false);
   const [editData, setEditData] = useState<ISSNRequest>(request);
 
+  // Dynamic creation states for edit mode
+  const [isAddingNewJournal, setIsAddingNewJournal] = useState(false);
+  const [customJournalTitle, setCustomJournalTitle] = useState('');
+  const [isAddingNewPublisher, setIsAddingNewPublisher] = useState(false);
+  const [customPublisherName, setCustomPublisherName] = useState('');
+
   React.useEffect(() => {
     setEditData(request);
   }, [request]);
+
+  React.useEffect(() => {
+    const unsubJournals = onSnapshot(collection(db, 'journals'), (snap) => {
+      setJournals(snap.docs.map(d => ({ id: d.id, ...d.data() }) as Journal));
+    });
+    const unsubPublishers = onSnapshot(collection(db, 'publishers'), (snap) => {
+      setPublishers(snap.docs.map(d => ({ id: d.id, ...d.data() }) as Publisher));
+    });
+    const unsubDomains = onSnapshot(collection(db, 'domains'), (snap) => {
+      setDomains(snap.docs.map(d => ({ id: d.id, ...d.data() }) as Domain));
+    });
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'global'), (snap) => {
+      if (snap.exists()) setGlobalSettings(snap.data() as GlobalSettings);
+    });
+    return () => {
+      unsubJournals();
+      unsubPublishers();
+      unsubDomains();
+      unsubSettings();
+    };
+  }, []);
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -74,12 +105,54 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      let finalJournalId = editData.journalId;
+      let finalJournalTitle = editData.journalTitle;
+      
+      if (isAddingNewJournal && customJournalTitle.trim()) {
+        const journalDocRef = await addDoc(collection(db, 'journals'), {
+          title: customJournalTitle.trim(),
+          clientId: editData.clientId,
+          clientName: editData.clientName || '',
+          status: 'pending_issn',
+          lifecycleStatus: 'Onboarding',
+          lifecycleHistory: [{
+            stage: 'Onboarding',
+            status: 'Active',
+            updatedAt: new Date().toISOString(),
+            updatedBy: currentUser?.name || 'System'
+          }],
+          createdAt: new Date().toISOString(),
+          createdBy: currentUser?.name || 'System',
+          updatedAt: new Date().toISOString(),
+          updatedBy: currentUser?.name || 'System'
+        });
+        finalJournalId = journalDocRef.id;
+        finalJournalTitle = customJournalTitle.trim();
+      }
+
+      let finalPublisherName = editData.publisherName;
+      if (isAddingNewPublisher && customPublisherName.trim()) {
+        await addDoc(collection(db, 'publishers'), {
+          clientId: editData.clientId,
+          name: customPublisherName.trim(),
+          createdAt: new Date().toISOString()
+        });
+        finalPublisherName = customPublisherName.trim();
+      }
+
       await updateDoc(doc(db, 'issn_requests', request.id), {
         ...editData,
+        journalId: finalJournalId,
+        journalTitle: finalJournalTitle,
+        publisherName: finalPublisherName,
         updatedAt: serverTimestamp(),
         updatedBy: currentUser.name
       });
       setIsEditing(false);
+      setIsAddingNewJournal(false);
+      setCustomJournalTitle('');
+      setIsAddingNewPublisher(false);
+      setCustomPublisherName('');
       toast.success('Request updated successfully');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'issn_requests');
@@ -120,11 +193,15 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
     }
   };
 
-  const getStatusBadge = (status: ISSNRequest['status']) => {
+  const getStatusBadge = (status: string) => {
     switch (status) {
       case 'approved': return <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold uppercase tracking-wider">Approved</span>;
       case 'pending': return <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold uppercase tracking-wider">Pending</span>;
       case 'rejected': return <span className="px-3 py-1 bg-rose-100 text-rose-700 rounded-full text-xs font-bold uppercase tracking-wider">Rejected</span>;
+      case 'Not Applied': return <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-bold uppercase tracking-wider">Not Applied</span>;
+      case 'Payment Pending': return <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-bold uppercase tracking-wider">Payment Pending</span>;
+      case 'Draft': return <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs font-bold uppercase tracking-wider">Draft</span>;
+      default: return <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-bold uppercase tracking-wider">{status}</span>;
     }
   };
 
@@ -161,7 +238,10 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
               {isEditing ? 'Editing Mode' : 'Edit Request'}
             </button>
           )}
-          <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm">
+          <button 
+            onClick={() => window.print()}
+            className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+          >
             <Printer size={18} />
             Print Detail
           </button>
@@ -245,30 +325,98 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
               {isEditing ? (
                 <select 
                   className="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider bg-slate-50 border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={editData.status}
+                  value={editData.status || ''}
                   onChange={e => setEditData(prev => ({ ...prev, status: e.target.value as any }))}
                 >
                   <option value="pending">Pending</option>
                   <option value="approved">Approved</option>
                   <option value="rejected">Rejected</option>
+                  <option value="Not Applied">Not Applied</option>
+                  <option value="Payment Pending">Payment Pending</option>
+                  <option value="Draft">Draft</option>
                 </select>
               ) : (
                 getStatusBadge(request.status)
               )}
             </div>
             <div className="space-y-4">
-              <div className="flex items-center gap-3 text-indigo-600 font-mono text-sm font-bold tracking-widest uppercase">
-                <Hash size={16} />
-                ISSN Request #: {request.requestNo}
-              </div>
               {isEditing ? (
-                <input 
-                  type="text"
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-2xl font-black"
-                  value={editData.journalTitle}
-                  onChange={e => setEditData(prev => ({ ...prev, journalTitle: e.target.value }))}
-                  placeholder="Journal Title"
-                />
+                <div className="flex items-center gap-3">
+                  <Hash size={16} className="text-indigo-600" />
+                  <input 
+                    type="text"
+                    className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold font-mono"
+                    value={editData.requestNo || ''}
+                    onChange={e => setEditData(prev => ({ ...prev, requestNo: e.target.value }))}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 text-indigo-600 font-mono text-sm font-bold tracking-widest uppercase">
+                  <Hash size={16} />
+                  ISSN Request #: {request.requestNo}
+                </div>
+              )}
+              {isEditing ? (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Journal Title</label>
+                  <select 
+                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xl font-bold"
+                    value={isAddingNewJournal ? 'add_new_journal_option' : editData.journalId || ''}
+                    onChange={e => {
+                      if (e.target.value === 'add_new_journal_option') {
+                        setIsAddingNewJournal(true);
+                        setCustomJournalTitle('');
+                        setEditData(prev => ({ ...prev, journalId: '' }));
+                      } else {
+                        setIsAddingNewJournal(false);
+                        const journalId = e.target.value;
+                        const journal = journals.find(j => j.id === journalId);
+                        const publisher = publishers.find(p => p.id === journal?.publisherId);
+                        const domain = domains.find(d => d.id === journal?.domainId);
+                        
+                        setEditData(prev => ({ 
+                          ...prev, 
+                          journalId,
+                          journalTitle: journal?.title || prev.journalTitle,
+                          journalUrl: journal?.url || domain?.domainName || prev.journalUrl,
+                          publisherName: publisher?.name || prev.publisherName,
+                          publisherAddress: publisher?.address || prev.publisherAddress
+                        }));
+                      }
+                    }}
+                  >
+                    <option value="">Choose journal...</option>
+                    <option value="add_new_journal_option" className="font-bold text-indigo-600">+ Add New Journal...</option>
+                    {journals.map(j => (
+                      <option key={j.id} value={j.id}>{j.title}</option>
+                    ))}
+                  </select>
+                  {isAddingNewJournal && (
+                    <div className="mt-2 p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-2 text-slate-700">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-700">New Journal Title</label>
+                      <input 
+                        required
+                        type="text"
+                        className="w-full px-3 py-1.5 bg-white border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium"
+                        placeholder="Type new journal title..."
+                        value={customJournalTitle || ''}
+                        onChange={e => {
+                          setCustomJournalTitle(e.target.value);
+                        }}
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setIsAddingNewJournal(false);
+                          setEditData(prev => ({ ...prev, journalId: '' }));
+                        }}
+                        className="text-xs text-rose-600 hover:text-rose-800 font-bold transition-all"
+                      >
+                        Cancel New Journal
+                      </button>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <h1 className="text-4xl font-black text-slate-900 tracking-tight">
                   {request.journalTitle || 'Journal Title Not Set'}
@@ -278,7 +426,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                 {isEditing ? (
                   <select 
                     className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={editData.requestType}
+                    value={editData.requestType || ''}
                     onChange={e => setEditData(prev => ({ ...prev, requestType: e.target.value as any }))}
                   >
                     <option value="Print">Print</option>
@@ -292,13 +440,17 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                   </div>
                 )}
                 {isEditing ? (
-                  <input 
-                    type="text"
+                  <select 
                     className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={editData.frequency}
+                    value={editData.frequency || ''}
                     onChange={e => setEditData(prev => ({ ...prev, frequency: e.target.value }))}
-                    placeholder="Frequency"
-                  />
+                  >
+                    {globalSettings?.frequencies?.map((f: string) => (
+                      <option key={f} value={f}>{f}</option>
+                    )) || (
+                      <option value={editData.frequency}>{editData.frequency}</option>
+                    )}
+                  </select>
                 ) : (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl border border-slate-100 text-sm font-medium">
                     <Clock size={16} className="text-slate-400" />
@@ -323,7 +475,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.printIssn}
+                      value={editData.printIssn || ''}
                       onChange={e => setEditData(prev => ({ ...prev, printIssn: e.target.value }))}
                     />
                   ) : (
@@ -336,7 +488,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.onlineIssn}
+                      value={editData.onlineIssn || ''}
                       onChange={e => setEditData(prev => ({ ...prev, onlineIssn: e.target.value }))}
                     />
                   ) : (
@@ -349,7 +501,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.language}
+                      value={editData.language || ''}
                       onChange={e => setEditData(prev => ({ ...prev, language: e.target.value }))}
                     />
                   ) : (
@@ -362,7 +514,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.country}
+                      value={editData.country || ''}
                       onChange={e => setEditData(prev => ({ ...prev, country: e.target.value }))}
                     />
                   ) : (
@@ -372,25 +524,89 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                 <div className="flex justify-between items-center py-2 border-b border-slate-50">
                   <span className="text-sm text-slate-500">Subject</span>
                   {isEditing ? (
-                    <input 
-                      type="text"
+                    <select 
                       className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.subject}
+                      value={editData.subject || ''}
                       onChange={e => setEditData(prev => ({ ...prev, subject: e.target.value }))}
-                    />
+                    >
+                      {globalSettings?.issnSubjects?.map((s: string) => (
+                        <option key={s} value={s}>{s}</option>
+                      )) || (
+                        <option value={editData.subject}>{editData.subject}</option>
+                      )}
+                    </select>
                   ) : (
                     <span className="text-sm font-bold text-slate-900">{request.subject || 'N/A'}</span>
                   )}
                 </div>
-                <div className="pt-2">
-                  <p className="text-xs text-slate-400 font-bold uppercase mb-2">Journal URL</p>
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <span className="text-sm text-slate-500">Already Entered Details Only</span>
                   {isEditing ? (
                     <input 
-                      type="url"
-                      className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                      value={editData.journalUrl}
-                      onChange={e => setEditData(prev => ({ ...prev, journalUrl: e.target.value }))}
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      checked={editData.alreadyHaveDetails || false}
+                      onChange={e => setEditData(prev => ({ ...prev, alreadyHaveDetails: e.target.checked }))}
                     />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900">{request.alreadyHaveDetails ? 'Yes' : 'No'}</span>
+                  )}
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <span className="text-sm text-slate-500">Existing Print ISSN</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right font-mono"
+                      value={editData.existingPrintIssn || ''}
+                      onChange={e => setEditData(prev => ({ ...prev, existingPrintIssn: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900 font-mono">{request.existingPrintIssn || 'N/A'}</span>
+                  )}
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <span className="text-sm text-slate-500">Existing Online ISSN</span>
+                  {isEditing ? (
+                    <input 
+                      type="text"
+                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right font-mono"
+                      value={editData.existingOnlineIssn || ''}
+                      onChange={e => setEditData(prev => ({ ...prev, existingOnlineIssn: e.target.value }))}
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-slate-900 font-mono">{request.existingOnlineIssn || 'N/A'}</span>
+                  )}
+                </div>
+                <div className="pt-2">
+                  <p className="text-xs text-slate-400 font-bold uppercase mb-2">Journal URL / Domain (selective)</p>
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <input 
+                        type="text"
+                        placeholder="Type or select URL..."
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                        value={editData.journalUrl || ''}
+                        onChange={e => setEditData(prev => ({ ...prev, journalUrl: e.target.value }))}
+                      />
+                      <select 
+                        className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-[10px]"
+                        value={editData.journalUrl || ''}
+                        onChange={e => setEditData(prev => ({ ...prev, journalUrl: e.target.value }))}
+                      >
+                        <option value="">Choose from existing...</option>
+                        {Array.from(new Set([
+                          ...domains.map(d => d.domainName),
+                          ...journals.map(j => j.url)
+                        ]))
+                          .filter(Boolean)
+                          .sort()
+                          .map(url => (
+                            <option key={url} value={url || ''}>{url}</option>
+                          ))
+                        }
+                      </select>
+                    </div>
                   ) : (
                     <a 
                       href={request.journalUrl} 
@@ -412,17 +628,59 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                 Publisher Details
               </h3>
               <div className="space-y-4">
-                <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                  <span className="text-sm text-slate-500">Name of Publisher (ISSN)</span>
-                  {isEditing ? (
-                    <input 
-                      type="text"
-                      className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
-                      value={editData.publisherName}
-                      onChange={e => setEditData(prev => ({ ...prev, publisherName: e.target.value }))}
-                    />
-                  ) : (
-                    <span className="text-sm font-bold text-slate-900">{request.publisherName || 'N/A'}</span>
+                 <div className="flex flex-col gap-2 py-2 border-b border-slate-50">
+                  <div className="flex justify-between items-center w-full">
+                    <span className="text-sm text-slate-500">Name of Publisher (ISSN)</span>
+                    {isEditing ? (
+                      <select 
+                        className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-right"
+                        value={isAddingNewPublisher ? 'add_new_pub_option' : editData.publisherName || ''}
+                        onChange={e => {
+                          if (e.target.value === 'add_new_pub_option') {
+                            setIsAddingNewPublisher(true);
+                            setCustomPublisherName('');
+                            setEditData(prev => ({ ...prev, publisherName: '' }));
+                          } else {
+                            setIsAddingNewPublisher(false);
+                            setEditData(prev => ({ ...prev, publisherName: e.target.value }));
+                          }
+                        }}
+                      >
+                        <option value="">Select Publisher</option>
+                        <option value="add_new_pub_option" className="font-bold text-indigo-600">+ Add New Publisher...</option>
+                        {publishers.map(p => (
+                          <option key={p.id} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-sm font-bold text-slate-900">{request.publisherName || 'N/A'}</span>
+                    )}
+                  </div>
+                  {isEditing && isAddingNewPublisher && (
+                    <div className="w-full mt-1 p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 flex flex-col gap-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-700">New Publisher Name</label>
+                      <input 
+                        required
+                        type="text"
+                        className="w-full px-3 py-1.5 bg-white border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium"
+                        placeholder="Type new publisher name..."
+                        value={customPublisherName || ''}
+                        onChange={e => {
+                          setCustomPublisherName(e.target.value);
+                          setEditData(prev => ({ ...prev, publisherName: e.target.value }));
+                        }}
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setIsAddingNewPublisher(false);
+                          setEditData(prev => ({ ...prev, publisherName: '' }));
+                        }}
+                        className="text-xs text-rose-600 hover:text-rose-800 font-bold text-left"
+                      >
+                        Cancel New Publisher
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="pt-2">
@@ -430,7 +688,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                   {isEditing ? (
                     <textarea 
                       className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
-                      value={editData.publisherAddress}
+                      value={editData.publisherAddress || ''}
                       onChange={e => setEditData(prev => ({ ...prev, publisherAddress: e.target.value }))}
                     />
                   ) : (
@@ -456,7 +714,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                   <input 
                     type="text"
                     className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-mono tracking-wider text-white"
-                    value={editData.issnLogin}
+                    value={editData.issnLogin || ''}
                     onChange={e => setEditData(prev => ({ ...prev, issnLogin: e.target.value }))}
                   />
                 ) : (
@@ -469,11 +727,24 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                   <input 
                     type="text"
                     className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-mono tracking-wider text-white"
-                    value={editData.issnPassword}
+                    value={editData.issnPassword || ''}
                     onChange={e => setEditData(prev => ({ ...prev, issnPassword: e.target.value }))}
                   />
                 ) : (
                   <p className="text-lg font-mono tracking-wider">••••••••••••</p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-slate-500 font-bold uppercase">ISSN Login Password (alternate)</p>
+                {isEditing ? (
+                  <input 
+                    type="text"
+                    className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-lg font-mono tracking-wider text-white"
+                    value={editData.issnLoginPassword || ''}
+                    onChange={e => setEditData(prev => ({ ...prev, issnLoginPassword: e.target.value }))}
+                  />
+                ) : (
+                  <p className="text-lg font-mono tracking-wider">{request.issnLoginPassword ? '••••••••••••' : 'Not Set'}</p>
                 )}
               </div>
             </div>
@@ -495,7 +766,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                      value={editData.contactName}
+                      value={editData.contactName || ''}
                       onChange={e => setEditData(prev => ({ ...prev, contactName: e.target.value }))}
                     />
                   ) : (
@@ -513,7 +784,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="email"
                       className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                      value={editData.emailAddress}
+                      value={editData.emailAddress || ''}
                       onChange={e => setEditData(prev => ({ ...prev, emailAddress: e.target.value }))}
                     />
                   ) : (
@@ -534,7 +805,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                   <input 
                     type="number"
                     className="w-32 px-2 py-1 bg-white border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-right"
-                    value={editData.paymentAmountPkr}
+                    value={editData.paymentAmountPkr || ''}
                     onChange={e => setEditData(prev => ({ ...prev, paymentAmountPkr: Number(e.target.value) }))}
                   />
                 ) : (
@@ -548,7 +819,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="text"
                       className="px-2 py-1 bg-white border border-emerald-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-xs font-bold text-right"
-                      value={editData.legacyInvoiceNumber}
+                      value={editData.legacyInvoiceNumber || ''}
                       onChange={e => setEditData(prev => ({ ...prev, legacyInvoiceNumber: e.target.value }))}
                     />
                   ) : (
@@ -573,7 +844,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="date"
                       className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                      value={editData.sentDate}
+                      value={editData.sentDate || ''}
                       onChange={e => setEditData(prev => ({ ...prev, sentDate: e.target.value }))}
                     />
                   ) : (
@@ -591,7 +862,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                     <input 
                       type="date"
                       className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                      value={editData.modifiedDate}
+                      value={editData.modifiedDate || ''}
                       onChange={e => setEditData(prev => ({ ...prev, modifiedDate: e.target.value }))}
                     />
                   ) : (
@@ -634,7 +905,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                         type="text" 
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
                         placeholder="INV-2024-XXX"
-                        value={newInvoice.invoiceNo}
+                        value={newInvoice.invoiceNo || ''}
                         onChange={e => setNewInvoice(prev => ({ ...prev, invoiceNo: e.target.value }))}
                       />
                     </div>
@@ -645,7 +916,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                           required
                           type="date" 
                           className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none" 
-                          value={newInvoice.issueDate}
+                          value={newInvoice.issueDate || ''}
                           onChange={e => setNewInvoice(prev => ({ ...prev, issueDate: e.target.value }))}
                         />
                       </div>
@@ -655,7 +926,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                           required
                           type="date" 
                           className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none" 
-                          value={newInvoice.dueDate}
+                          value={newInvoice.dueDate || ''}
                           onChange={e => setNewInvoice(prev => ({ ...prev, dueDate: e.target.value }))}
                         />
                       </div>
@@ -667,7 +938,7 @@ export const ISSNDetail: React.FC<ISSNDetailProps> = ({ request, onBack, current
                         type="number" 
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
                         placeholder="0.00"
-                        value={newInvoice.amount}
+                        value={newInvoice.amount || ''}
                         onChange={e => setNewInvoice(prev => ({ ...prev, amount: Number(e.target.value) }))}
                       />
                     </div>

@@ -24,8 +24,12 @@ export interface JournalIndexing {
   appliedAt?: string;
   indexedAt?: string;
   notes?: string;
+  lastStatus?: IndexingStatus;
+  lastJournalPageUrl?: string | null;
+  lastIndexedAt?: any;
+  lastAppliedAt?: string | null;
 }
-export type ISSNStatus = 'pending' | 'approved' | 'rejected';
+export type ISSNStatus = 'pending' | 'approved' | 'rejected' | 'Not Applied' | 'Payment Pending' | 'Draft';
 export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed' | 'overdue' | 'rework' | 'cancelled';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type ServiceType = 
@@ -35,8 +39,10 @@ export type ServiceType =
   | 'OJS' 
   | 'Editorial' 
   | 'Indexing' 
-  | 'Plagiarism' 
+  | 'Publisher' 
   | 'Domain' 
+  | 'Domain (External)'
+  | 'Hosting (External)'
   | 'Catalog Service'
   | 'Marketing'
   | 'Call for Papers'
@@ -78,21 +84,32 @@ export interface WorkflowTemplate extends AuditFields {
   isActive: boolean;
 }
 
+export type PricingPlan = 'Slow' | 'Normal' | 'Fast';
+
 export interface PricingTier {
-  priority: 'Standard' | 'Rush' | 'Express';
+  plan: PricingPlan;
+  multiplier: number;
   price: number;
   estimatedDays: number;
+  priority: TaskPriority;
 }
+
+export type UniquenessRule = 'None' | 'Global' | 'Service' | 'Client';
 
 export interface CatalogRequirement {
   id: string;
   label: string;
-  type: 'text' | 'textarea' | 'select' | 'file' | 'date' | 'number';
+  type: 'text' | 'number' | 'date' | 'file' | 'select' | 'textarea' | 'checkbox';
   required: boolean;
-  options?: string[]; // For select type
+  uniquenessRule: UniquenessRule;
+  isTemporary: boolean; // Not saved to core entity, only for workflow progress
+  linkedField?: string; // e.g. "journals.issnPrint", "domains.domainName"
+  options?: string[]; // For 'select' type
+  description?: string;
   placeholder?: string;
+  validationRegex?: string;
   value?: any; // To store the filled value
-  status?: 'Pending' | 'Received' | 'Rejected';
+  status?: 'Pending' | 'Received' | 'Rejected' | 'completed' | 'pending';
   validationStatus?: 'valid' | 'invalid' | 'pending';
   comments?: string;
   fileUrl?: string;
@@ -126,9 +143,16 @@ export interface Order extends AuditFields {
   slaDeadline?: string;
   delayReason?: 'Client' | 'Internal' | 'External';
   paymentStatus: 'unpaid' | 'partially_paid' | 'paid';
-  priority: 'Standard' | 'Rush' | 'Express';
+  pricingTier: PricingPlan;
+  multiplier: number;
+  basePrice: number;
+  priority: TaskPriority | 'Standard' | 'Rush' | 'Express';
   totalAmount: number;
   paidAmount: number;
+  currency: 'USD' | 'PKR';
+  amountUSD: number;
+  amountPKR: number;
+  usdPkrRate: number;
   assignedEmployeeId?: string;
   assignedEmployeeName?: string;
   completedAt?: string;
@@ -141,7 +165,7 @@ export interface PointHistory {
   id: string;
   userId: string; // Can be client or employee
   userName: string;
-  type: 'earned' | 'spent' | 'adjustment';
+  type: 'earned' | 'spent' | 'adjustment' | 'withdrawn' | 'recharged';
   points: number;
   reason: string;
   orderId?: string;
@@ -149,6 +173,7 @@ export interface PointHistory {
   createdAt: string;
   createdById: string;
   createdBy: string;
+  metadata?: any;
 }
 
 export interface ProfileUpdateRequest extends AuditFields {
@@ -181,6 +206,13 @@ export interface AuditFields {
   verifiedAt?: string;
 }
 
+export interface UserServiceSubscriptions {
+  ojs?: boolean;
+  issn?: boolean;
+  hec?: boolean;
+  doi?: boolean;
+}
+
 export interface Subscription {
   service: ServiceType;
   startDate: string;
@@ -206,6 +238,19 @@ export interface DomainRegistrar extends AuditFields {
   notes?: string;
 }
 
+export interface HostingAccount extends AuditFields {
+  id: string;
+  name: string;
+  link?: string;
+  email?: string;
+  username?: string;
+  password?: string;
+  ip?: string;
+  provider?: string;
+  panelUrl?: string;
+  notes?: string;
+}
+
 export interface Client {
   id: string;
   salutation?: string;
@@ -218,8 +263,11 @@ export interface Client {
   endingDate?: string;
   status: ClientStatus;
   points: number;
+  totalEarnedPoints?: number;
+  totalWithdrawnPoints?: number;
   photoURL?: string;
   subscriptions: Subscription[];
+  serviceSubscriptions?: UserServiceSubscriptions;
   createdAt: any;
   portalEnabled?: boolean;
   isActive?: boolean;
@@ -310,16 +358,26 @@ export interface Domain extends AuditFields {
   hostingHistory?: HostingMigrationLog[];
   ownershipHistory?: OwnershipHistory[];
   renewalHistory?: DomainRenewal[];
+  registrationSource?: 'System' | 'External';
   isSubscribed?: boolean; // Legacy
   isDomainSubscribedFromUs?: boolean;
   isHostingSubscribedFromUs?: boolean;
+  emails?: EmailCredential[];
+  domainType?: 'Primary Domain' | 'Addon Domain' | 'Subdomain' | 'Parked Domain';
+  parentDomainId?: string;
+  hostingAccount?: string;
+  hostingAccountId?: string;
+  hostingStartDate?: string;
+  hostingEndDate?: string;
 }
 
 export interface EmailCredential {
   id: string;
   email: string;
+  username?: string;
   password?: string;
-  loginLink?: string;
+  loginLink?: string; // backwards compatibility
+  webmailLink?: string;
   label?: string; // e.g. "Editor Email", "Support Email"
 }
 
@@ -344,6 +402,8 @@ export interface Journal extends AuditFields {
   doiId?: string;
   clientName?: string;
   title: string;
+  abbreviation?: string;
+  initials?: string;
   url?: string;
   ojsVersion?: string;
   sslStatus?: 'Active' | 'Expired' | 'Pending' | 'None';
@@ -351,7 +411,8 @@ export interface Journal extends AuditFields {
   issnOnline?: string;
   invoiceNumber?: string;
   status: JournalStatus;
-  lifecycleStatus: 'Pending ISSN' | 'Active' | 'Indexed';
+  lifecycleStatus: JournalWorkflowStatus;
+  lifecycleHistory: JournalLifecycleEvent[];
   chiefEditorName?: string;
   contactPersonName?: string;
   transferHistory?: JournalTransferRecord[];
@@ -362,6 +423,11 @@ export interface Journal extends AuditFields {
   scope?: string[];
   apcAmount?: number;
   editorEmail?: string;
+  useForCfp?: boolean;
+  cfpDiscipline?: string;
+  cfpDeadline?: string;
+  editorialBoardMembers?: string[];
+  googleScholarStatus?: string;
   
   // Enhanced metadata fields
   subjectCategory?: string;
@@ -391,6 +457,7 @@ export interface Journal extends AuditFields {
 
   // Dynamic Tabs and Managed Details
   subscribed_services?: string[]; // ['ISSN', 'HEC', 'DOAJ', 'Indexing', 'OJS']
+  active_tabs?: string[];
   
   issn_details?: ISSNJournalDetails;
   hec_details?: HECJournalDetails;
@@ -398,6 +465,25 @@ export interface Journal extends AuditFields {
   doaj_details?: DOAJJournalDetails;
   indexing_details?: IndexingJournalDetails;
   ojs_details?: OJSJournalDetails;
+  domain_details?: {
+    domainName?: string;
+    registrar?: string;
+    expirationDate?: string;
+    nameservers?: string;
+    autoRenew?: boolean;
+    annualCost?: number;
+    notes?: string;
+  };
+  hosting_details?: {
+    provider?: string;
+    ipAddress?: string;
+    serverSpecs?: string;
+    status?: string;
+    renewalDate?: string;
+    annualCost?: number;
+    controlPanelUrl?: string;
+    notes?: string;
+  };
   
   // Secure Credential Vault IDs
   credentialVaultIds?: string[];
@@ -408,6 +494,9 @@ export interface Journal extends AuditFields {
   workflow_stage_id?: string;
   active_invoice_id?: string;
   subscription_source?: 'Journal' | 'Manual';
+  costPrice?: number;
+  salePrice?: number;
+  profit?: number;
 }
 
 export interface GoogleScholarHistory {
@@ -430,8 +519,12 @@ export interface ISSNRequest extends AuditFields {
   requestType: string;
   printIssn?: string;
   onlineIssn?: string;
+  existingPrintIssn?: string;
+  existingOnlineIssn?: string;
   issnLogin?: string;
   issnPassword?: string;
+  issnLoginPassword?: string;
+  alreadyHaveDetails?: boolean;
   journalUrl?: string;
   publisherName?: string;
   publisherAddress?: string;
@@ -460,6 +553,13 @@ export interface TaskComment {
   createdAt: string;
 }
 
+export interface SubTask {
+  id: string;
+  title: string;
+  status: 'pending' | 'completed';
+  visibility: 'all' | 'client' | 'employee' | 'admin';
+}
+
 export interface Task {
   id: string;
   clientId: string;
@@ -470,7 +570,7 @@ export interface Task {
   domainName?: string;
   linkedOrderId?: string;
   linkedServiceId?: string;
-  serviceType: ServiceType;
+  serviceType: ServiceType | 'Catalog Service';
   title: string;
   description?: string;
   assignedTo: string; // User ID (Employee)
@@ -480,6 +580,8 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   points: number;
+  order?: number;
+  taskCost?: number; // Cost / expense incurred to complete task (-)
   
   // Points & Performance
   basePoints: number;
@@ -497,6 +599,17 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   
+  // High-precision time tracking
+  estimatedTimeMinutes?: number;
+  actualTimeMinutes?: number;
+  expectedCompletionDate?: string;
+  timeLogs?: {
+    action: 'start' | 'pause' | 'resume' | 'complete';
+    timestamp: string;
+    userId: string;
+    userName: string;
+  }[];
+  
   attachments?: string[];
   reviewerId?: string;
   reviewerName?: string;
@@ -510,6 +623,102 @@ export interface Task {
   isClientVisible: boolean;
   comments?: TaskComment[];
   dependencies?: string[]; // IDs of tasks that must be completed first
+  price?: number;
+  subTasks?: SubTask[];
+}
+
+export interface ServiceSubItem {
+  id: string;
+  name: string;
+  price: number;
+}
+
+export interface ServiceRequirementField {
+  id: string;
+  label: string;
+  type: 'text' | 'file' | 'select' | 'number' | 'toggle';
+  placeholder?: string;
+  options?: string[];
+  required?: boolean;
+  dependsOn?: {
+    fieldId: string;
+    value: any;
+  };
+}
+
+export interface ServiceTemplate {
+  id: string;
+  name: string;
+  basePrice: number;
+  description: string;
+  subItems: ServiceSubItem[];
+  requirements: ServiceRequirementField[];
+  deliverables: string[];
+}
+
+export interface WorkflowSubTask {
+  id: string;
+  name: string;
+  description: string;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  price: number;
+  status: 'Pending' | 'In Progress' | 'Completed' | 'Waiting for Client';
+  updatedAt: string;
+  deliverableUrl?: string;
+}
+
+export interface WorkflowMainTask {
+  id: string;
+  title: string;
+  serviceId: string;
+  clientId: string;
+  clientName: string;
+  userSelectionMode: 'already_have' | 'need' | 'partial';
+  selectedSubItemIds: string[];
+  requirements: {
+    label: string;
+    status: 'Pending' | 'Received' | 'Approved' | 'Rejected';
+    fileUrl?: string;
+    textValue?: string;
+  }[];
+  deliverables: {
+    label: string;
+    status: 'Pending' | 'Delivered';
+    fileUrl?: string;
+  }[];
+  clientInstructions: string;
+  employeeInstructions: string;
+  subTasks: WorkflowSubTask[];
+  status: 'Pending' | 'In Progress' | 'Completed' | 'Waiting for Client';
+  deadline: string;
+  createdAt: string;
+  createdBy: string;
+  totalPrice: number;
+  progress: number;
+  activityLog: {
+    timestamp: string;
+    user: string;
+    action: string;
+    details?: string;
+  }[];
+}
+
+export interface TaskLog {
+  id: string;
+  taskId: string;
+  action: 'created' | 'started' | 'completed' | 'revision' | 'rejected' | 'reassigned';
+  by: string; // User ID
+  userName: string;
+  timestamp: any;
+  details?: string;
+}
+
+export interface ServiceTaskRun {
+  id: string;
+  clientServiceId: string;
+  executed: boolean;
+  lastRun: any;
 }
 
 export interface JournalCategory {
@@ -538,6 +747,15 @@ export interface GlobalSettings {
   journalScopes?: string[];
   activatableServices?: string[];
   officeSubscriptions?: OfficeSubscription[];
+  uniquenessSettings?: {
+    clientEmail?: boolean;
+    clientPhone?: boolean;
+    domainName?: boolean;
+    issnNumber?: boolean;
+    journalTitle?: boolean;
+  };
+  pointRate?: number; // Value of 1 point in PKR
+  usdPkrRate?: number; // Exchange rate: 1 USD = X PKR
   branding?: {
     name: string;
     logoUrl?: string;
@@ -598,19 +816,30 @@ export interface UserPermissions {
   employees: ModulePermissions;
   doajApplications: ModulePermissions;
   serviceCatalog: ModulePermissions;
+  payroll: ModulePermissions;
+  accessLogs: ModulePermissions;
 }
 
 export interface ServiceOption {
   id: string;
   name: string;
   price: number;
+  type?: 'one-time' | 'recurring';
+}
+
+export interface ServiceWorkflowConfig {
+  autoGenerateInvoice: boolean;
+  upfrontPaymentPercentage: number;
+  generateTasksOnActivation: boolean;
+  enableCommissions: boolean;
+  employeeCommissionPercentage: number;
 }
 
 export interface ServiceStep {
   id: string;
   name: string;
   description: string;
-  clientChecklist: ClientChecklistItem[];
+  clientChecklist: CatalogRequirement[];
   employeeTasks: EmployeeTaskTemplate[];
   orderIndex: number;
 }
@@ -624,17 +853,33 @@ export interface ServiceTier {
   steps?: ServiceStep[];
   options: ServiceOption[];
   employeeSharePercentage: number;
-  clientChecklist?: ClientChecklistItem[];
-  employeeChecklist?: EmployeeTaskTemplate[];
+  clientChecklist: CatalogRequirement[];
+  employeeChecklist: EmployeeTaskTemplate[];
+  workflowConfig: ServiceWorkflowConfig;
 }
 
-export interface ClientChecklistItem {
+
+export interface JournalLifecycleEvent {
   id: string;
-  label: string;
-  type: 'document' | 'input' | 'step';
-  required: boolean;
-  description?: string;
+  fromStatus: string;
+  toStatus: string;
+  timestamp: string;
+  triggeredBy: string;
+  triggeredById: string;
+  notes?: string;
 }
+
+export type JournalWorkflowStatus = 
+  | 'Draft' 
+  | 'Submission' 
+  | 'Review' 
+  | 'Revision' 
+  | 'Accepted' 
+  | 'Copyediting' 
+  | 'Production' 
+  | 'Published' 
+  | 'Archived';
+
 
 export interface EmployeeTaskTemplate {
   id: string;
@@ -642,6 +887,9 @@ export interface EmployeeTaskTemplate {
   department: 'Technical' | 'Accounts' | 'Editorial' | 'General';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   daysToComplete: number;
+  assignedRole: UserRole;
+  points: number;
+  order: number;
 }
 
 export interface ServiceDefinition extends AuditFields {
@@ -689,14 +937,32 @@ export interface ClientService extends AuditFields {
       completedAt?: string;
     }
   };
-  clientChecklistProgress?: { [key: string]: any };
-  employeeTaskIds?: string[];
+  clientChecklistProgress: { [key: string]: any };
+  employeeTaskIds: string[];
   invoiceId?: string;
   isActivated: boolean;
   totalAmount: number;
   employeeEarnings: number;
   companyProfit: number;
   currency: 'USD' | 'PKR';
+  workflowHistory: {
+    action: string;
+    timestamp: string;
+    user: string;
+    details: string;
+  }[];
+}
+
+export interface Commission extends AuditFields {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  amount: number;
+  currency: 'USD' | 'PKR';
+  sourceType: 'service' | 'referral' | 'other';
+  sourceId: string; // ClientService ID or Order ID
+  status: 'pending' | 'approved' | 'paid' | 'cancelled';
+  notes?: string;
 }
 
 export interface EmploymentPeriod {
@@ -719,6 +985,47 @@ export interface EmployeePerformance {
   reworkRate: number;
 }
 
+export interface PayrollRecord extends AuditFields {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  month: number; // 0-11
+  year: number;
+  pointsEarned: number;
+  pointsValue: number; // pointsEarned * pointRate
+  baseSalary: number;
+  grossSalary: number; // max(pointsValue, baseSalary)
+  bonus?: number;
+  deductions?: number;
+  netSalary: number; // gross + bonus - deductions
+  paidAmount: number;
+  balance: number;
+  status: 'pending' | 'partially_paid' | 'paid' | 'overdue';
+}
+
+export interface SalaryPayment extends AuditFields {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  payrollId?: string; // Optional if it's a general advance
+  amount: number;
+  amountUSD: number;
+  amountPKR: number;
+  usdPkrRate: number;
+  currency: 'USD' | 'PKR';
+  date: string;
+  type: 'salary' | 'advance' | 'bonus' | 'commission';
+  method: 'Bank Transfer' | 'Cash' | 'Online' | 'Cheque';
+  reference?: string;
+  notes?: string;
+}
+
+export interface DashboardCardConfig {
+  id: string;
+  isVisible: boolean;
+  order: number;
+}
+
 export interface User {
   id: string;
   uid?: string;
@@ -727,16 +1034,20 @@ export interface User {
   email: string;
   role: UserRole;
   points: number;
+  totalEarnedPoints?: number;
+  totalWithdrawnPoints?: number;
   photoURL?: string;
   phone?: string;
   address?: string;
   status?: ClientStatus;
   subscriptions?: Subscription[];
+  serviceSubscriptions?: UserServiceSubscriptions;
   createdAt: any;
   updatedAt?: any;
   columnPreferences?: {
     [tabId: string]: string[];
   };
+  dashboardConfig?: DashboardCardConfig[];
   // DOI specific preferences
   doiColumnPreferences?: string[];
   // Employee specific fields
@@ -758,6 +1069,8 @@ export interface User {
   endingDate?: string;
   experience?: string;
   employmentHistory?: EmploymentPeriod[];
+  baseSalary?: number;
+  baseSalaryCurrency?: 'USD' | 'PKR';
   officialMailPassword?: string;
   pcAllotted?: string;
   pcUsername?: string;
@@ -868,14 +1181,26 @@ export interface IndexingJournalDetails {
 
 export interface OJSJournalDetails {
   url?: string;
+  adminUrl?: string;
   version?: string;
   installationDate?: string;
-  hostingStatus?: 'Active' | 'Inactive' | 'Pending';
+  hostingStatus?: 'Active' | 'Inactive' | 'Pending' | string;
   adminCredentials?: {
     username?: string;
     password?: string;
   };
   supportStatus?: string;
+  phpVersion?: string;
+  databaseName?: string;
+  notes?: string;
+}
+
+export interface ClientHistoryEntry {
+  clientId: string;
+  clientName?: string;
+  startDate: string;
+  endDate?: string;
+  remarks?: string;
 }
 
 export interface Publisher {
@@ -888,6 +1213,10 @@ export interface Publisher {
   address?: string;
   secpRegistration: string;
   ntn: string;
+  secpLoginUrl?: string;
+  loginUsername?: string;
+  usernameForPublisher?: string;
+  loginPassword?: string;
   documents: {
     aoa?: string;
     moa?: string;
@@ -898,6 +1227,7 @@ export interface Publisher {
     certificates?: string[];
   };
   createdAt: string;
+  clientHistory?: ClientHistoryEntry[];
 }
 
 export interface DOAJApplication extends AuditFields {
@@ -916,6 +1246,7 @@ export interface DOAJApplication extends AuditFields {
   objectionReason?: string;
   objectionDate?: string;
   remarks?: string;
+  journalId?: string;
 }
 
 export interface HECEntry extends AuditFields {
@@ -957,13 +1288,55 @@ export interface EmployeeFieldPermission {
 
 export type InvoiceStatus = 'draft' | 'sent' | 'viewed' | 'unpaid' | 'partially_paid' | 'paid' | 'overdue' | 'void';
 
+export interface PaymentReceived extends AuditFields {
+  id: string;
+  clientId?: string;
+  clientName?: string;
+  journalId?: string;
+  journalTitle?: string;
+  taskId?: string;
+  taskTitle?: string;
+  amount: number; // positive (+)
+  currency?: 'USD' | 'PKR';
+  date: string;
+  method?: 'Bank Transfer' | 'Cash' | 'Credit Card' | 'Cheque' | 'Online/Stripe' | 'Adjustment' | 'Other';
+  reference?: string;
+  category?: 'Subscription' | 'OJS Setup' | 'ISSN' | 'ISSN Application' | 'DOI' | 'DOI Registration' | 'Hosting/Domain' | 'Hosting / Domain' | 'Editorial' | 'Editorial Services' | 'Other Revenue' | 'Other' | string;
+  notes?: string;
+  recordedBy?: string;
+  recordedById?: string;
+  status?: 'Cleared' | 'Pending' | 'Refunded';
+}
+
+export interface TaskCostRecord extends AuditFields {
+  id: string;
+  taskId?: string;
+  taskTitle?: string;
+  clientId?: string;
+  clientName?: string;
+  journalId?: string;
+  journalTitle?: string;
+  assignedEmployeeId?: string;
+  assignedEmployeeName?: string;
+  costAmount: number; // cost (-)
+  costDate: string;
+  category?: 'Employee Task Fee' | 'OJS Setup' | 'ISSN Application' | 'DOI Registration' | 'Hosting / Domain' | 'Editorial Services' | 'Hosting/Server' | 'Domain Renewal' | 'Indexing Fee' | 'Editorial/Design' | 'Outsourcing' | 'Third-party Vendor' | 'Other' | string;
+  notes?: string;
+  recordedBy?: string;
+  recordedById?: string;
+}
+
 export interface Payment {
   id: string;
   invoiceId: string;
   clientId: string;
   amount: number;
+  amountUSD?: number;
+  amountPKR?: number;
+  usdPkrRate?: number;
   date: string;
   method: 'Bank Transfer' | 'Cash' | 'Online' | 'Cheque' | 'Adjustment';
+  currency: 'USD' | 'PKR';
   reference: string;
   notes?: string;
   recordedBy: string;
@@ -983,6 +1356,10 @@ export interface InvoiceItem {
   serviceType?: ServiceType;
   journalId?: string;
   domainId?: string;
+  billingType: 'one-time' | 'recurring';
+  interval?: 'monthly' | 'quarterly' | 'annually';
+  nextRenewalDate?: string;
+  isActive?: boolean;
 }
 
 export interface RecurringDetails {
@@ -1002,12 +1379,17 @@ export interface Invoice extends AuditFields {
   dueDate: string;
   date: string; // fallback for issueDate
   currency: 'USD' | 'PKR';
+  amountUSD: number;
+  amountPKR: number;
+  usdPkrRate: number;
   items: InvoiceItem[];
   subtotal: number;
   taxTotal: number;
   discountTotal: number;
   total: number;
   balance: number;
+  balanceUSD?: number;
+  balancePKR?: number;
   status: InvoiceStatus;
   billingType: 'one-time' | 'recurring';
   recurringDetails?: RecurringDetails;
@@ -1097,6 +1479,7 @@ export interface DOIApplication extends AuditFields {
   remarks?: string;
   
   status: 'Pending' | 'Approved' | 'Rejected' | 'Completed';
+  members?: { name: string; affiliation: string; email: string; phone: string; }[];
 }
 
 export interface DOI {
@@ -1124,6 +1507,7 @@ export interface DOI {
   sponsoringOrgUrl?: string;
   sponsoringOrgPubUrl?: string;
   remarks?: string;
+  members?: { name: string; affiliation: string; email: string; phone: string; }[];
 }
 
 export interface DOIPayment {
@@ -1203,6 +1587,9 @@ export interface Expense extends AuditFields {
   endDate?: string;
   amount: number;
   currency: 'USD' | 'PKR';
+  amountUSD: number;
+  amountPKR: number;
+  usdPkrRate: number;
   taxAmount: number;
   attachmentUrl?: string;
   notes?: string;

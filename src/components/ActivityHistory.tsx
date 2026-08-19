@@ -43,7 +43,7 @@ export const ActivityHistory: React.FC<ActivityHistoryProps> = ({ currentUser })
     let q = query(
       collection(db, 'activity_logs'), 
       orderBy('timestamp', 'desc'),
-      limit(500)
+      limit(1000)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -162,14 +162,14 @@ export const ActivityHistory: React.FC<ActivityHistoryProps> = ({ currentUser })
   };
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
-            <History className="text-indigo-600" size={32} />
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-3">
+            <History className="text-indigo-600 dark:text-indigo-400" size={32} />
             Activity History
           </h2>
-          <p className="text-slate-500 mt-1">Audit log of all actions performed in the CRM system.</p>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Audit log of all actions performed in the CRM system.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -206,13 +206,13 @@ export const ActivityHistory: React.FC<ActivityHistoryProps> = ({ currentUser })
             type="text"
             placeholder="Search by user, action or details..."
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
         <div className="flex items-center gap-4">
           <select
-            value={filterType}
+            value={filterType || ''}
             onChange={(e) => setFilterType(e.target.value)}
             className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
           >

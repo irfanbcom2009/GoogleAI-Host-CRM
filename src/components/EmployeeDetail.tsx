@@ -32,19 +32,23 @@ import {
   MinusCircle,
   ChevronRight,
   Info,
-  X
+  X,
+  Trash2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { User as CRMUser, Task, UserRole, EmploymentPeriod } from '../types';
+import { User as CRMUser, Task, UserRole, EmploymentPeriod, GlobalSettings } from '../types';
 import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, doc, updateDoc, serverTimestamp, addDoc, deleteDoc } from 'firebase/firestore';
 import { Modal } from './Modal';
 import { EmployeeEditForm } from './EmployeeEditForm';
 
 import { FloatingActionBar } from './FloatingActionBar';
 import { toast } from 'react-hot-toast';
 import { usePermissions } from '../hooks/usePermissions';
+import { DEFAULT_IMAGES } from '../constants/images';
 
 interface EmployeeDetailProps {
   employee: CRMUser;
@@ -54,6 +58,11 @@ interface EmployeeDetailProps {
 }
 
 export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack, currentUser, onImpersonate }) => {
+  const isTaiba = (val: string | undefined) => {
+    if (!val) return false;
+    return val.toLowerCase().includes('taiba@0045');
+  };
+
   const { check } = usePermissions(currentUser);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,11 +71,53 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
   const [isRehiring, setIsRehiring] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [showMailPassword, setShowMailPassword] = useState(false);
   const [editData, setEditData] = useState<CRMUser>(employee);
   const [history, setHistory] = useState<EmploymentPeriod[]>([]);
   const [isRejoiningModalOpen, setIsRejoiningModalOpen] = useState(false);
   const [isClosingModalOpen, setIsClosingModalOpen] = useState(false);
+  const [isEditHistoryModalOpen, setIsEditHistoryModalOpen] = useState(false);
+  const [isConfirmingDeleteHistory, setIsConfirmingDeleteHistory] = useState(false);
+  const [selectedHistoryRecord, setSelectedHistoryRecord] = useState<EmploymentPeriod | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [allDocTasks, setAllDocTasks] = useState<Task[]>([]);
+  const [selectedAttachedTaskIds, setSelectedAttachedTaskIds] = useState<string[]>([]);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+
+  useEffect(() => {
+    const fetchSettings = () => {
+      const unsubscribe = onSnapshot(doc(db, 'settings', 'global'), (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.data() as GlobalSettings;
+          setGlobalSettings({
+            ...data,
+            departments: Array.isArray(data.departments) ? data.departments : []
+          });
+        }
+      });
+      return unsubscribe;
+    };
+    return fetchSettings();
+  }, []);
+
+  useEffect(() => {
+    if (tasks) {
+      setSelectedAttachedTaskIds(tasks.map(t => t.id));
+    }
+  }, [tasks, isEditing]);
+
+  useEffect(() => {
+    if (currentUser.role === 'Admin' || currentUser.role === 'Manager') {
+      const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Task[];
+        setAllDocTasks(list);
+      }, (error) => {
+        console.error("Error fetching all tasks for assignment selection:", error);
+      });
+      return () => unsubscribe();
+    }
+  }, [currentUser.role]);
 
   useEffect(() => {
     const q = query(
@@ -132,6 +183,30 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
         ...editData,
         updatedAt: serverTimestamp()
       });
+
+      // Update attached tasks
+      const originalTaskIds = tasks.map(t => t.id);
+      const tasksToAttach = selectedAttachedTaskIds.filter(id => !originalTaskIds.includes(id));
+      const tasksToDetach = originalTaskIds.filter(id => !selectedAttachedTaskIds.includes(id));
+
+      const attachPromises = tasksToAttach.map(async (taskId) => {
+        await updateDoc(doc(db, 'tasks', taskId), {
+          assignedTo: employee.id,
+          assignedToName: employee.name,
+          updatedAt: serverTimestamp()
+        });
+      });
+
+      const detachPromises = tasksToDetach.map(async (taskId) => {
+        await updateDoc(doc(db, 'tasks', taskId), {
+          assignedTo: '',
+          assignedToName: 'Unassigned',
+          updatedAt: serverTimestamp()
+        });
+      });
+
+      await Promise.all([...attachPromises, ...detachPromises]);
+
       setIsEditing(false);
       toast.success('Profile updated successfully');
     } catch (error) {
@@ -213,6 +288,89 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
     }
   };
 
+  const handleUpdateHistoryRecord = async (id: string, data: { joinDate: string; leaveDate: string | null; status: 'Active' | 'Closed'; reason: any; notes?: string }) => {
+    setIsSaving(true);
+    try {
+      await updateDoc(doc(db, 'employment_history', id), {
+        joinDate: data.joinDate,
+        leaveDate: data.leaveDate || null,
+        status: data.status,
+        reason: data.reason,
+        notes: data.notes || '',
+        updatedAt: serverTimestamp()
+      });
+
+      // Recalculate newest cycle status and update main user document
+      const updatedHistory = history.map(h => h.id === id ? {
+        ...h,
+        joinDate: data.joinDate,
+        leaveDate: data.leaveDate || null,
+        status: data.status,
+        reason: data.reason,
+        notes: data.notes || ''
+      } : h);
+
+      const sortedHistory = [...updatedHistory].sort((a, b) => new Date(b.joinDate).getTime() - new Date(a.joinDate).getTime());
+
+      if (sortedHistory.length > 0) {
+        const latest = sortedHistory[0];
+        await updateDoc(doc(db, 'users', employee.id), {
+          joiningDate: latest.joinDate,
+          endingDate: latest.status === 'Active' ? '' : (latest.leaveDate || ''),
+          status: latest.status === 'Active' ? 'active' : 'inactive',
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(doc(db, 'users', employee.id), {
+          endingDate: '',
+          status: 'active',
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      toast.success('Employment record updated successfully.');
+      setIsEditHistoryModalOpen(false);
+      setSelectedHistoryRecord(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'employment_history');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteHistoryRecord = async (id: string, bypassConfirm = false) => {
+    if (!bypassConfirm && !window.confirm("Are you sure you want to delete this employment history record? This action cannot be undone.")) return false;
+    setIsSaving(true);
+    try {
+      await deleteDoc(doc(db, 'employment_history', id));
+      toast.success('Employment history record deleted successfully.');
+
+      // Update main user document based on remaining history
+      const remainingHistory = history.filter(h => h.id !== id);
+      if (remainingHistory.length > 0) {
+        const latest = remainingHistory[0];
+        await updateDoc(doc(db, 'users', employee.id), {
+          joiningDate: latest.joinDate,
+          endingDate: latest.status === 'Active' ? '' : (latest.leaveDate || ''),
+          status: latest.status === 'Active' ? 'active' : 'inactive',
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(doc(db, 'users', employee.id), {
+          endingDate: '',
+          status: 'active',
+          updatedAt: serverTimestamp()
+        });
+      }
+      return true;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'employment_history');
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleTogglePortal = async () => {
     setIsUpdatingPortal(true);
     try {
@@ -262,7 +420,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      className="p-8 space-y-8 max-w-7xl mx-auto"
+      className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12"
     >
       <div className="flex items-center justify-between">
         <button 
@@ -316,7 +474,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center space-y-6">
             <div className="relative inline-block group">
               <img 
-                src={employee.photoURL || employee.attachments?.photo || `https://api.dicebear.com/7.x/avataaars/svg?seed=${employee.name}`} 
+                src={employee.photoURL || employee.attachments?.photo || (employee.gender === 'Female' ? DEFAULT_IMAGES.FEMALE_STAFF : `https://api.dicebear.com/7.x/avataaars/svg?seed=${employee.name}`)} 
                 className={cn(
                   "w-32 h-32 rounded-full bg-slate-100 border-4 border-white shadow-xl mx-auto object-cover transition-all",
                   isEditing && "ring-4 ring-indigo-500 ring-offset-4"
@@ -341,7 +499,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                   <input 
                     type="text"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xl font-black text-center"
-                    value={editData.name}
+                    value={editData.name || ''}
                     onChange={e => setEditData(prev => ({ ...prev, name: e.target.value }))}
                     placeholder="Full Name"
                   />
@@ -363,7 +521,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                 <input 
                   type="email"
                   className="w-full px-4 py-1 mt-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm text-center"
-                  value={editData.email}
+                  value={editData.email || ''}
                   onChange={e => setEditData(prev => ({ ...prev, email: e.target.value }))}
                   placeholder="Email Address"
                 />
@@ -384,7 +542,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
               {isEditing ? (
                 <select 
                   className="px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider bg-slate-50 border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={editData.role}
+                  value={editData.role || ''}
                   onChange={e => setEditData(prev => ({ ...prev, role: e.target.value as any }))}
                 >
                   <option value="Employee">Employee</option>
@@ -402,7 +560,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
               {isEditing ? (
                 <select 
                   className="px-3 py-1 rounded-full text-xs font-bold border border-slate-200 bg-slate-50 text-slate-600 uppercase tracking-wider focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={editData.modeOfWorking}
+                  value={editData.modeOfWorking || ''}
                   onChange={e => setEditData(prev => ({ ...prev, modeOfWorking: e.target.value as any }))}
                 >
                   <option value="On-site">On-site</option>
@@ -511,6 +669,15 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                   <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-400" />
                 </a>
               )}
+              {employee.attachments?.photo && (
+                <a href={employee.attachments.photo} target="_blank" rel="noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-indigo-50 transition-all group">
+                  <div className="flex items-center gap-2">
+                    <User size={16} className="text-slate-400 group-hover:text-indigo-600" />
+                    <span className="text-xs font-bold text-slate-700">Employee Photo</span>
+                  </div>
+                  <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-400" />
+                </a>
+              )}
               {employee.attachments?.cnicScanned && (
                 <a href={employee.attachments.cnicScanned} target="_blank" rel="noreferrer" className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-indigo-50 transition-all group">
                   <div className="flex items-center gap-2">
@@ -529,7 +696,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                   <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-400" />
                 </a>
               ))}
-              {!employee.attachments?.cv && !employee.attachments?.cnicScanned && (
+              {!employee.attachments?.cv && !employee.attachments?.cnicScanned && !employee.attachments?.photo && (!employee.attachments?.otherDocs || employee.attachments.otherDocs.length === 0) && (
                 <p className="text-xs text-slate-400 italic text-center py-4">No documents attached</p>
               )}
             </div>
@@ -554,12 +721,19 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Department</p>
                       {isEditing ? (
-                        <input 
-                          type="text"
+                        <select 
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.department}
+                          value={editData.department || ''}
                           onChange={e => setEditData(prev => ({ ...prev, department: e.target.value }))}
-                        />
+                        >
+                          <option value="">Select Department</option>
+                          {((globalSettings?.departments && globalSettings.departments.length > 0)
+                            ? globalSettings.departments
+                            : ['Management', 'Editorial', 'Technical', 'Sales', 'Support', 'Finance', 'HR', 'IT', 'Marketing', 'Operations']
+                          ).map(dept => (
+                            <option key={dept} value={dept}>{dept}</option>
+                          ))}
+                        </select>
                       ) : (
                         <p className="text-sm font-bold text-slate-900">{employee.department || 'N/A'}</p>
                       )}
@@ -572,14 +746,67 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Assignments</p>
                       {isEditing ? (
-                        <input 
-                          type="text"
-                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.assignments}
-                          onChange={e => setEditData(prev => ({ ...prev, assignments: e.target.value }))}
-                        />
+                        <div className="space-y-2 mt-1 min-w-[300px] max-w-md border border-slate-200 rounded-xl p-3 bg-white shadow-inner max-h-60 overflow-y-auto">
+                          <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2">Attach System Tasks</p>
+                          {allDocTasks.map((t) => {
+                            return (
+                              <label key={t.id} className="flex items-start gap-3 py-1.5 px-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors border-b border-slate-50 last:border-0">
+                                <input 
+                                  type="checkbox"
+                                  className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 mt-1"
+                                  checked={selectedAttachedTaskIds.includes(t.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedAttachedTaskIds(prev => [...prev, t.id]);
+                                    } else {
+                                      setSelectedAttachedTaskIds(prev => prev.filter(id => id !== t.id));
+                                    }
+                                  }}
+                                />
+                                <div className="text-xs">
+                                  <p className="font-bold text-slate-800">{t.title}</p>
+                                  <p className="text-[10px] text-slate-500 font-mono uppercase">
+                                    {t.serviceType} • {t.dueDate}
+                                    {t.assignedTo && t.assignedTo !== employee.id ? ` (Currently: ${t.assignedToName})` : ''}
+                                  </p>
+                                </div>
+                              </label>
+                            );
+                          })}
+                          {allDocTasks.length === 0 && (
+                            <p className="text-xs text-slate-400 italic font-medium">No tasks found in the system</p>
+                          )}
+                          <div className="pt-2 border-t border-slate-100">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Custom Description Note (Fallback)</p>
+                            <input 
+                              type="text"
+                              className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-xs font-bold"
+                              value={editData.assignments || ''}
+                              onChange={e => setEditData(prev => ({ ...prev, assignments: e.target.value }))}
+                              placeholder="Optional free-form notes..."
+                            />
+                          </div>
+                        </div>
                       ) : (
-                        <p className="text-sm font-bold text-slate-900">{employee.assignments || 'N/A'}</p>
+                        <div className="space-y-1.5 mt-1">
+                          {employee.assignments && (
+                            <p className="text-sm font-semibold text-slate-700">{employee.assignments}</p>
+                          )}
+                          <div className="flex flex-col gap-1">
+                            {tasks.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {tasks.map(t => (
+                                  <span key={t.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100">
+                                    <Briefcase size={12} className="shrink-0 text-indigo-500" />
+                                    {t.title}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-slate-400 italic">No attached system tasks</span>
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -593,7 +820,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.qualification}
+                          value={editData.qualification || ''}
                           onChange={e => setEditData(prev => ({ ...prev, qualification: e.target.value }))}
                         />
                       ) : (
@@ -614,7 +841,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="date"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={formatDateForInput(editData.joiningDate)}
+                          value={formatDateForInput(editData.joiningDate) || ''}
                           onChange={e => setEditData(prev => ({ ...prev, joiningDate: e.target.value }))}
                         />
                       ) : (
@@ -629,12 +856,24 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     <div>
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ending Date</p>
                       {isEditing ? (
-                        <input 
-                          type="date"
-                          className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={formatDateForInput(editData.endingDate)}
-                          onChange={e => setEditData(prev => ({ ...prev, endingDate: e.target.value }))}
-                        />
+                        <div className="flex items-center gap-1">
+                          <input 
+                            type="date"
+                            className="flex-1 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                            value={formatDateForInput(editData.endingDate) || ''}
+                            onChange={e => setEditData(prev => ({ ...prev, endingDate: e.target.value }))}
+                          />
+                          {editData.endingDate && (
+                            <button
+                              type="button"
+                              onClick={() => setEditData(prev => ({ ...prev, endingDate: '' }))}
+                              className="p-1 text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg shrink-0"
+                              title="Clear Ending Date"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <p className="text-sm font-bold text-slate-900">{employee.endingDate || 'N/A'}</p>
                       )}
@@ -650,7 +889,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.experience}
+                          value={editData.experience || ''}
                           onChange={e => setEditData(prev => ({ ...prev, experience: e.target.value }))}
                         />
                       ) : (
@@ -667,13 +906,12 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                       {isEditing ? (
                         <select 
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.gender}
+                          value={editData.gender || ''}
                           onChange={e => setEditData(prev => ({ ...prev, gender: e.target.value as any }))}
                         >
                           <option value="">Select</option>
                           <option value="Male">Male</option>
                           <option value="Female">Female</option>
-                          <option value="Other">Other</option>
                         </select>
                       ) : (
                         <p className="text-sm font-bold text-slate-900">{employee.gender || 'N/A'}</p>
@@ -693,7 +931,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="email"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.officialMail}
+                          value={editData.officialMail || ''}
                           onChange={e => setEditData(prev => ({ ...prev, officialMail: e.target.value }))}
                         />
                       ) : (
@@ -712,17 +950,48 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                       <div className="p-2 bg-slate-50 text-slate-400 rounded-lg">
                         <Lock size={18} />
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mail Password</p>
                         {isEditing ? (
-                          <input 
-                            type="text"
-                            className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                            value={editData.officialMailPassword}
-                            onChange={e => setEditData(prev => ({ ...prev, officialMailPassword: e.target.value }))}
-                          />
+                          <div className="relative max-w-xs">
+                            <input 
+                              type={showMailPassword ? "text" : "password"}
+                              className="w-full pl-2 pr-8 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
+                              value={editData.officialMailPassword || ''}
+                              onChange={e => setEditData(prev => ({ ...prev, officialMailPassword: e.target.value }))}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowMailPassword(prev => !prev)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors"
+                            >
+                              {showMailPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
                         ) : (
-                          <p className="text-sm font-bold text-slate-900">{employee.officialMailPassword}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-bold text-slate-900 font-mono">
+                              {showMailPassword ? (
+                                isTaiba(employee.officialMailPassword) && currentUser.role !== 'Admin' ? '••••••••' : employee.officialMailPassword
+                              ) : (
+                                '••••••••'
+                              )}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isTaiba(employee.officialMailPassword) && currentUser.role !== 'Admin') {
+                                  toast.error('Access Denied');
+                                  return;
+                                }
+                                setShowMailPassword(prev => !prev);
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600 rounded transition-colors"
+                              title={showMailPassword ? "Hide password" : "Show password"}
+                            >
+                              {showMailPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -737,7 +1006,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="email"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.personalEmail}
+                          value={editData.personalEmail || ''}
                           onChange={e => setEditData(prev => ({ ...prev, personalEmail: e.target.value }))}
                         />
                       ) : (
@@ -761,7 +1030,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.cnic}
+                          value={editData.cnic || ''}
                           onChange={e => setEditData(prev => ({ ...prev, cnic: e.target.value }))}
                         />
                       ) : (
@@ -779,7 +1048,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.whatsappPersonal}
+                          value={editData.whatsappPersonal || ''}
                           onChange={e => setEditData(prev => ({ ...prev, whatsappPersonal: e.target.value }))}
                         />
                       ) : (
@@ -808,7 +1077,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.homePhone}
+                          value={editData.homePhone || ''}
                           onChange={e => setEditData(prev => ({ ...prev, homePhone: e.target.value }))}
                         />
                       ) : (
@@ -837,7 +1106,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     {isEditing ? (
                       <textarea 
                         className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
-                        value={editData.address}
+                        value={editData.address || ''}
                         onChange={e => setEditData(prev => ({ ...prev, address: e.target.value }))}
                       />
                     ) : (
@@ -854,7 +1123,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     {isEditing ? (
                       <textarea 
                         className="w-full px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-20 resize-none"
-                        value={editData.remarks}
+                        value={editData.remarks || ''}
                         onChange={e => setEditData(prev => ({ ...prev, remarks: e.target.value }))}
                       />
                     ) : (
@@ -876,7 +1145,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                       <input 
                         type="text"
                         className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                        value={editData.pcAllotted}
+                        value={editData.pcAllotted || ''}
                         onChange={e => setEditData(prev => ({ ...prev, pcAllotted: e.target.value }))}
                       />
                     ) : (
@@ -895,7 +1164,7 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.pcUsername}
+                          value={editData.pcUsername || ''}
                           onChange={e => setEditData(prev => ({ ...prev, pcUsername: e.target.value }))}
                         />
                       ) : (
@@ -915,11 +1184,35 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                         <input 
                           type="text"
                           className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold"
-                          value={editData.pcPassword}
+                          value={editData.pcPassword || ''}
                           onChange={e => setEditData(prev => ({ ...prev, pcPassword: e.target.value }))}
                         />
                       ) : (
-                        <p className="text-sm font-bold text-slate-900">{employee.pcPassword}</p>
+                        <div className="flex items-center gap-2">
+                          <p 
+                            onClick={() => {
+                              if (currentUser.role !== 'Admin') {
+                                toast.error('Only Admins can copy passwords');
+                                return;
+                              }
+                              if (employee.pcPassword) {
+                                if (isTaiba(employee.pcPassword)) {
+                                  toast.error('Access Denied');
+                                  return;
+                                }
+                                navigator.clipboard.writeText(employee.pcPassword);
+                                toast.success('PC Password copied!');
+                              }
+                            }}
+                            className={`text-sm font-bold text-slate-900 transition-colors flex items-center gap-2 group ${currentUser.role === 'Admin' ? 'cursor-pointer hover:text-indigo-600' : 'cursor-not-allowed'}`}
+                            title={currentUser.role === 'Admin' ? "Click to copy password" : "Copy restricted to Admin"}
+                          >
+                            <span className="font-mono">••••••••</span>
+                            {currentUser.role === 'Admin' && (
+                              <span className="text-[8px] font-black uppercase text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-slate-100 px-1.5 py-0.5 rounded">Click to Copy</span>
+                            )}
+                          </p>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -969,6 +1262,9 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                     <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Status</th>
                     <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Reason</th>
                     <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">Notes</th>
+                    {currentUser.role === 'Admin' && (
+                      <th className="py-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4 text-right">Actions</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
@@ -1037,12 +1333,27 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
                             <span className="text-slate-300 italic text-[10px]">--</span>
                           )}
                         </td>
+                        {currentUser.role === 'Admin' && (
+                          <td className="py-4 px-4 text-right space-x-1">
+                            <button 
+                              onClick={() => {
+                                setSelectedHistoryRecord(record);
+                                setIsEditHistoryModalOpen(true);
+                                setIsConfirmingDeleteHistory(false);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all inline-flex items-center justify-center"
+                              title="Edit Record"
+                            >
+                              <Edit size={14} />
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
                   {history.length === 0 && !historyLoading && (
                     <tr>
-                      <td colSpan={6} className="py-20 text-center text-slate-400 bg-slate-50/30 rounded-3xl">
+                      <td colSpan={currentUser.role === 'Admin' ? 7 : 6} className="py-20 text-center text-slate-400 bg-slate-50/30 rounded-3xl">
                         <History size={48} className="mx-auto mb-4 opacity-10" />
                         <p className="text-sm font-black text-slate-500">No employment history found.</p>
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Maintenance records will appear here</p>
@@ -1314,6 +1625,145 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({ employee, onBack
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Employment History Modal */}
+      <Modal
+        isOpen={isEditHistoryModalOpen}
+        onClose={() => {
+          setIsEditHistoryModalOpen(false);
+          setSelectedHistoryRecord(null);
+          setIsConfirmingDeleteHistory(false);
+        }}
+        title="Edit Employment Record"
+      >
+        {selectedHistoryRecord && (
+          <form 
+            key={selectedHistoryRecord.id}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              handleUpdateHistoryRecord(selectedHistoryRecord.id, {
+                joinDate: formData.get('joinDate') as string,
+                leaveDate: (formData.get('leaveDate') as string) || null,
+                status: formData.get('status') as 'Active' | 'Closed',
+                reason: formData.get('reason') as any,
+                notes: formData.get('notes') as string
+              });
+            }} 
+            className="p-6 space-y-6"
+          >
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Join Date</label>
+                <input 
+                  name="joinDate"
+                  type="date"
+                  required
+                  defaultValue={selectedHistoryRecord.joinDate}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-900"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Leave Date</label>
+                <input 
+                  name="leaveDate"
+                  type="date"
+                  defaultValue={selectedHistoryRecord.leaveDate || ''}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-900"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Status</label>
+                <select 
+                  name="status"
+                  required
+                  defaultValue={selectedHistoryRecord.status}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-900"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Closed">Closed</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500 uppercase">Reason</label>
+                <select 
+                  name="reason"
+                  required
+                  defaultValue={selectedHistoryRecord.reason}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-900"
+                >
+                  <option value="First Join">First Join</option>
+                  <option value="Rejoined">Rejoined</option>
+                  <option value="Resigned">Resigned</option>
+                  <option value="Terminated">Terminated</option>
+                  <option value="Contract End">Contract End</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 uppercase">Notes</label>
+              <textarea 
+                name="notes"
+                defaultValue={selectedHistoryRecord.notes || ''}
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-medium h-24 resize-none text-slate-900"
+                placeholder="Details about this employment cycle..."
+              />
+            </div>
+
+            <div className="flex gap-3">
+              {currentUser.role === 'Admin' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!isConfirmingDeleteHistory) {
+                      setIsConfirmingDeleteHistory(true);
+                    } else {
+                      const success = await handleDeleteHistoryRecord(selectedHistoryRecord.id, true);
+                      if (success) {
+                        setIsEditHistoryModalOpen(false);
+                        setSelectedHistoryRecord(null);
+                        setIsConfirmingDeleteHistory(false);
+                      }
+                    }
+                  }}
+                  disabled={isSaving}
+                  className={`px-4 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 border ${
+                    isConfirmingDeleteHistory 
+                      ? "bg-rose-600 text-white hover:bg-rose-700 border-rose-600 shadow-lg shadow-rose-500/20" 
+                      : "bg-rose-50 text-rose-600 hover:bg-rose-100 border-rose-100"
+                  }`}
+                >
+                  <Trash2 size={18} />
+                  {isConfirmingDeleteHistory ? "Confirm Delete?" : "Delete"}
+                </button>
+              )}
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsEditHistoryModalOpen(false);
+                  setSelectedHistoryRecord(null);
+                  setIsConfirmingDeleteHistory(false);
+                }}
+                className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all text-center"
+              >
+                Cancel
+              </button>
+              <button 
+                type="submit"
+                disabled={isSaving}
+                className="flex-1 p-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2"
+              >
+                {isSaving ? <Loader2 className="animate-spin" size={18} /> : <CheckCircle2 size={18} />}
+                Save Changes
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
     </motion.div>
   );

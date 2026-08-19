@@ -1,6 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -41,16 +43,36 @@
   .dark body {
     @apply text-slate-100 bg-slate-950;
   }
+
+  /* Form controls color correction */
+  input, select, textarea {
+    color: #0f172a;
+    background-color: #ffffff;
+    border-color: #cbd5e1;
+  }
+
+  .dark input, 
+  .dark select, 
+  .dark textarea {
+    color: #f8fafc !important;
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
+  }
+
+  .dark input::placeholder,
+  .dark textarea::placeholder {
+    color: #64748b !important;
+  }
 }
 
 @layer components {
   /* Common CRM UI Patterns */
   .crm-card {
-    @apply bg-white border border-slate-100/80 shadow-sm rounded-3xl transition-all duration-300;
+    @apply bg-white dark:bg-slate-900 border border-slate-100/80 dark:border-slate-800 shadow-sm rounded-3xl transition-all duration-300 text-slate-900 dark:text-slate-100;
   }
   
   .crm-card-hover {
-    @apply hover:shadow-xl hover:shadow-slate-200/50 hover:border-slate-200/50;
+    @apply hover:shadow-xl hover:shadow-slate-200/50 dark:hover:shadow-indigo-500/10 hover:border-slate-200/50 dark:hover:border-slate-700;
   }
 
   .crm-button-primary {
@@ -58,15 +80,15 @@
   }
 
   .crm-input {
-    @apply w-full px-4 py-2.5 bg-slate-50/50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-400;
+    @apply w-full px-4 py-2.5 bg-slate-50/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-400;
   }
 
   .crm-label {
-    @apply text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5 block;
+    @apply text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest mb-1.5 block;
   }
   
   .crm-table-container {
-    @apply bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden;
+    @apply bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-3xl shadow-sm overflow-x-auto;
   }
 
   /* Custom Scrollbar */
@@ -78,13 +100,233 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-slate-200 rounded-full hover:bg-slate-300;
+    @apply bg-slate-200 dark:bg-slate-800 rounded-full hover:bg-slate-300 dark:hover:bg-slate-700;
   }
+
+  /* Fix for select dropdown text color */
+  select option {
+    @apply text-slate-900 dark:text-slate-100 bg-white dark:bg-slate-900;
+  }
+}
+
+/* Color Correction & Dark/Light Mode High-Contrast Rules */
+html:not(.dark) {
+  color: #0f172a;
+}
+
+html:not(.dark) h1,
+html:not(.dark) h2,
+html:not(.dark) h3,
+html:not(.dark) h4,
+html:not(.dark) h5,
+html:not(.dark) h6 {
+  color: #0f172a;
+}
+
+html:not(.dark) .bg-white {
+  color: #0f172a;
+}
+
+/* Ensure light text utilities in light mode on standard light backgrounds are boosted for high visibility */
+html:not(.dark) .text-slate-300,
+html:not(.dark) .text-slate-400,
+html:not(.dark) .text-gray-300,
+html:not(.dark) .text-gray-400,
+html:not(.dark) .text-zinc-300,
+html:not(.dark) .text-zinc-400 {
+  color: #475569 !important;
+}
+
+html:not(.dark) .text-slate-950,
+html:not(.dark) .text-slate-900,
+html:not(.dark) .text-gray-900,
+html:not(.dark) .text-zinc-900 {
+  color: #0f172a !important;
+}
+
+html:not(.dark) .text-slate-800,
+html:not(.dark) .text-gray-800,
+html:not(.dark) .text-zinc-800 {
+  color: #1e293b !important;
+}
+
+html:not(.dark) .text-slate-700,
+html:not(.dark) .text-gray-700,
+html:not(.dark) .text-zinc-700 {
+  color: #334155 !important;
+}
+
+html:not(.dark) .text-slate-600,
+html:not(.dark) .text-gray-600,
+html:not(.dark) .text-zinc-600 {
+  color: #475569 !important;
+}
+
+html:not(.dark) .text-slate-500,
+html:not(.dark) .text-gray-500,
+html:not(.dark) .text-zinc-500 {
+  color: #64748b !important;
+}
+
+/* Dark Mode Universal Contrast Rules */
+.dark,
+.dark body {
+  background-color: #0b0f19 !important;
+  color: #f8fafc !important;
+}
+
+.dark h1,
+.dark h2,
+.dark h3,
+.dark h4,
+.dark h5,
+.dark h6 {
+  color: #f8fafc !important;
+}
+
+.dark .bg-white,
+.dark .bg-slate-50,
+.dark .bg-gray-50,
+.dark .bg-zinc-50 {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+.dark .bg-slate-100,
+.dark .bg-gray-100,
+.dark .bg-zinc-100 {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+}
+
+.dark .bg-slate-200,
+.dark .bg-gray-200,
+.dark .bg-zinc-200 {
+  background-color: #334155 !important;
+  color: #f8fafc !important;
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700,
+.dark .text-gray-950,
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700,
+.dark .text-zinc-950,
+.dark .text-zinc-900,
+.dark .text-zinc-800,
+.dark .text-zinc-700,
+.dark .text-neutral-900,
+.dark .text-black {
+  color: #f8fafc !important;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-gray-600,
+.dark .text-gray-500,
+.dark .text-zinc-600,
+.dark .text-zinc-500 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-slate-400,
+.dark .text-slate-300,
+.dark .text-gray-400,
+.dark .text-gray-300,
+.dark .text-zinc-400,
+.dark .text-zinc-300 {
+  color: #94a3b8 !important;
+}
+
+.dark .border-slate-200,
+.dark .border-slate-100,
+.dark .border-gray-200,
+.dark .border-gray-100 {
+  border-color: #334155 !important;
+}
+
+/* Ensure dark buttons/cards always preserve clear bright white text */
+.bg-slate-800,
+.bg-slate-900,
+.bg-slate-950,
+.bg-indigo-600,
+.bg-indigo-700,
+.bg-indigo-800,
+.bg-emerald-600,
+.bg-emerald-700,
+.bg-rose-600,
+.bg-rose-700,
+.bg-violet-600,
+.bg-purple-600,
+.bg-blue-600,
+.bg-blue-700 {
+  color: #ffffff !important;
+}
+
+/* Ensure dark mode input & select text legibility */
+.dark input, 
+.dark select, 
+.dark textarea {
+  color: #f8fafc !important;
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+.dark select option {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+/* Contrast tuning for status badge elements in light and dark mode */
+span.bg-indigo-50, span.bg-indigo-100 {
+  color: #312e81;
+}
+.dark span.bg-indigo-50, .dark span.bg-indigo-100 {
+  color: #c7d2fe;
+}
+
+span.bg-emerald-50, span.bg-emerald-100 {
+  color: #064e3b;
+}
+.dark span.bg-emerald-50, .dark span.bg-emerald-100 {
+  color: #a7f3d0;
+}
+
+span.bg-amber-50, span.bg-amber-100 {
+  color: #78350f;
+}
+.dark span.bg-amber-50, .dark span.bg-amber-100 {
+  color: #fde68a;
+}
+
+span.bg-rose-50, span.bg-rose-100 {
+  color: #881337;
+}
+.dark span.bg-rose-50, .dark span.bg-rose-100 {
+  color: #fecdd3;
+}
+
+span.bg-blue-50, span.bg-blue-100 {
+  color: #1e3a8a;
+}
+.dark span.bg-blue-50, .dark span.bg-blue-100 {
+  color: #bfdbfe;
+}
+
+span.bg-purple-50, span.bg-purple-100 {
+  color: #581c87;
+}
+.dark span.bg-purple-50, .dark span.bg-purple-100 {
+  color: #e9d5ff;
 }
 
 /* Glass effect refinement */
 .glass-panel {
-  @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-xl;
+  @apply bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-white/20 dark:border-slate-800/20 shadow-xl;
 }
 
 /* Animations */
@@ -96,4 +338,70 @@
 
 .animate-float {
   animation: float 6s ease-in-out infinite;
+}
+
+/* Responsive mobile views for tables specifically opted into card layout */
+@media (max-width: 767px) {
+  /* Tables with explicit mobile-card-table class transform into cards */
+  .mobile-card-table table,
+  table.mobile-card-table {
+    display: block !important;
+    width: 100% !important;
+    border: none !important;
+  }
+  
+  .mobile-card-table thead,
+  table.mobile-card-table thead {
+    display: none !important;
+  }
+  
+  .mobile-card-table tbody,
+  table.mobile-card-table tbody {
+    display: block !important;
+    width: 100% !important;
+  }
+  
+  .mobile-card-table tr,
+  table.mobile-card-table tr {
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 1.25rem !important;
+    border: 1px solid rgba(226, 232, 240, 0.8) !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    gap: 0.75rem !important;
+    border-radius: 1.25rem !important;
+    margin-bottom: 1rem !important;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.02) !important;
+  }
+
+  .dark .mobile-card-table tr,
+  .dark table.mobile-card-table tr {
+    border: 1px solid rgba(51, 65, 85, 0.5) !important;
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+  }
+  
+  .mobile-card-table td,
+  table.mobile-card-table td {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 0.25rem 0 !important;
+    border: none !important;
+    width: 100% !important;
+    min-height: auto !important;
+    text-align: left !important;
+    color: #1e293b !important;
+  }
+
+  .dark .mobile-card-table td,
+  .dark table.mobile-card-table td {
+    color: #f1f5f9 !important;
+  }
+}
+
+/* Ensure smooth native horizontal scrolling for standard responsive tables */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
 }

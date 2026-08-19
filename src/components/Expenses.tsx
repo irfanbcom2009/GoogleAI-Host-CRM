@@ -54,6 +54,7 @@ const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'
 export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -72,6 +73,8 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
     endDate: '',
     amount: 0,
     currency: 'USD' as 'USD' | 'PKR',
+    amountUSD: 0,
+    amountPKR: 0,
     taxAmount: 0,
     attachmentUrl: '',
     notes: '',
@@ -81,6 +84,25 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
   });
 
   const [uploading, setUploading] = useState(false);
+  const [usdPkrRate, setUsdPkrRate] = useState(280);
+
+  // Auto-calculate on amount/currency/rate change
+  useEffect(() => {
+    const amount = newExpense.amount || 0;
+    if (newExpense.currency === 'USD') {
+      setNewExpense(prev => ({ 
+        ...prev, 
+        amountUSD: amount,
+        amountPKR: Number((amount * usdPkrRate).toFixed(2))
+      }));
+    } else {
+      setNewExpense(prev => ({ 
+        ...prev, 
+        amountPKR: amount,
+        amountUSD: Number((amount / usdPkrRate).toFixed(2))
+      }));
+    }
+  }, [newExpense.amount, newExpense.currency, usdPkrRate]);
 
   const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Manager';
 
@@ -91,6 +113,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
           const data = snapshot.data() as GlobalSettings;
           setExpenseHeads(Array.isArray(data.expenseHeads) ? data.expenseHeads : []);
           setOfficeSubscriptions(Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []);
+          if (data.usdPkrRate) setUsdPkrRate(data.usdPkrRate);
         }
       });
       return unsubscribeSettings;
@@ -177,6 +200,8 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
 
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       const nextDueDate = newExpense.isRecurring 
         ? calculateNextDueDate(newExpense.date, newExpense.recurringInterval, newExpense.recurringCustomDays)
@@ -184,6 +209,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
 
       await addDoc(collection(db, 'expenses'), {
         ...newExpense,
+        usdPkrRate,
         date: Timestamp.fromDate(new Date(newExpense.date)),
         nextDueDate,
         createdAt: new Date().toISOString(),
@@ -201,6 +227,8 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
         endDate: '',
         amount: 0,
         currency: 'USD',
+        amountUSD: 0,
+        amountPKR: 0,
         taxAmount: 0,
         attachmentUrl: '',
         notes: '',
@@ -210,6 +238,8 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -302,20 +332,31 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
     return diff >= 0 && diff <= 30; // Count as expiring within 30 days for summary
   });
 
-  const totalUSD = filteredExpenses
-    .filter(e => e.currency === 'USD')
-    .reduce((sum, e) => sum + e.amount + e.taxAmount, 0);
-  
-  const totalPKR = filteredExpenses
-    .filter(e => e.currency === 'PKR')
-    .reduce((sum, e) => sum + e.amount + e.taxAmount, 0);
+  // Total normalized to PKR
+  const totalPKREquiv = filteredExpenses.reduce((sum, e) => {
+    const amount = (e.amountPKR && e.amountPKR > 0) ? e.amountPKR : (e.currency === 'PKR' ? e.amount : e.amount * (e.usdPkrRate || usdPkrRate));
+    const tax = e.taxAmount || 0;
+    const taxPKR = e.currency === 'PKR' ? tax : tax * (e.usdPkrRate || usdPkrRate);
+    return sum + amount + taxPKR;
+  }, 0);
+
+  // Total normalized to USD
+  const totalUSDEquiv = filteredExpenses.reduce((sum, e) => {
+    const amount = (e.amountUSD && e.amountUSD > 0) ? e.amountUSD : (e.currency === 'USD' ? e.amount : e.amount / (e.usdPkrRate || usdPkrRate));
+    const tax = e.taxAmount || 0;
+    const taxUSD = e.currency === 'USD' ? tax : tax / (e.usdPkrRate || usdPkrRate);
+    return sum + amount + taxUSD;
+  }, 0);
 
   // Chart Data
   const categoryData = expenseHeads.map(head => ({
     name: head,
     value: filteredExpenses
       .filter(e => e.head === head)
-      .reduce((sum, e) => sum + (e.currency === 'USD' ? e.amount + e.taxAmount : (e.amount + e.taxAmount) / 280), 0) // Normalize to USD for chart
+      .reduce((sum, e) => {
+        const amount = e.amount + (e.taxAmount || 0);
+        return sum + (e.currency === 'USD' ? amount : amount / usdPkrRate);
+      }, 0) // Normalize to USD for chart
   })).filter(d => d.value > 0);
 
   const monthlyData = Array.from({ length: 6 }, (_, i) => {
@@ -328,24 +369,27 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
       name: monthName,
       amount: filteredExpenses
         .filter(e => e.date.startsWith(monthYear))
-        .reduce((sum, e) => sum + (e.currency === 'USD' ? e.amount + e.taxAmount : (e.amount + e.taxAmount) / 280), 0)
+        .reduce((sum, e) => {
+          const amount = e.amount + (e.taxAmount || 0);
+          return sum + (e.currency === 'USD' ? amount : amount / usdPkrRate);
+        }, 0)
     };
   }).reverse();
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-8 space-y-6 bg-white dark:bg-slate-900 min-h-screen">
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Expense Tracking</h2>
-          <p className="text-slate-500 mt-1">Manage daily business expenses, taxes, and attachments.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Expense Tracking</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Manage daily business expenses, taxes, and attachments.</p>
         </div>
         <div className="flex gap-3">
-          <div className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+          <div className="flex bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-1 shadow-sm">
             <button 
               onClick={() => setViewMode('list')}
               className={cn(
                 "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                viewMode === 'list' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 hover:text-slate-900"
+                viewMode === 'list' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               )}
             >
               <FileText size={16} />
@@ -355,7 +399,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
               onClick={() => setViewMode('summary')}
               className={cn(
                 "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                viewMode === 'summary' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 hover:text-slate-900"
+                viewMode === 'summary' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               )}
             >
               <BarChart3 size={16} />
@@ -365,7 +409,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
               onClick={() => setViewMode('subscriptions')}
               className={cn(
                 "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                viewMode === 'subscriptions' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 hover:text-slate-900"
+                viewMode === 'subscriptions' ? "bg-indigo-600 text-white shadow-md" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
               )}
             >
               <Clock size={16} />
@@ -384,7 +428,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
             <div className="flex gap-2">
               <button 
                 onClick={() => setIsConfigModalOpen(true)}
-                className="p-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm"
+                className="p-2.5 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm"
                 title="Configure Expense Heads"
               >
                 <Settings2 size={20} />
@@ -402,22 +446,22 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm flex items-center gap-4 text-slate-900 dark:text-white">
+          <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl">
             <DollarSign size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">Total Expenses (USD)</p>
-            <h4 className="text-xl font-bold text-slate-900">${(totalUSD || 0).toLocaleString()}</h4>
+            <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Total Expenses (USD Equiv.)</p>
+            <h4 className="text-2xl font-black leading-none mt-1">$ {Math.round(totalUSDEquiv).toLocaleString()}</h4>
           </div>
         </div>
-        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-          <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm flex items-center gap-4 text-slate-900 dark:text-white">
+          <div className="p-3 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-xl">
             <DollarSign size={24} />
           </div>
           <div>
-            <p className="text-sm text-slate-500 font-medium">Total Expenses (PKR)</p>
-            <h4 className="text-xl font-bold text-slate-900">Rs. {(totalPKR || 0).toLocaleString()}</h4>
+            <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Total Expenses (PKR Equiv.)</p>
+            <h4 className="text-2xl font-black leading-none mt-1">Rs. {Math.round(totalPKREquiv).toLocaleString()}</h4>
           </div>
         </div>
       </div>
@@ -613,30 +657,30 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+          <div className="flex flex-wrap items-center gap-4 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm">
             <div className="flex-1 relative min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={18} />
               <input 
                 type="text" 
                 placeholder="Search expenses..."
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={searchQuery}
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                value={searchQuery || ''}
                 onChange={e => setSearchQuery(e.target.value)}
               />
             </div>
             <select 
-              className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={headFilter}
+              className="px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+              value={headFilter || ''}
               onChange={e => setHeadFilter(e.target.value)}
             >
-              <option value="">All Categories</option>
+              <option value="" className="dark:bg-slate-900">All Categories</option>
               {expenseHeads.map(head => (
-                <option key={head} value={head}>{head}</option>
+                <option key={head} value={head} className="dark:bg-slate-900">{head}</option>
               ))}
             </select>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm overflow-hidden">
             <div className="overflow-x-auto max-h-[calc(100vh-450px)] overflow-y-auto">
               {loading ? (
                 <div className="py-20 flex flex-col items-center justify-center gap-4 text-slate-400">
@@ -645,13 +689,15 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                 </div>
               ) : (
                 <table className="w-full text-left border-collapse">
-                  <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm">
-                    <tr className="text-slate-500 text-xs uppercase tracking-wider font-semibold border-b border-slate-100">
+                  <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 shadow-sm">
+                    <tr className="text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider font-semibold border-b border-slate-100 dark:border-slate-700">
                       {selectedColumns.includes('head') && <th className="px-6 py-4">Expense Head</th>}
                       {selectedColumns.includes('date') && <th className="px-6 py-4">Date</th>}
-                      {selectedColumns.includes('amount') && <th className="px-6 py-4">Amount</th>}
+                      {selectedColumns.includes('endDate') && <th className="px-6 py-4">End Date</th>}
+                      {selectedColumns.includes('amount') && <th className="px-6 py-4">Amount (USD/PKR)</th>}
                       {selectedColumns.includes('tax') && <th className="px-6 py-4">Tax</th>}
                       {selectedColumns.includes('total') && <th className="px-6 py-4">Total</th>}
+                      {selectedColumns.includes('nextDueDate') && <th className="px-6 py-4">Next Due</th>}
                       {selectedColumns.includes('attachment') && <th className="px-6 py-4">Attachment</th>}
                       <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
@@ -730,9 +776,14 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                             )}
                             {selectedColumns.includes('amount') && (
                               <td className="px-6 py-4">
-                                <span className="text-sm font-bold text-slate-900">
-                                  {expense.currency === 'USD' ? '$' : 'Rs. '}{(expense.amount || 0).toLocaleString()}
+                              <div className="flex flex-col gap-1">
+                                <span className="text-sm font-bold text-slate-900 dark:text-white">
+                                  $ {(expense.amountUSD || (expense.currency === 'USD' ? expense.amount : expense.amount / (expense.usdPkrRate || usdPkrRate))).toLocaleString()}
                                 </span>
+                                <span className="text-[10px] text-slate-400">
+                                  Rs. {(expense.amountPKR || (expense.currency === 'PKR' ? expense.amount : expense.amount * (expense.usdPkrRate || usdPkrRate))).toLocaleString()}
+                                </span>
+                              </div>
                               </td>
                             )}
                             {selectedColumns.includes('tax') && (
@@ -910,7 +961,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                       type="number"
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="e.g. 15"
-                      value={newExpense.recurringCustomDays}
+                      value={newExpense.recurringCustomDays || ''}
                       onChange={e => setNewExpense(prev => ({ ...prev, recurringCustomDays: Number(e.target.value) }))}
                     />
                   </div>
@@ -921,42 +972,29 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Start Date</label>
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Start Date</label>
               <input 
                 required
                 type="date" 
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newExpense.date}
+                className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                value={newExpense.date || ''}
                 onChange={e => setNewExpense(prev => ({ ...prev, date: e.target.value }))}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">End Date (Expiry)</label>
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">End Date (Expiry)</label>
               <input 
                 type="date" 
-                className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newExpense.endDate}
+                className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                value={newExpense.endDate || ''}
                 onChange={e => setNewExpense(prev => ({ ...prev, endDate: e.target.value }))}
               />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <SearchableSelect
-              label="Currency"
-              required
-              options={[
-                { label: "USD ($)", value: "USD" },
-                { label: "PKR (Rs.)", value: "PKR" }
-              ]}
-              value={newExpense.currency}
-              onChange={value => setNewExpense(prev => ({ ...prev, currency: value as 'USD' | 'PKR' }))}
-            />
-          </div>
-
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Amount</label>
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Amount (Input)</label>
               <div className="relative">
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
                   {newExpense.currency === 'USD' ? '$' : 'Rs.'}
@@ -965,28 +1003,51 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
                   required
                   type="number" 
                   step="0.01"
-                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
                   placeholder="0.00"
-                  value={newExpense.amount}
+                  value={newExpense.amount || ''}
                   onChange={e => setNewExpense(prev => ({ ...prev, amount: Number(e.target.value) }))}
                 />
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700">Tax Amount</label>
-              <div className="relative">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
-                  {newExpense.currency === 'USD' ? '$' : 'Rs.'}
-                </div>
-                <input 
-                  type="number" 
-                  step="0.01"
-                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  placeholder="0.00"
-                  value={newExpense.taxAmount}
-                  onChange={e => setNewExpense(prev => ({ ...prev, taxAmount: Number(e.target.value) }))}
-                />
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Currency</label>
+              <select
+                className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                value={newExpense.currency || ''}
+                onChange={e => setNewExpense(prev => ({ ...prev, currency: e.target.value as any }))}
+              >
+                <option value="USD">USD ($)</option>
+                <option value="PKR">PKR (Rs.)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/30">
+            <div className="space-y-1">
+              <p className="text-[10px] font-black text-indigo-400 uppercase">Calculated USD</p>
+              <p className="text-sm font-bold text-indigo-700 dark:text-indigo-300">$ {newExpense.amountUSD.toLocaleString()}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] font-black text-indigo-400 uppercase">Calculated PKR</p>
+              <p className="text-sm font-bold text-indigo-700 dark:text-indigo-300">Rs. {newExpense.amountPKR.toLocaleString()}</p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Tax Amount</label>
+            <div className="relative">
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">
+                {newExpense.currency === 'USD' ? '$' : 'Rs.'}
               </div>
+              <input 
+                type="number" 
+                step="0.01"
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-slate-900 dark:text-white"
+                placeholder="0.00"
+                value={newExpense.taxAmount || ''}
+                onChange={e => setNewExpense(prev => ({ ...prev, taxAmount: Number(e.target.value) }))}
+              />
             </div>
           </div>
 
@@ -1035,7 +1096,7 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
             <textarea 
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all min-h-[80px]"
               placeholder="Add any additional details..."
-              value={newExpense.notes}
+              value={newExpense.notes || ''}
               onChange={e => setNewExpense(prev => ({ ...prev, notes: e.target.value }))}
             />
           </div>
@@ -1043,10 +1104,15 @@ export const Expenses: React.FC<ExpensesProps> = ({ currentUser }) => {
           <div className="pt-4">
             <button 
               type="submit"
-              disabled={uploading}
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+              disabled={isSubmitting || uploading}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Save Expense
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Saving...
+                </>
+              ) : 'Save Expense'}
             </button>
           </div>
         </form>

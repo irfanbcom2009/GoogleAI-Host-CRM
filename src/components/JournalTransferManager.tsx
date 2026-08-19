@@ -111,13 +111,16 @@ export const JournalTransferManager: React.FC<JournalTransferManagerProps> = ({ 
                   <select 
                     required
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newTransfer.newClientId}
+                    value={newTransfer.newClientId || ''}
                     onChange={e => setNewTransfer(prev => ({ ...prev, newClientId: e.target.value }))}
                   >
                     <option value="">Choose new owner...</option>
-                    {clients.filter(c => c.id !== journal.clientId).map(client => (
-                      <option key={client.id} value={client.id}>{client.name}</option>
-                    ))}
+                    {clients
+                      .filter(c => c.id !== journal.clientId)
+                      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                      .map(client => (
+                        <option key={client.id} value={client.id}>{client.name}</option>
+                      ))}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -126,7 +129,7 @@ export const JournalTransferManager: React.FC<JournalTransferManagerProps> = ({ 
                     required
                     type="date" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newTransfer.date}
+                    value={newTransfer.date || ''}
                     onChange={e => setNewTransfer(prev => ({ ...prev, date: e.target.value }))}
                   />
                 </div>
@@ -137,7 +140,7 @@ export const JournalTransferManager: React.FC<JournalTransferManagerProps> = ({ 
                   type="text" 
                   className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   placeholder="e.g. Journal sold to new publisher"
-                  value={newTransfer.notes}
+                  value={newTransfer.notes || ''}
                   onChange={e => setNewTransfer(prev => ({ ...prev, notes: e.target.value }))}
                 />
               </div>

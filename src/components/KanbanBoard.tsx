@@ -47,9 +47,9 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskClick, on
     <div className="space-y-6">
       {/* Service Filter */}
       <div className="flex items-center gap-2 overflow-x-auto pb-4 scrollbar-hide">
-        {services.map(service => (
+        {services.map((service, idx) => (
           <button
-            key={service}
+            key={`${service}-${idx}`}
             onClick={() => setFilterService(service)}
             className={cn(
               "px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all",

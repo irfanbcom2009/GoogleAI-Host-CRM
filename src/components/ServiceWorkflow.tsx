@@ -133,7 +133,7 @@ export const ServiceWorkflow: React.FC<ServiceWorkflowProps> = ({
                       </div>
                       <p className="text-xs text-slate-500 leading-relaxed">{item.description}</p>
                       
-                      {item.type === 'document' && (
+                      {item.type === 'file' && (
                         <div className="mt-3 flex items-center gap-2">
                           {progress?.fileUrl ? (
                             <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-100 rounded-lg text-xs font-medium text-slate-600 max-w-xs truncate">

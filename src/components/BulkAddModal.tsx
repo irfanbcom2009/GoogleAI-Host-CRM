@@ -86,7 +86,7 @@ export const BulkAddModal: React.FC<BulkAddModalProps> = ({ isOpen, onClose, typ
 
         <div className="p-6 space-y-4">
           <textarea
-            value={rawData}
+            value={rawData || ''}
             onChange={(e) => setRawData(e.target.value)}
             placeholder="Paste tab-separated data here..."
             className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none"

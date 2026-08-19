@@ -289,7 +289,7 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
                 type="text"
                 placeholder="Search updates..."
                 className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={searchQuery}
+                value={searchQuery || ''}
                 onChange={e => setSearchQuery(e.target.value)}
               />
             </div>
@@ -425,7 +425,7 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
               type="text"
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
               placeholder="e.g. Article Submission Guidelines"
-              value={formData.title}
+              value={formData.title || ''}
               onChange={e => setFormData(prev => ({ ...prev, title: e.target.value }))}
             />
           </div>
@@ -433,7 +433,7 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
             <label className="text-sm font-bold text-slate-700">Category</label>
             <select
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={formData.category}
+              value={formData.category || ''}
               onChange={e => setFormData(prev => ({ ...prev, category: e.target.value as Policy['category'] }))}
             >
               {categories.filter(c => c !== 'All').map(cat => (
@@ -459,7 +459,7 @@ export const Policies: React.FC<PoliciesProps> = ({ currentUser }) => {
               rows={8}
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none"
               placeholder="Write the policy content here..."
-              value={formData.content}
+              value={formData.content || ''}
               onChange={e => setFormData(prev => ({ ...prev, content: e.target.value }))}
             />
           </div>

@@ -106,7 +106,20 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
     setShowPasswords(prev => ({ ...prev, [cred.id]: !isShowing }));
   };
 
+  const isTaiba = (val: string | undefined) => {
+    if (!val) return false;
+    return val.toLowerCase().includes('taiba@0045');
+  };
+
   const handleCopy = (text: string, label: string) => {
+    if (currentUser.role !== 'Admin') {
+      toast.error('Only Admins can copy credentials');
+      return;
+    }
+    if (isTaiba(text)) {
+      toast.error('Access Denied');
+      return;
+    }
     navigator.clipboard.writeText(text);
     toast.success(`${label} copied to clipboard`);
   };
@@ -178,20 +191,26 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col">
                     <span className="text-[10px] font-bold text-slate-400 uppercase">Username / ID</span>
-                    <span className="text-sm font-medium text-slate-700">{cred.username}</span>
+                    <span className="text-sm font-medium text-slate-700">
+                      {isTaiba(cred.username) && currentUser.role !== 'Admin' ? '••••••••' : cred.username}
+                    </span>
                   </div>
-                  <button 
-                    onClick={() => handleCopy(cred.username, 'Username')}
-                    className="p-1.5 text-slate-400 hover:text-indigo-600 transition-all"
-                  >
-                    <Copy size={16} />
-                  </button>
+                  {currentUser.role === 'Admin' && (
+                    <button 
+                      onClick={() => handleCopy(cred.username, 'Username')}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 transition-all"
+                    >
+                      <Copy size={16} />
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col">
                     <span className="text-[10px] font-bold text-slate-400 uppercase">Password</span>
                     <span className="text-sm font-black tracking-widest">
-                      {showPasswords[cred.id] ? cred.password : '••••••••••••'}
+                      {showPasswords[cred.id] ? (
+                        isTaiba(cred.password) && currentUser.role !== 'Admin' ? '••••••••' : cred.password
+                      ) : '••••••••••••'}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -201,7 +220,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
                     >
                       {showPasswords[cred.id] ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
-                    {showPasswords[cred.id] && (
+                    {showPasswords[cred.id] && currentUser.role === 'Admin' && (
                       <button 
                         onClick={() => handleCopy(cred.password, 'Password')}
                         className="p-1.5 text-slate-400 hover:text-indigo-600 transition-all"
@@ -247,7 +266,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
                 required
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g. OJS Admin Login"
-                value={formData.label}
+                value={formData.label || ''}
                 onChange={e => setFormData({...formData, label: e.target.value})}
               />
             </div>
@@ -255,7 +274,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
               <label className="text-xs font-bold text-slate-500 uppercase">Type</label>
               <select 
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                value={formData.vaultType}
+                value={formData.vaultType || ''}
                 onChange={e => setFormData({...formData, vaultType: e.target.value})}
               >
                 <option value="Email">Email Account</option>
@@ -272,7 +291,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
             <input 
               required
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-              value={formData.username}
+              value={formData.username || ''}
               onChange={e => setFormData({...formData, username: e.target.value})}
             />
           </div>
@@ -283,7 +302,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
               required
               type="text"
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-              value={formData.password}
+              value={formData.password || ''}
               onChange={e => setFormData({...formData, password: e.target.value})}
             />
           </div>
@@ -293,7 +312,7 @@ export const CredentialVault: React.FC<CredentialVaultProps> = ({ journalId, dom
             <input 
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="https://..."
-              value={formData.loginLink}
+              value={formData.loginLink || ''}
               onChange={e => setFormData({...formData, loginLink: e.target.value})}
             />
           </div>

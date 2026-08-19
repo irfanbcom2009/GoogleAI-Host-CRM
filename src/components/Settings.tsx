@@ -24,13 +24,14 @@ import {
   Loader2,
   Building2,
   Camera,
-  Edit
+  Edit,
+  History
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { User as CRMUser, GlobalSettings, JournalCategory, OfficeSubscription, UserRole } from '../types';
 import { cn, formatDateForInput } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, auth, storage } from '../lib/firebase';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, addDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, addDoc, collection, query, where, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Employees } from './Employees';
 import { Clients } from './Clients';
@@ -78,6 +79,15 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
   const [isLoadingSettings, setIsLoadingSettings] = useState(false);
   const [newService, setNewService] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [pointRate, setPointRate] = useState(0);
+  const [usdPkrRate, setUsdPkrRate] = useState(280); // Default to 280
+  const [uniquenessSettings, setUniquenessSettings] = useState({
+    clientEmail: true,
+    clientPhone: true,
+    domainName: true,
+    issnNumber: true,
+    journalTitle: false
+  });
 
   useEffect(() => {
     setProfileData({
@@ -99,6 +109,132 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
     });
   }, [currentUser]);
 
+  const [employmentHistory, setEmploymentHistory] = useState<any[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyEditingId, setHistoryEditingId] = useState<string | null>(null);
+  const [historyForm, setHistoryForm] = useState({
+    joinDate: '',
+    leaveDate: '',
+    status: 'Active' as 'Active' | 'Closed',
+    reason: '',
+    notes: ''
+  });
+
+  useEffect(() => {
+    if (currentUser.role === 'Client') return;
+
+    const q = query(
+      collection(db, 'employment_history'),
+      where('employeeId', '==', currentUser.id)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const records = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      records.sort((a: any, b: any) => {
+        const dateA = a.joinDate || '';
+        const dateB = b.joinDate || '';
+        return dateB.localeCompare(dateA);
+      });
+      setEmploymentHistory(records);
+      setIsHistoryLoading(false);
+    }, (error) => {
+      console.error("Error fetching user's employment history:", error);
+      setIsHistoryLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser.id, currentUser.role]);
+
+  const handleOpenAddHistory = () => {
+    setHistoryForm({
+      joinDate: new Date().toISOString().split('T')[0],
+      leaveDate: '',
+      status: 'Active',
+      reason: '',
+      notes: ''
+    });
+    setHistoryEditingId(null);
+    setIsHistoryModalOpen(true);
+  };
+
+  const handleOpenEditHistory = (record: any) => {
+    setHistoryForm({
+      joinDate: record.joinDate || '',
+      leaveDate: record.leaveDate || '',
+      status: record.status || 'Active',
+      reason: record.reason || '',
+      notes: record.notes || ''
+    });
+    setHistoryEditingId(record.id);
+    setIsHistoryModalOpen(true);
+  };
+
+  const handleDeleteHistory = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this employment history record?")) return;
+    try {
+      await deleteDoc(doc(db, 'employment_history', id));
+      await addDoc(collection(db, 'activity_logs'), {
+        userId: currentUser.id,
+        userName: currentUser.name,
+        action: 'Deleted Employment History',
+        details: `Deleted employment history record with ID ${id}`,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Error deleting employment history:", error);
+      alert("Failed to delete record: " + (error as any).message);
+    }
+  };
+
+  const handleSaveHistory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!historyForm.joinDate) {
+      alert("Join Date is required.");
+      return;
+    }
+
+    try {
+      const dataToSave = {
+        employeeId: currentUser.id,
+        joinDate: historyForm.joinDate,
+        leaveDate: historyForm.leaveDate || null,
+        status: historyForm.status,
+        reason: historyForm.reason,
+        notes: historyForm.notes,
+        updatedAt: serverTimestamp()
+      };
+
+      if (historyEditingId) {
+        await updateDoc(doc(db, 'employment_history', historyEditingId), dataToSave);
+        await addDoc(collection(db, 'activity_logs'), {
+          userId: currentUser.id,
+          userName: currentUser.name,
+          action: 'Updated Employment History',
+          details: `Updated employment history record (Join: ${historyForm.joinDate}, Status: ${historyForm.status})`,
+          timestamp: new Date().toISOString()
+        });
+      } else {
+        await addDoc(collection(db, 'employment_history'), {
+          ...dataToSave,
+          createdAt: serverTimestamp()
+        });
+        await addDoc(collection(db, 'activity_logs'), {
+          userId: currentUser.id,
+          userName: currentUser.name,
+          action: 'Added Employment History',
+          details: `Added new employment history record (Join: ${historyForm.joinDate})`,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      setIsHistoryModalOpen(false);
+    } catch (error) {
+      console.error("Error saving employment history:", error);
+      alert("Failed to save record: " + (error as any).message);
+    }
+  };
+
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -111,6 +247,17 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
           const data = settingsDoc.data() as GlobalSettings;
           setOfficeSubscriptions(Array.isArray(data.officeSubscriptions) ? data.officeSubscriptions : []);
           setActivatableServices(Array.isArray(data.activatableServices) ? data.activatableServices : []);
+          setPointRate(data.pointRate || 0);
+          setUsdPkrRate(data.usdPkrRate || 280);
+          if (data.uniquenessSettings) {
+            setUniquenessSettings({
+              clientEmail: !!data.uniquenessSettings.clientEmail,
+              clientPhone: !!data.uniquenessSettings.clientPhone,
+              domainName: !!data.uniquenessSettings.domainName,
+              issnNumber: !!data.uniquenessSettings.issnNumber,
+              journalTitle: !!data.uniquenessSettings.journalTitle
+            });
+          }
           if (data.branding) {
             setOrgBranding(data.branding as any);
           }
@@ -180,7 +327,10 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
         await updateDoc(doc(db, 'settings', 'global'), {
           officeSubscriptions,
           activatableServices,
+          uniquenessSettings,
           branding: orgBranding,
+          pointRate,
+          usdPkrRate,
           updatedAt: serverTimestamp()
         });
       }
@@ -236,14 +386,14 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
 
   return (
     <div className={cn(
-      "p-8 space-y-8 mx-auto transition-all duration-300",
-      (['user-management', 'employee-management', 'client-management', 'registrars'].includes(activeSection)) 
-        ? "max-w-7xl" 
+      "p-4 md:p-8 space-y-8 mx-auto transition-all duration-300",
+      (['user-management', 'employee-management', 'client-management', 'registrars', 'field-permissions'].includes(activeSection)) 
+        ? "w-full max-w-none xl:max-w-[1920px]" 
         : "max-w-4xl"
     )}>
       <div>
-        <h2 className="text-3xl font-bold tracking-tight text-slate-900">Settings</h2>
-        <p className="text-slate-500 mt-1">Manage your account settings and system preferences.</p>
+        <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Settings</h2>
+        <p className="text-slate-500 dark:text-slate-400 mt-1">Manage your account settings and system preferences.</p>
       </div>
 
       <div className="flex flex-col md:flex-row gap-8">
@@ -266,7 +416,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
         </div>
 
         <div className="flex-1 bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="p-8 space-y-8">
+          <div className={cn("p-8 space-y-8", activeSection === 'field-permissions' && "p-0 space-y-0")}>
             {activeSection === 'field-permissions' && (
               <FieldPermissionsDashboard />
             )}
@@ -349,7 +499,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       Salutation
                     </label>
                     <select 
-                      value={profileData.salutation}
+                      value={profileData.salutation || ''}
                       onChange={e => setProfileData({ ...profileData, salutation: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     >
@@ -370,7 +520,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                     </label>
                     <input 
                       type="text" 
-                      value={profileData.name}
+                      value={profileData.name || ''}
                       onChange={e => setProfileData({ ...profileData, name: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     />
@@ -384,7 +534,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                     </label>
                     <input 
                       type="email" 
-                      value={profileData.email}
+                      value={profileData.email || ''}
                       onChange={e => setProfileData({ ...profileData, email: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     />
@@ -399,7 +549,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                     <input 
                       type="tel" 
                       placeholder="+1 (555) 000-0000"
-                      value={profileData.phone}
+                      value={profileData.phone || ''}
                       onChange={e => setProfileData({ ...profileData, phone: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     />
@@ -411,7 +561,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       Timezone
                     </label>
                     <select 
-                      value={profileData.timezone}
+                      value={profileData.timezone || ''}
                       onChange={e => setProfileData({ ...profileData, timezone: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     >
@@ -428,7 +578,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       {currentUser.address && !isAdmin && <span className="text-[10px] text-amber-600 font-medium">(Request Approval)</span>}
                     </label>
                     <textarea 
-                      value={profileData.address}
+                      value={profileData.address || ''}
                       onChange={e => setProfileData({ ...profileData, address: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       rows={2}
@@ -444,7 +594,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </label>
                         <input 
                           type="email" 
-                          value={profileData.personalEmail}
+                          value={profileData.personalEmail || ''}
                           onChange={e => setProfileData({ ...profileData, personalEmail: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
@@ -457,7 +607,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </label>
                         <input 
                           type="tel" 
-                          value={profileData.whatsappPersonal}
+                          value={profileData.whatsappPersonal || ''}
                           onChange={e => setProfileData({ ...profileData, whatsappPersonal: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
@@ -470,7 +620,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </label>
                         <input 
                           type="tel" 
-                          value={profileData.homePhone}
+                          value={profileData.homePhone || ''}
                           onChange={e => setProfileData({ ...profileData, homePhone: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
@@ -483,7 +633,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </label>
                         <input 
                           type="text" 
-                          value={profileData.cnic}
+                          value={profileData.cnic || ''}
                           onChange={e => setProfileData({ ...profileData, cnic: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
@@ -496,7 +646,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         </label>
                         <input 
                           type="text" 
-                          value={profileData.qualification}
+                          value={profileData.qualification || ''}
                           onChange={e => setProfileData({ ...profileData, qualification: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
@@ -507,13 +657,12 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                           Gender
                         </label>
                         <select 
-                          value={profileData.gender}
+                          value={profileData.gender || ''}
                           onChange={e => setProfileData({ ...profileData, gender: e.target.value as any })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         >
                           <option value="Male">Male</option>
                           <option value="Female">Female</option>
-                          <option value="Other">Other</option>
                         </select>
                       </div>
 
@@ -526,7 +675,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         <input 
                           type="date" 
                           disabled={!isAdmin}
-                          value={profileData.joiningDate}
+                          value={profileData.joiningDate || ''}
                           onChange={e => setProfileData({ ...profileData, joiningDate: e.target.value })}
                           className={cn(
                             "w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
@@ -541,7 +690,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                           {currentUser.experience && !isAdmin && <span className="text-[10px] text-amber-600 font-medium">(Request Approval)</span>}
                         </label>
                         <textarea 
-                          value={profileData.experience}
+                          value={profileData.experience || ''}
                           onChange={e => setProfileData({ ...profileData, experience: e.target.value })}
                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                           rows={3}
@@ -550,6 +699,196 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                     </>
                   )}
                 </div>
+
+                {currentUser.role !== 'Client' && (
+                  <div className="mt-8 pt-8 border-t border-slate-100 space-y-6">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                          <History size={20} className="text-indigo-600" />
+                          Employment History
+                        </h3>
+                        <p className="text-xs text-slate-400 font-bold mt-1 uppercase tracking-widest">
+                          Audit trail of your joining and leaving cycles
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleOpenAddHistory}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl font-bold text-xs transition-all border border-indigo-100 shadow-sm"
+                      >
+                        <Plus size={14} />
+                        Add Record
+                      </button>
+                    </div>
+
+                    {isHistoryLoading ? (
+                      <div className="py-8 flex items-center justify-center text-slate-400">
+                        <Loader2 className="animate-spin mr-2" size={16} />
+                        <span className="text-xs">Loading history...</span>
+                      </div>
+                    ) : employmentHistory.length === 0 ? (
+                      <div className="py-8 text-center border border-dashed border-slate-200 rounded-2xl text-slate-400">
+                        <p className="text-xs italic">No employment history records found.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden border border-slate-150 rounded-2xl">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-150 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                              <th className="py-3 px-4">Join Date</th>
+                              <th className="py-3 px-4">Leave Date</th>
+                              <th className="py-3 px-4">Status</th>
+                              <th className="py-3 px-4">Reason / Notes</th>
+                              <th className="py-3 px-4 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {employmentHistory.map((record) => (
+                              <tr key={record.id} className="hover:bg-slate-50/50 transition-colors text-xs">
+                                <td className="py-3.5 px-4 font-bold text-slate-900">{record.joinDate}</td>
+                                <td className="py-3.5 px-4 text-slate-500">{record.leaveDate || <span className="text-emerald-600 font-medium">Present</span>}</td>
+                                <td className="py-3.5 px-4">
+                                  <span className={cn(
+                                    "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                                    record.status === 'Active' ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-slate-50 text-slate-600 border border-slate-150"
+                                  )}>
+                                    {record.status}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 max-w-xs truncate">
+                                  {record.reason && <span className="font-bold text-slate-800 block">{record.reason}</span>}
+                                  {record.notes && <span className="text-slate-400 italic block mt-0.5">{record.notes}</span>}
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditHistory(record)}
+                                      className="p-1.5 hover:bg-slate-100 text-slate-500 hover:text-indigo-600 rounded-lg transition-all"
+                                      title="Edit Record"
+                                    >
+                                      <Edit size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteHistory(record.id)}
+                                      className="p-1.5 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition-all"
+                                      title="Delete Record"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isHistoryModalOpen && (
+              <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100 w-full max-w-md relative whitespace-normal"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setIsHistoryModalOpen(false)}
+                    className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+                  >
+                    <X size={18} />
+                  </button>
+
+                  <h3 className="text-lg font-bold text-slate-900 pr-8">
+                    {historyEditingId ? 'Edit Employment Record' : 'Add Employment Record'}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {historyEditingId ? 'Modify the details of this employment cycle.' : 'Record a new employment timeline cycle.'}
+                  </p>
+
+                  <form onSubmit={handleSaveHistory} className="mt-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Join Date *</label>
+                        <input
+                          type="date"
+                          required
+                          value={historyForm.joinDate || ''}
+                          onChange={e => setHistoryForm({ ...historyForm, joinDate: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all text-slate-705 font-medium"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Leave Date</label>
+                        <input
+                          type="date"
+                          value={historyForm.leaveDate || ''}
+                          onChange={e => setHistoryForm({ ...historyForm, leaveDate: e.target.value })}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all text-slate-705 font-medium"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Status</label>
+                      <select
+                        value={historyForm.status || ''}
+                        onChange={e => setHistoryForm({ ...historyForm, status: e.target.value as any })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all text-slate-705 font-medium"
+                      >
+                        <option value="Active">Active (Present)</option>
+                        <option value="Closed">Closed (Left)</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Reason for Join / Leave</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Initial Join, Resigned, Promoted Rejoin"
+                        value={historyForm.reason || ''}
+                        onChange={e => setHistoryForm({ ...historyForm, reason: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Notes</label>
+                      <textarea
+                        placeholder="Add secondary comments regarding this cycle..."
+                        value={historyForm.notes || ''}
+                        onChange={e => setHistoryForm({ ...historyForm, notes: e.target.value })}
+                        rows={2}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all resize-none"
+                      />
+                    </div>
+
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => setIsHistoryModalOpen(false)}
+                        className="flex-1 py-2.5 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl font-bold text-sm transition-all"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-md shadow-indigo-200"
+                      >
+                        Save Details
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
               </div>
             )}
 
@@ -562,36 +901,46 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
                     <button 
-                      onClick={() => setTheme('light')}
+                      onClick={() => {
+                        setTheme('light');
+                        document.documentElement.classList.remove('dark');
+                        localStorage.setItem('theme', 'light');
+                        window.dispatchEvent(new CustomEvent('toggle-global-theme'));
+                      }}
                       className={cn(
-                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3",
-                        theme === 'light' ? "border-indigo-600 bg-indigo-50/50" : "border-slate-100 bg-slate-50 hover:border-slate-200"
+                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3 cursor-pointer",
+                        theme === 'light' ? "border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/30" : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-slate-300"
                       )}
                     >
                       <div className="w-full aspect-video bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                         <div className="h-4 bg-slate-100 border-b border-slate-200" />
                         <div className="flex-1 p-2 space-y-1">
-                          <div className="h-2 w-1/2 bg-slate-100 rounded" />
-                          <div className="h-2 w-full bg-slate-50 rounded" />
+                          <div className="h-2 w-1/2 bg-slate-200 rounded" />
+                          <div className="h-2 w-full bg-slate-100 rounded" />
                         </div>
                       </div>
-                      <p className="text-sm font-bold text-slate-900">Light Mode</p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white">Light Mode (White Theme)</p>
                     </button>
                     <button 
-                      onClick={() => setTheme('dark')}
+                      onClick={() => {
+                        setTheme('dark');
+                        document.documentElement.classList.add('dark');
+                        localStorage.setItem('theme', 'dark');
+                        window.dispatchEvent(new CustomEvent('toggle-global-theme'));
+                      }}
                       className={cn(
-                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3",
-                        theme === 'dark' ? "border-indigo-600 bg-indigo-50/50" : "border-slate-100 bg-slate-50 hover:border-slate-200"
+                        "p-4 rounded-2xl border-2 transition-all text-left space-y-3 cursor-pointer",
+                        theme === 'dark' ? "border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/30" : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:border-slate-300"
                       )}
                     >
-                      <div className="w-full aspect-video bg-slate-900 rounded-lg border border-slate-800 shadow-sm overflow-hidden flex flex-col">
-                        <div className="h-4 bg-slate-800 border-b border-slate-700" />
+                      <div className="w-full aspect-video bg-slate-950 rounded-lg border border-slate-800 shadow-sm overflow-hidden flex flex-col">
+                        <div className="h-4 bg-slate-900 border-b border-slate-800" />
                         <div className="flex-1 p-2 space-y-1">
                           <div className="h-2 w-1/2 bg-slate-800 rounded" />
                           <div className="h-2 w-full bg-slate-800/50 rounded" />
                         </div>
                       </div>
-                      <p className="text-sm font-bold text-slate-900">Dark Mode (Experimental)</p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white">Dark Mode (Black Theme)</p>
                     </button>
                   </div>
                 </div>
@@ -612,7 +961,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       <input 
                         type="text"
                         className="crm-input"
-                        value={orgBranding.name}
+                        value={orgBranding.name || ''}
                         onChange={e => setOrgBranding({...orgBranding, name: e.target.value})}
                       />
                     </div>
@@ -623,13 +972,13 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                         <input 
                           type="color"
                           className="h-11 w-20 rounded-xl cursor-pointer border-none bg-transparent"
-                          value={orgBranding.primaryColor}
+                          value={orgBranding.primaryColor || ''}
                           onChange={e => setOrgBranding({...orgBranding, primaryColor: e.target.value})}
                         />
                         <input 
                           type="text"
                           className="crm-input flex-1"
-                          value={orgBranding.primaryColor}
+                          value={orgBranding.primaryColor || ''}
                           onChange={e => setOrgBranding({...orgBranding, primaryColor: e.target.value})}
                         />
                       </div>
@@ -650,7 +999,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                             type="text"
                             placeholder="https://..."
                             className="crm-input"
-                            value={orgBranding.logoUrl}
+                            value={orgBranding.logoUrl || ''}
                             onChange={e => setOrgBranding({...orgBranding, logoUrl: e.target.value})}
                           />
                           <p className="text-[10px] text-slate-500">Provide a URL for your organization logo (SVG or PNG recommended).</p>
@@ -716,6 +1065,76 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
               <div className="space-y-8">
                 <div className="space-y-4">
                   <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <DollarSign size={16} className="text-emerald-500" />
+                    Financial Settings
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Point Value (1 Point = X PKR)</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input 
+                          type="number"
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
+                          value={pointRate || ''}
+                          onChange={(e) => setPointRate(parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500">This rate is used to calculate employee salaries based on earned points.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">USD to PKR Exchange Rate (1 USD = X PKR)</label>
+                      <div className="relative">
+                        <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input 
+                          type="number"
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
+                          value={usdPkrRate || ''}
+                          onChange={(e) => setUsdPkrRate(parseFloat(e.target.value) || 0)}
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500">Used for converting financial records between PKR and USD for summaries.</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-8 border-t border-slate-100">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Shield size={16} className="text-amber-500" />
+                    Uniqueness Rules (Admin-Defined)
+                  </h4>
+                  <p className="text-xs text-slate-500">Enable or disable global uniqueness constraints for core system entities.</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {[
+                      { id: 'clientEmail', label: 'Client Email' },
+                      { id: 'clientPhone', label: 'Client Phone' },
+                      { id: 'domainName', label: 'Domain Name' },
+                      { id: 'issnNumber', label: 'ISSN Number (Print & Online)' },
+                      { id: 'journalTitle', label: 'Journal Title' },
+                    ].map(field => (
+                      <div key={field.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                        <span className="text-sm font-bold text-slate-700">{field.label}</span>
+                        <button 
+                          onClick={() => setUniquenessSettings(prev => ({ ...prev, [field.id]: !(prev as any)[field.id] }))}
+                          className={cn(
+                            "w-12 h-6 rounded-full transition-all relative flex items-center px-1",
+                            (uniquenessSettings as any)[field.id] ? "bg-indigo-600 justify-end shadow-inner" : "bg-slate-300 justify-start"
+                          )}
+                        >
+                          <motion.div 
+                            layout
+                            className="w-4 h-4 bg-white rounded-full shadow-md"
+                          />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-8 border-t border-slate-100">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                     <Clock size={16} className="text-rose-500" />
                     Office Subscriptions
                   </h4>
@@ -771,7 +1190,7 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                       type="text"
                       placeholder="Add new service..."
                       className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                      value={newService}
+                      value={newService || ''}
                       onChange={(e) => setNewService(e.target.value)}
                       onKeyPress={(e) => {
                         if (e.key === 'Enter' && newService.trim()) {
@@ -798,9 +1217,9 @@ export const Settings: React.FC<SettingsProps> = ({ currentUser, onImpersonate, 
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    {activatableServices.map(service => (
+                    {activatableServices.map((service, idx) => (
                       <div 
-                        key={service}
+                        key={`${service}-${idx}`}
                         className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100 group"
                       >
                         {service}

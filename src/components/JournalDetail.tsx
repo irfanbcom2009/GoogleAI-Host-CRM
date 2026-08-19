@@ -13,6 +13,7 @@ import {
   BookOpen,
   Edit,
   Trash2,
+  AlertTriangle,
   Save,
   X,
   History,
@@ -35,7 +36,12 @@ import {
   Briefcase,
   Link as LinkIcon,
   Zap,
-  LayoutDashboard
+  LayoutDashboard,
+  Server,
+  HardDrive,
+  Cloud,
+  Building2,
+  Volume2
 } from 'lucide-react';
 import { 
   Journal, 
@@ -48,16 +54,21 @@ import {
   ServiceType,
   Subscription,
   HECCategory,
-  ISSNRequest
+  ISSNRequest,
+  CatalogItem,
+  ClientService,
+  ServiceTier
 } from '../types';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
-import { doc, updateDoc, onSnapshot, serverTimestamp, collection, query, where, addDoc, orderBy, limit, getDocs } from 'firebase/firestore';
-import { cn, formatDateForInput } from '../lib/utils';
+import { db, handleFirestoreError, OperationType, auth, moveToTrash, getErrorMessage } from '../lib/firebase';
+import { doc, updateDoc, onSnapshot, serverTimestamp, collection, query, where, addDoc, orderBy, limit, getDocs, arrayUnion } from 'firebase/firestore';
+import { cn, formatDateForInput, generateJournalAbbreviation, generateJournalInitials, getHostname } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { geminiService } from '../services/geminiService';
 import { ConfigModal } from './ConfigModal';
+import { ConfirmModal } from './ConfirmModal';
 import { toast } from 'react-hot-toast';
-import { Sparkles, Loader2 } from 'lucide-react';
+import { checkCoreFieldUniqueness } from '../services/uniquenessService';
+import { Sparkles, Loader2, Package } from 'lucide-react';
 
 import { SmartRecommendations } from './SmartRecommendations';
 import { recommendationService } from '../services/recommendationService';
@@ -67,8 +78,25 @@ import { Modal } from './Modal';
 import { SearchableSelect } from './ui/SearchableSelect';
 import { FloatingActionBar } from './FloatingActionBar';
 import { usePermissions } from '../hooks/usePermissions';
-import { JournalHealthDashboard } from './JournalHealthDashboard';
 import { CredentialVault } from './CredentialVault';
+import { ScholarHistory } from './ScholarHistory';
+import { ISSNRequests } from './ISSNRequests';
+import { DOIManagement } from './DOIManagement';
+import { HEC } from './HEC';
+import { DOAJApplications } from './DOAJApplications';
+
+export const ALL_AVAILABLE_TABS = [
+  { id: 'issn', label: 'ISSN', icon: Hash, service: 'ISSN' },
+  { id: 'doi', label: 'DOI', icon: LinkIcon, service: 'DOI' },
+  { id: 'publisher', label: 'Publisher', icon: Briefcase, service: 'Publisher' },
+  { id: 'hec', label: 'HEC', icon: Shield, service: 'HEC' },
+  { id: 'doaj', label: 'DOAJ', icon: CheckCircle2, service: 'DOAJ' },
+  { id: 'ojs', label: 'OJS', icon: Globe, service: 'OJS' },
+  { id: 'indexing', label: 'Indexing', icon: Database, service: 'Indexing' },
+  { id: 'history', label: 'Scholar', icon: History, service: 'Scholar' },
+  { id: 'domain', label: 'Domain', icon: Globe, service: 'Domain' },
+  { id: 'hosting', label: 'Hosting', icon: Server, service: 'Hosting' }
+];
 
 interface JournalDetailProps {
   journalId: string;
@@ -85,7 +113,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   initialEditMode = false,
   onNavigateToPublisher
 }) => {
-  const { check, isAdmin } = usePermissions(currentUser);
+  const { check, isAdmin, isManager } = usePermissions(currentUser);
   const [journal, setJournal] = useState<Journal | null>(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(initialEditMode);
@@ -103,6 +131,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [globalSettings, setGlobalSettings] = useState<any>(null);
   const [hecCategories, setHecCategories] = useState<HECCategory[]>([]);
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [newScholarLog, setNewScholarLog] = useState({ status: 'Indexed', tagOptimization: '' });
   const [isScholarModalOpen, setIsScholarModalOpen] = useState(false);
   const [isActivateServiceModalOpen, setIsActivateServiceModalOpen] = useState(false);
@@ -112,7 +141,9 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     invoiceId: '',
     startDate: new Date().toISOString().split('T')[0],
     expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    subscriptionType: 'annual' as 'one-time' | 'annual' | 'monthly'
+    subscriptionType: 'annual' as 'one-time' | 'annual' | 'monthly',
+    salePrice: 0,
+    costPrice: 0
   });
 
   const journalClient = clients.find(c => c.id === journal?.clientId);
@@ -120,17 +151,328 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     ? recommendationService.getRecommendations(journalClient, publishers, domains, [journal], journal.id)
     : [];
 
-  const [aiHealth, setAiHealth] = useState<string | null>(null);
-  const [isAiLoading, setIsAiLoading] = useState(false);
-  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
   const [journalIssnRequests, setJournalIssnRequests] = useState<ISSNRequest[]>([]);
   const [isScopeConfigOpen, setIsScopeConfigOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'health'>('overview');
-  const [activeServiceTab, setActiveServiceTab] = useState<'issn' | 'doi' | 'publisher' | 'hec' | 'doaj' | 'ojs' | 'indexing' | 'vault' | 'history' | 'work-history'>('issn');
+  const [activeServiceTab, setActiveServiceTab] = useState<'issn' | 'doi' | 'publisher' | 'hec' | 'doaj' | 'ojs' | 'indexing' | 'vault' | 'catalog' | 'history' | 'work-history' | 'domain' | 'hosting'>('issn');
+  const [isChecklistModalOpen, setIsChecklistModalOpen] = useState(false);
+  const [selectedCsId, setSelectedCsId] = useState<string | null>(null);
+  const [newChecklistItem, setNewChecklistItem] = useState('');
+  const [newScopeTag, setNewScopeTag] = useState('');
+  const [newBoardMember, setNewBoardMember] = useState('');
+
+  const [isAddTabModalOpen, setIsAddTabModalOpen] = useState(false);
+  const [selectedTabToActivate, setSelectedTabToActivate] = useState<string>('');
+  const [activationCondition, setActivationCondition] = useState<'subscribed' | 'unsubscribed'>('subscribed');
+
+  const [quickDataModalType, setQuickDataModalType] = useState<'issn' | 'doi' | 'publisher' | 'hec' | 'doaj' | 'ojs' | 'domain' | 'hosting' | null>(null);
+  const [quickFormData, setQuickFormData] = useState<any>({});
+  const [isSavingQuickData, setIsSavingQuickData] = useState(false);
+
+  const handleOpenQuickDataModal = (tabType: any) => {
+    if (!journal) return;
+    setQuickDataModalType(tabType);
+    if (tabType === 'issn') {
+      setQuickFormData({
+        issnPrint: journal.issnPrint || '',
+        issnOnline: journal.issnOnline || ''
+      });
+    } else if (tabType === 'doi') {
+      setQuickFormData({
+        doiPrefix: journal.doiId || '',
+        url: journal.url || ''
+      });
+    } else if (tabType === 'publisher') {
+      setQuickFormData({
+        publisherId: journal.publisherId || '',
+        newPublisherName: '',
+        newPublisherCity: '',
+        newPublisherCountry: ''
+      });
+    } else if (tabType === 'hec') {
+      setQuickFormData({
+        category: journal.hec_details?.category || 'Y',
+        recognitionStatus: journal.hec_details?.recognitionStatus || 'Recognized',
+        approvalDate: journal.hec_details?.approvalDate || '',
+        expiryDate: journal.hec_details?.expiryDate || ''
+      });
+    } else if (tabType === 'doaj') {
+      setQuickFormData({
+        inclusionDate: journal.doaj_details?.inclusionDate || '',
+        link: journal.doaj_details?.link || '',
+        metadataCompliance: journal.doaj_details?.metadataCompliance ?? true
+      });
+    } else if (tabType === 'ojs') {
+      setQuickFormData({
+        ojsVersion: journal.ojsVersion || '3.3.0.20',
+        url: journal.ojs_details?.url || journal.url || '',
+        adminUrl: journal.ojs_details?.adminUrl || '',
+        adminUsername: journal.ojs_details?.adminCredentials?.username || '',
+        adminPassword: journal.ojs_details?.adminCredentials?.password || '',
+        supportStatus: journal.ojs_details?.supportStatus || 'Community Support',
+        hostingStatus: journal.ojs_details?.hostingStatus || 'Active',
+        phpVersion: journal.ojs_details?.phpVersion || '8.1',
+        databaseName: journal.ojs_details?.databaseName || '',
+        notes: journal.ojs_details?.notes || ''
+      });
+    } else if (tabType === 'domain') {
+      const existingDomain = domains?.find((d: any) => d.id === journal.domainId);
+      setQuickFormData({
+        domainId: journal.domainId || '',
+        domainName: journal.domain_details?.domainName || existingDomain?.domainName || '',
+        registrar: journal.domain_details?.registrar || existingDomain?.registrar || 'Namecheap',
+        expirationDate: journal.domain_details?.expirationDate || existingDomain?.expirationDate || '',
+        nameservers: journal.domain_details?.nameservers || 'ns1.hosta.com, ns2.hosta.com',
+        autoRenew: journal.domain_details?.autoRenew ?? true,
+        annualCost: journal.domain_details?.annualCost || 15,
+        notes: journal.domain_details?.notes || ''
+      });
+    } else if (tabType === 'hosting') {
+      setQuickFormData({
+        provider: journal.hosting_details?.provider || 'Hesta Enterprise Server',
+        ipAddress: journal.hosting_details?.ipAddress || '',
+        serverSpecs: journal.hosting_details?.serverSpecs || '4 vCPU / 8GB RAM / 100GB NVMe SSD',
+        status: journal.hosting_details?.status || 'Running',
+        renewalDate: journal.hosting_details?.renewalDate || '',
+        annualCost: journal.hosting_details?.annualCost || 120,
+        controlPanelUrl: journal.hosting_details?.controlPanelUrl || '',
+        notes: journal.hosting_details?.notes || ''
+      });
+    }
+  };
+
+  const handleSaveQuickData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!journal || isSavingQuickData) return;
+    setIsSavingQuickData(true);
+
+    try {
+      const updateObj: any = { updatedAt: serverTimestamp() };
+
+      if (quickDataModalType === 'issn') {
+        updateObj.issnPrint = quickFormData.issnPrint || '';
+        updateObj.issnOnline = quickFormData.issnOnline || '';
+      } else if (quickDataModalType === 'doi') {
+        updateObj.doiId = quickFormData.doiPrefix || '';
+        if (quickFormData.url) updateObj.url = quickFormData.url;
+      } else if (quickDataModalType === 'publisher') {
+        if (quickFormData.publisherId) {
+          updateObj.publisherId = quickFormData.publisherId;
+        } else if (quickFormData.newPublisherName) {
+          const newPubRef = await addDoc(collection(db, 'publishers'), {
+            clientId: journal.clientId,
+            name: quickFormData.newPublisherName,
+            city: quickFormData.newPublisherCity || '',
+            country: quickFormData.newPublisherCountry || '',
+            ownerName: journal.clientName || 'Client Owner',
+            secpRegistration: 'Pending',
+            ntn: 'N/A',
+            documents: {},
+            createdAt: new Date().toISOString()
+          });
+          updateObj.publisherId = newPubRef.id;
+        }
+      } else if (quickDataModalType === 'hec') {
+        updateObj.hec_details = {
+          category: quickFormData.category,
+          recognitionStatus: quickFormData.recognitionStatus,
+          approvalDate: quickFormData.approvalDate,
+          expiryDate: quickFormData.expiryDate,
+          documents: journal.hec_details?.documents || []
+        };
+      } else if (quickDataModalType === 'doaj') {
+        updateObj.doaj_details = {
+          inclusionDate: quickFormData.inclusionDate,
+          link: quickFormData.link,
+          metadataCompliance: quickFormData.metadataCompliance
+        };
+      } else if (quickDataModalType === 'ojs') {
+        updateObj.ojsVersion = quickFormData.ojsVersion;
+        if (quickFormData.url) updateObj.url = quickFormData.url;
+        updateObj.ojs_details = {
+          url: quickFormData.url,
+          adminUrl: quickFormData.adminUrl,
+          version: quickFormData.ojsVersion,
+          hostingStatus: quickFormData.hostingStatus,
+          supportStatus: quickFormData.supportStatus,
+          phpVersion: quickFormData.phpVersion,
+          databaseName: quickFormData.databaseName,
+          notes: quickFormData.notes,
+          adminCredentials: {
+            username: quickFormData.adminUsername,
+            password: quickFormData.adminPassword
+          }
+        };
+      } else if (quickDataModalType === 'domain') {
+        if (quickFormData.domainId) {
+          updateObj.domainId = quickFormData.domainId;
+        }
+        updateObj.domain_details = {
+          domainName: quickFormData.domainName,
+          registrar: quickFormData.registrar,
+          expirationDate: quickFormData.expirationDate,
+          nameservers: quickFormData.nameservers,
+          autoRenew: quickFormData.autoRenew,
+          annualCost: Number(quickFormData.annualCost) || 0,
+          notes: quickFormData.notes
+        };
+      } else if (quickDataModalType === 'hosting') {
+        updateObj.hosting_details = {
+          provider: quickFormData.provider,
+          ipAddress: quickFormData.ipAddress,
+          serverSpecs: quickFormData.serverSpecs,
+          status: quickFormData.status,
+          renewalDate: quickFormData.renewalDate,
+          annualCost: Number(quickFormData.annualCost) || 0,
+          controlPanelUrl: quickFormData.controlPanelUrl,
+          notes: quickFormData.notes
+        };
+      }
+
+      await updateDoc(doc(db, 'journals', journal.id), updateObj);
+      toast.success(`Data saved successfully`);
+      setQuickDataModalType(null);
+    } catch (err) {
+      console.error("Error saving tab data:", err);
+      toast.error("Failed to save tab data");
+    } finally {
+      setIsSavingQuickData(false);
+    }
+  };
+
+  const handleAddChecklistItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCsId || !newChecklistItem.trim()) return;
+
+    try {
+      const cs = journalClientServices.find(c => c.id === selectedCsId);
+      if (!cs) return;
+
+      const newItemId = crypto.randomUUID();
+      const updatedChecklist = {
+        ...(cs.clientChecklistProgress || {}),
+        [newItemId]: {
+          label: newChecklistItem,
+          status: 'pending',
+          type: 'text',
+          createdAt: new Date().toISOString()
+        }
+      };
+
+      await updateDoc(doc(db, 'client_services', selectedCsId), {
+        clientChecklistProgress: updatedChecklist,
+        updatedAt: serverTimestamp()
+      });
+
+      toast.success('Checklist item added');
+      setNewChecklistItem('');
+      setIsChecklistModalOpen(false);
+    } catch (error) {
+      toast.error('Failed to add item');
+      console.error(error);
+    }
+  };
+
+  const toggleChecklistItem = async (csId: string, itemId: string, currentStatus: string) => {
+    try {
+      const cs = journalClientServices.find(c => c.id === csId);
+      if (!cs) return;
+
+      const updatedChecklist = {
+        ...cs.clientChecklistProgress,
+        [itemId]: {
+          ...cs.clientChecklistProgress[itemId],
+          status: currentStatus === 'completed' ? 'pending' : 'completed',
+          updatedAt: new Date().toISOString()
+        }
+      };
+
+      await updateDoc(doc(db, 'client_services', csId), {
+        clientChecklistProgress: updatedChecklist,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      toast.error('Failed to update status');
+    }
+  };
+
+  const handleAddActiveTab = async (tabId: string, condition: 'subscribed' | 'unsubscribed') => {
+    if (!journal) return;
+    const tabInfo = ALL_AVAILABLE_TABS.find(t => t.id === tabId);
+    if (!tabInfo) return;
+
+    try {
+      const currentActive = journal.active_tabs || [];
+      if (!currentActive.includes(tabId)) {
+        const updatedActive = [...currentActive, tabId];
+        await updateDoc(doc(db, 'journals', journal.id), {
+          active_tabs: updatedActive,
+          updatedAt: serverTimestamp()
+        });
+        toast.success(`Tab "${tabInfo.label}" added successfully`);
+      }
+
+      // Handle subscription status condition:
+      if (condition === 'subscribed') {
+        // Activate subscription
+        await handleToggleSubscription(tabInfo.service, true);
+      } else {
+        // Activate without subscription (disable subscription)
+        await handleToggleSubscription(tabInfo.service, false);
+      }
+      setIsAddTabModalOpen(false);
+      setSelectedTabToActivate('');
+    } catch (err) {
+      console.error("Error activating tab:", err);
+      toast.error("Failed to activate service tab");
+    }
+  };
+
+  const handleRemoveActiveTab = async (tabId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!journal) return;
+    const tabInfo = ALL_AVAILABLE_TABS.find(t => t.id === tabId);
+    const label = tabInfo?.label || tabId;
+
+    try {
+      const currentActive = journal.active_tabs || [];
+      const updatedActive = currentActive.filter(id => id !== tabId);
+      
+      await updateDoc(doc(db, 'journals', journal.id), {
+        active_tabs: updatedActive,
+        updatedAt: serverTimestamp()
+      });
+
+      if (activeServiceTab === tabId) {
+        if (updatedActive.length > 0) {
+          setActiveServiceTab(updatedActive[0] as any);
+        } else {
+          setActiveServiceTab('' as any);
+        }
+      }
+
+      toast.success(`Tab "${label}" hidden`);
+    } catch (err) {
+      console.error("Error hiding tab:", err);
+      toast.error("Failed to hide tab");
+    }
+  };
+
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [journalTasks, setJournalTasks] = useState<any[]>([]);
+  const [journalClientServices, setJournalClientServices] = useState<ClientService[]>([]);
+
+  useEffect(() => {
+    const activeTabs = journal?.active_tabs || [];
+    const visibleServiceTabs = ALL_AVAILABLE_TABS.filter(tab => activeTabs.includes(tab.id));
+
+    if (visibleServiceTabs.length > 0 && !visibleServiceTabs.some(t => t.id === activeServiceTab)) {
+      setActiveServiceTab(visibleServiceTabs[0].id as any);
+    } else if (visibleServiceTabs.length === 0) {
+      setActiveServiceTab('' as any);
+    }
+  }, [journal?.active_tabs]);
 
   useEffect(() => {
     if (!journalId) return;
@@ -142,7 +484,17 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       }
     );
 
-    return () => unsubTasks();
+    const unsubClientServices = onSnapshot(
+      query(collection(db, 'client_services'), where('journalId', '==', journalId), orderBy('createdAt', 'desc')),
+      (snapshot) => {
+        setJournalClientServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }) as ClientService));
+      }
+    );
+
+    return () => {
+      unsubTasks();
+      unsubClientServices();
+    };
   }, [journalId]);
 
   useEffect(() => {
@@ -175,8 +527,9 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
 
   const handleActivateService = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!journalClient || !serviceToActivate || !journal) return;
+    if (!journalClient || !serviceToActivate || !journal || isSaving) return;
 
+    setIsSaving(true);
     try {
       const newSubscription: Subscription = {
         service: serviceToActivate as ServiceType,
@@ -210,7 +563,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           const newItem = {
             id: crypto.randomUUID(),
             description: `${serviceToActivate} Subscription for ${journal.title}`,
-            amount: 0, // Should probably be configurable
+            amount: serviceToActivate === 'Publisher' ? activationData.salePrice : 0,
             quantity: 1,
             journalId: journal.id,
             serviceType: serviceToActivate
@@ -218,9 +571,29 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           await updateDoc(invoiceRef, {
             items: [...(invoice.items || []), newItem],
             total: invoice.total + newItem.amount,
+            balance: (invoice.balance || 0) + newItem.amount,
             updatedAt: serverTimestamp()
           });
         }
+      }
+
+      // Handle Publisher Cost Price (Expense to Unpaid Lawyer)
+      if (serviceToActivate === 'Publisher' && activationData.costPrice > 0) {
+        await addDoc(collection(db, 'expenses'), {
+          head: 'Unpaid Lawyer',
+          date: new Date().toISOString().split('T')[0],
+          amount: activationData.costPrice,
+          currency: 'PKR',
+          amountPKR: activationData.costPrice,
+          amountUSD: activationData.costPrice / (globalSettings?.usdPkrRate || 280),
+          usdPkrRate: globalSettings?.usdPkrRate || 280,
+          notes: `Cost for Publisher registration for ${journal.title} (Client: ${journalClient.name})`,
+          createdAt: serverTimestamp(),
+          createdById: currentUser.id,
+          createdBy: currentUser.name,
+          updatedAt: serverTimestamp(),
+          updatedBy: currentUser.name
+        });
       }
 
       // Generate tasks for the service
@@ -233,33 +606,33 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
         invoiceId: '',
         startDate: new Date().toISOString().split('T')[0],
         expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        subscriptionType: 'annual'
+        subscriptionType: 'annual',
+        salePrice: 0,
+        costPrice: 0
       });
       toast.success(`${serviceToActivate} activated successfully`);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'users');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleGetAiHealth = async () => {
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const handleDeleteJournal = async () => {
     if (!journal) return;
-    setIsAiLoading(true);
-    setIsAiModalOpen(true);
+    
+    const loadingToast = toast.loading(`Moving "${journal.title}" to trash...`);
     try {
-      const health = await geminiService.getJournalHealth({
-        title: journal.title,
-        status: journal.status,
-        category: journal.category,
-        ojsVersion: journal.ojsVersion,
-        issnPrint: journal.issnPrint,
-        issnOnline: journal.issnOnline,
-        indexingCount: indexingRecords.length
-      });
-      setAiHealth(health);
+      await moveToTrash('journals', journal.id, journal, currentUser?.name || 'Admin');
+      toast.success(`"${journal.title}" moved to trash.`, { id: loadingToast });
+      onBack();
     } catch (error) {
-      setAiHealth("Failed to generate health check.");
+      console.error("Delete error:", error);
+      toast.error(getErrorMessage(error), { id: loadingToast });
     } finally {
-      setIsAiLoading(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -392,10 +765,19 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       (error) => handleFirestoreError(error, OperationType.LIST, 'hec_categories')
     );
 
+    const unsubCatalog = onSnapshot(
+      query(collection(db, 'catalog'), where('isActive', '==', true)),
+      (snapshot) => {
+        setCatalogItems(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CatalogItem)));
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, 'catalog')
+    );
+
     return () => {
       unsubDomains();
       unsubPublishers();
       unsubHec();
+      unsubCatalog();
     };
   }, [journal?.clientId]);
 
@@ -455,7 +837,8 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
 
   const handleAddScholarLog = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    if (!currentUser || isSaving) return;
+    setIsSaving(true);
     try {
       await addDoc(collection(db, 'google_scholar_history'), {
         journalId,
@@ -468,6 +851,8 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       logActivity(`Updated Google Scholar History: ${newScholarLog.status}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'google_scholar_history');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -498,8 +883,9 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   };
 
   const handleToggleSubscription = async (serviceName: string, isEnabling: boolean) => {
-    if (!journal) return;
+    if (!journal || isSaving) return;
     
+    setIsSaving(true);
     try {
       const updatedServices = isEnabling 
         ? [...(journal.subscribed_services || []), serviceName]
@@ -513,6 +899,36 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
       };
 
       if (isEnabling) {
+        // Find matching catalog item
+        const catalogItem = catalogItems.find(item => 
+          item.name.toLowerCase().includes(serviceName.toLowerCase()) ||
+          serviceName.toLowerCase().includes(item.name.toLowerCase())
+        );
+
+        let clientServiceId = '';
+        if (catalogItem) {
+          // Create Client Service (Assignment Layer)
+          const clientServiceData = {
+            clientId: journal.clientId,
+            clientName: journal.clientName || 'Valued Client',
+            serviceId: catalogItem.id,
+            serviceName: catalogItem.name,
+            tierId: catalogItem.pricingTiers?.[0]?.priority?.toLowerCase() || 'standard',
+            tierName: catalogItem.pricingTiers?.[0]?.priority || 'Standard',
+            status: 'Pending',
+            journalId: journal.id,
+            journalTitle: journal.title,
+            progress: 0,
+            isActivated: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            createdById: currentUser?.id,
+            createdBy: currentUser?.name
+          };
+          const csRef = await addDoc(collection(db, 'client_services'), clientServiceData);
+          clientServiceId = csRef.id;
+        }
+
         // Create Draft Invoice
         const invoiceNumber = `INV-AUTO-${Date.now().toString().slice(-6)}`;
         const issueDate = new Date().toISOString().split('T')[0];
@@ -521,14 +937,14 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
         let hecStageDetails = "";
         if (serviceName === 'HEC') {
           try {
-            const hecQuery = query(collection(db, 'hec_applications'), where('journalId', '==', journal.id), limit(1));
+            const hecQuery = query(collection(db, 'hec_workflows'), where('journalId', '==', journal.id), limit(1));
             const hecSnap = await getDocs(hecQuery);
             if (!hecSnap.empty) {
               const hecData = hecSnap.docs[0].data();
               hecStageDetails = ` | Stage: ${hecData.currentStage || 1} (${hecData.status || 'Active'})`;
             }
           } catch (e) {
-            console.warn("Could not fetch HEC application for invoice", e);
+            console.warn("Could not fetch HEC workflow for invoice", e);
           }
         }
 
@@ -538,32 +954,36 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           clientName: journal.clientName || 'Valued Client',
           journalId: journal.id,
           journalTitle: journal.title,
+          clientServiceId: clientServiceId, // Link to assignment layer
           issueDate,
           dueDate,
           date: issueDate,
           status: 'draft',
-          billingType: 'one-time',
+          billingType: catalogItem ? 'one-time' : 'one-time',
           currency: 'PKR',
           subscription_source: 'Journal',
           items: [
             {
               id: Math.random().toString(36).substr(2, 9),
-              description: `Managed Subscription: ${serviceName} for ${journal.title}${hecStageDetails}`,
+              description: catalogItem 
+                ? `${catalogItem.name} for ${journal.title}${hecStageDetails}`
+                : `Managed Subscription: ${serviceName} for ${journal.title}${hecStageDetails}`,
               quantity: 1,
-              rate: 0,
+              rate: catalogItem?.basePrice || 0,
               taxRate: 0,
               discountRate: 0,
               taxAmount: 0,
               discountAmount: 0,
-              total: 0,
-              serviceType: serviceName as any
+              total: catalogItem?.basePrice || 0,
+              serviceType: serviceName as any,
+              catalogItemId: catalogItem?.id || null
             }
           ],
-          subtotal: 0,
+          subtotal: catalogItem?.basePrice || 0,
           taxTotal: 0,
           discountTotal: 0,
-          total: 0,
-          balance: 0,
+          total: catalogItem?.basePrice || 0,
+          balance: catalogItem?.basePrice || 0,
           createdAt: new Date().toISOString(),
           createdById: currentUser?.id,
           createdBy: currentUser?.name
@@ -580,6 +1000,8 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     } catch (error) {
       console.error('Error toggling subscription:', error);
       toast.error('Failed to update subscription status');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -587,6 +1009,35 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
     if (!journal) return;
     setIsSaving(true);
     try {
+      // Uniqueness checks
+      if (globalSettings?.uniquenessSettings?.journalTitle && editData.title !== journal.title) {
+        const isTitleUnique = await checkCoreFieldUniqueness('journals', 'title', editData.title, journalId);
+        if (!isTitleUnique) {
+          toast.error('Journal title is already in use by another journal');
+          setIsSaving(false);
+          return;
+        }
+      }
+      
+      if (globalSettings?.uniquenessSettings?.issnNumber) {
+        if (editData.issnPrint && (editData as any).issnPrint !== journal.issnPrint) {
+          const isUnique = await checkCoreFieldUniqueness('journals', 'issnPrint', (editData as any).issnPrint, journalId);
+          if (!isUnique) {
+            toast.error('Print ISSN is already in use');
+            setIsSaving(false);
+            return;
+          }
+        }
+        if (editData.issnOnline && (editData as any).issnOnline !== journal.issnOnline) {
+          const isUnique = await checkCoreFieldUniqueness('journals', 'issnOnline', (editData as any).issnOnline, journalId);
+          if (!isUnique) {
+            toast.error('Online ISSN is already in use');
+            setIsSaving(false);
+            return;
+          }
+        }
+      }
+
       await updateDoc(doc(db, 'journals', journalId), {
         ...editData,
         updatedAt: serverTimestamp()
@@ -623,7 +1074,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
   }
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-8">
+    <div className="p-8 w-full px-4 md:px-8 space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <button 
@@ -636,13 +1087,14 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           Back
         </button>
         <div className="flex gap-3">
-          {!isEditing && (
+          {!isEditing && (isAdmin || isManager || check('journals', 'delete')) && (
             <button 
-              onClick={handleGetAiHealth}
-              className="px-5 py-2.5 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl font-bold hover:bg-indigo-100 transition-all shadow-sm flex items-center gap-2"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="px-5 py-2.5 bg-rose-50 border border-rose-100 text-rose-600 rounded-xl font-bold hover:bg-rose-100 transition-all flex items-center gap-2 shadow-sm"
+              title="Move Journal to Trash"
             >
-              <Sparkles size={18} />
-              AI Health Check
+              <Trash2 size={18} />
+              Delete Journal
             </button>
           )}
           {isEditing ? (
@@ -675,50 +1127,29 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
         isEditing && "ring-4 ring-indigo-50 rounded-[2rem] p-2 -m-2 bg-indigo-50/10"
       )}>
 
-      {/* Dynamic Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar border-b border-slate-100 mb-8">
-        {[
-          { id: 'overview', label: 'Journal Overview', icon: LayoutDashboard, show: true },
-          { id: 'health', label: 'Journal Health Check', icon: Shield, show: true },
-        ].filter(tab => tab.show).map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
-            className={cn(
-              "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap border-b-2",
-              activeTab === tab.id 
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 border-indigo-600" 
-                : "bg-white text-slate-500 border-transparent hover:bg-slate-50"
-            )}
-          >
-            <tab.icon size={18} />
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left Column: Context Content */}
         <div className="lg:col-span-2 space-y-8">
-          {activeTab === 'health' && (
-            <div className="animate-in fade-in slide-in-from-left-4">
-              <JournalHealthDashboard journal={journal} />
-            </div>
-          )}
-
-          {activeTab === 'overview' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-left-4">
+          <div className="space-y-8 animate-in fade-in slide-in-from-left-4">
               <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 space-y-8">
                 {/* Journal Basic Info Section */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-4">
                     <div className="relative group/photo">
-                      <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center overflow-hidden border-2 border-white shadow-sm">
+                      <div className={cn(
+                        "w-16 h-16 rounded-2xl flex items-center justify-center overflow-hidden border-2 shadow-sm transition-all",
+                        (journal.subscribed_services?.includes('Hosting') || journal.subscribed_services?.includes('Domain'))
+                          ? "bg-indigo-600 border-indigo-100 text-white" 
+                          : "bg-slate-100 border-slate-200 text-slate-400 grayscale"
+                      )}>
                         {journal.url ? (
                           <img 
-                            src={`https://www.google.com/s2/favicons?sz=64&domain=${new URL(journal.url).hostname}`} 
+                            src={`https://www.google.com/s2/favicons?sz=64&domain=${getHostname(journal.url)}`} 
                             alt="Journal"
-                            className="w-full h-full object-cover"
+                            className={cn(
+                              "w-full h-full object-cover",
+                              !(journal.subscribed_services?.includes('Hosting') || journal.subscribed_services?.includes('Domain')) && "grayscale opacity-50 transition-all group-hover/photo:grayscale-0 group-hover/photo:opacity-100"
+                            )}
                             referrerPolicy="no-referrer"
                           />
                         ) : (
@@ -729,20 +1160,111 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                     <div>
                       {isEditing ? (
                         <div className="space-y-4 w-full">
-                          <input 
-                            type="text"
-                            className="text-2xl font-black text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
-                            value={editData.title || ''}
-                            onChange={(e) => setEditData({ ...editData, title: e.target.value })}
-                            placeholder="Journal Title"
-                          />
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">Journal Title</label>
+                            <input 
+                              type="text"
+                              className="text-2xl font-black text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                              value={editData.title || ''}
+                              onChange={(e) => {
+                                const title = e.target.value;
+                                setEditData({ 
+                                  ...editData, 
+                                  title,
+                                  abbreviation: generateJournalAbbreviation(title),
+                                  initials: generateJournalInitials(title)
+                                });
+                              }}
+                              placeholder="Journal Title"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Abbreviation</label>
+                              <input 
+                                type="text"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-sm font-bold"
+                                value={editData.abbreviation || ''}
+                                onChange={(e) => setEditData({ ...editData, abbreviation: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Initials</label>
+                              <input 
+                                type="text"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-sm font-bold"
+                                value={editData.initials || ''}
+                                onChange={(e) => setEditData({ ...editData, initials: e.target.value })}
+                              />
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <div>
-                          <h1 className="text-2xl font-black text-slate-900">{journal.title}</h1>
+                          <div className="flex items-center gap-3">
+                            <h1 className="text-2xl font-black text-slate-900">{journal.title}</h1>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200 uppercase tracking-tight" title="Abbreviation">
+                                {journal.abbreviation || 'N/A'}
+                              </span>
+                              <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100 uppercase tracking-tight" title="Initials">
+                                {journal.initials || 'N/A'}
+                              </span>
+                            </div>
+                          </div>
                           <p className="text-slate-500 font-medium">Subject: {journal.subjectCategory || 'Not set'}</p>
                         </div>
                       )}
+                    </div>
+                    {/* Service Status Icons */}
+                    <div className="hidden md:flex items-center gap-2 ml-4">
+                      {[
+                        { id: 'Domain', label: 'Domain', icon: Globe, checkId: 'Domain' },
+                        { id: 'Domain (External)', label: 'Domain (E)', icon: Globe, checkId: 'Domain (External)' },
+                        { id: 'Hosting', label: 'Hosting', icon: Server, checkId: 'Hosting' },
+                        { id: 'Hosting (External)', label: 'Hosting (E)', icon: Cloud, checkId: 'Hosting (External)' },
+                        { id: 'ISSN', label: 'ISSN', icon: Hash, checkId: 'ISSN' },
+                        { id: 'DOI', label: 'DOI', icon: LinkIcon, checkId: 'DOI' },
+                        { id: 'Publisher', label: 'Publisher', icon: Building2, checkId: 'Publisher' },
+                        { id: 'HEC', label: 'HEC', icon: Shield, checkId: 'HEC' },
+                        { id: 'DOAJ', label: 'DOAJ', icon: CheckCircle2, checkId: 'DOAJ' },
+                        { id: 'OJS', label: 'OJS', icon: BookOpen, checkId: 'OJS' },
+                        { id: 'Indexing', label: 'Indexing', icon: Database, checkId: 'Indexing' },
+                        { id: 'Vault', label: 'Vault', icon: Key, checkId: 'Vault' },
+                        { id: 'Catalog', label: 'Catalog', icon: Package, checkId: 'Catalog' },
+                        { id: 'Scholar', label: 'Scholar', icon: History, checkId: 'Scholar' },
+                        { id: 'Work', label: 'Work', icon: Activity, checkId: 'Work' },
+                      ].filter((s) => {
+                        if (s.checkId === 'Domain') return journal.subscribed_services?.includes('Domain');
+                        if (s.checkId === 'Domain (External)') return journal.subscribed_services?.includes('Domain (External)');
+                        if (s.checkId === 'Hosting') return journal.subscribed_services?.includes('Hosting');
+                        if (s.checkId === 'Hosting (External)') return journal.subscribed_services?.includes('Hosting (External)');
+                        if (s.checkId === 'ISSN') return journal.subscribed_services?.includes('ISSN');
+                        if (s.checkId === 'DOI') return journal.subscribed_services?.includes('DOI');
+                        if (s.checkId === 'Publisher') return journal.subscribed_services?.includes('Publisher');
+                        if (s.checkId === 'HEC') return journal.subscribed_services?.includes('HEC') || journal.subscribed_services?.includes('HEC Recognition');
+                        if (s.checkId === 'DOAJ') return journal.subscribed_services?.includes('DOAJ');
+                        if (s.checkId === 'OJS') return journal.subscribed_services?.includes('OJS');
+                        if (s.checkId === 'Indexing') return journal.subscribed_services?.includes('Indexing');
+                        if (s.checkId === 'Vault') return journal.subscribed_services?.includes('Vault') || journal.subscribed_services?.includes('Security');
+                        if (s.checkId === 'Catalog') return journal.subscribed_services?.includes('Catalog') || (journalClientServices && journalClientServices.length > 0);
+                        if (s.checkId === 'Scholar') return journal.subscribed_services?.includes('Scholar') || journal.subscribed_services?.includes('Google Scholar') || journal.subscribed_services?.includes('Google Scholar Indexing');
+                        if (s.checkId === 'Work') return journal.subscribed_services?.includes('Work') || journal.subscribed_services?.includes('Work History') || journal.subscribed_services?.includes('Tasks');
+                        return false;
+                      }).map((s) => {
+                        return (
+                          <div key={s.id} className="group relative">
+                            <div className={cn(
+                              "w-8 h-8 rounded-lg flex items-center justify-center transition-all border shadow-sm bg-white border-indigo-100 text-indigo-600 shadow-indigo-100"
+                            )}>
+                              <s.icon size={16} />
+                            </div>
+                            <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-white text-[8px] font-bold px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap z-10">
+                              {s.label}: Active
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                   {isEditing ? (
@@ -761,7 +1283,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                       "px-4 py-1.5 rounded-full text-xs font-bold border uppercase tracking-wider",
                       journal.status === 'complete' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
                     )}>
-                      {journal.status.replace('_', ' ')}
+                      {journal.status ? journal.status.replace('_', ' ') : 'active'}
                     </span>
                   )}
                 </div>
@@ -785,12 +1307,66 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                   </div>
 
                   <div className="space-y-4">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Technical Hub</h3>
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3 text-slate-600">
-                        <Globe size={18} className="text-slate-400" />
-                        <span className="text-sm font-medium">Domain: {domains.find(d => d.id === journal.domainId)?.domainName || 'Default'}</span>
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Technical Infrastructure</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Domain Status */}
+                      <div className={cn(
+                        "p-4 rounded-2xl border flex items-center gap-4 transition-all",
+                        journal.subscribed_services?.includes('Domain') 
+                          ? "bg-indigo-50/50 border-indigo-100 shadow-sm" 
+                          : "bg-slate-50 border-slate-100"
+                      )}>
+                        <div className={cn(
+                          "w-10 h-10 rounded-xl flex items-center justify-center transition-all",
+                          journal.subscribed_services?.includes('Domain')
+                            ? "bg-white text-indigo-600 shadow-sm"
+                            : "bg-slate-100 text-slate-400 grayscale"
+                        )}>
+                          <Globe size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Web Domain</p>
+                          <p className="text-sm font-bold text-slate-700">
+                            {domains.find(d => d.id === journal.domainId)?.domainName || 'External Domain'}
+                          </p>
+                        </div>
+                        {journal.subscribed_services?.includes('Domain (External)') && (
+                          <div className="ml-auto px-2 py-0.5 bg-slate-200 text-slate-600 text-[8px] font-black rounded uppercase tracking-tighter">
+                            External
+                          </div>
+                        )}
                       </div>
+
+                      {/* Hosting Status */}
+                      <div className={cn(
+                        "p-4 rounded-2xl border flex items-center gap-4 transition-all",
+                        journal.subscribed_services?.includes('Hosting') 
+                          ? "bg-indigo-50/50 border-indigo-100 shadow-sm" 
+                          : "bg-slate-50 border-slate-100"
+                      )}>
+                        <div className={cn(
+                          "w-10 h-10 rounded-xl flex items-center justify-center transition-all",
+                          journal.subscribed_services?.includes('Hosting')
+                            ? "bg-white text-indigo-600 shadow-sm"
+                            : "bg-slate-100 text-slate-400 grayscale"
+                        )}>
+                          <Server size={20} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Server Hosting</p>
+                          <p className="text-sm font-bold text-slate-700">
+                            {journal.subscribed_services?.includes('Hosting') ? 'Hosta Enterprise' : 'External Host'}
+                          </p>
+                        </div>
+                        {journal.subscribed_services?.includes('Hosting (External)') && (
+                          <div className="ml-auto px-2 py-0.5 bg-slate-200 text-slate-600 text-[8px] font-black rounded uppercase tracking-tighter">
+                            External
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-2">
                       <div className="flex items-center gap-3 text-slate-600">
                         <Settings2 size={18} className="text-slate-400" />
                         <span className="text-sm font-medium">Platform: {journal.ojsVersion ? `OJS ${journal.ojsVersion}` : 'No CMS Recorded'}</span>
@@ -800,68 +1376,601 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 </div>
               </div>
 
-              {/* SERVICE TABS INTERFACE */}
-              <div className="space-y-6">
-                <div className="flex gap-1 overflow-x-auto pb-2 no-scrollbar border-b border-slate-100">
-                  {[
-                    { id: 'issn', label: 'ISSN', icon: Hash },
-                    { id: 'doi', label: 'DOI', icon: LinkIcon },
-                    { id: 'publisher', label: 'Publisher', icon: Briefcase },
-                    { id: 'hec', label: 'HEC', icon: Shield },
-                    { id: 'doaj', label: 'DOAJ', icon: CheckCircle2 },
-                    { id: 'ojs', label: 'OJS', icon: Globe },
-                    { id: 'indexing', label: 'Indexing', icon: Database },
-                    { id: 'vault', label: 'Vault', icon: Key },
-                    { id: 'history', label: 'Scholar', icon: History },
-                    { id: 'work-history', label: 'Work', icon: Activity }
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveServiceTab(tab.id as any)}
-                      className={cn(
-                        "flex items-center gap-2 px-4 py-2 rounded-t-xl font-bold transition-all whitespace-nowrap text-xs",
-                        activeServiceTab === tab.id 
-                          ? "bg-white text-indigo-600 border-x border-t border-slate-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]" 
-                          : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
-                      )}
-                    >
-                      <tab.icon size={14} />
-                      {tab.label}
-                    </button>
-                  ))}
+              {/* ACADEMIC PROFILE & ASSOCIATIONS SECTION */}
+              <div id="academic-associations-card" className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 space-y-8 animate-in fade-in slide-in-from-left-4">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                  <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 shadow-sm">
+                    <GraduationCap size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900">Academic Profile & Core Associations</h2>
+                    <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mt-0.5">Configure metadata, fees, discovery scopes, Call For Papers and editorial board</p>
+                  </div>
                 </div>
 
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 min-h-[400px]">
-                  {/* Service Render Logic */}
-                  <ServiceTabContent 
-                    tab={activeServiceTab}
-                    journal={journal}
-                    isEditing={isEditing}
-                    editData={editData}
-                    setEditData={setEditData}
-                    indexingRecords={indexingRecords}
-                    agencies={agencies}
-                    journalTasks={journalTasks}
-                    scholarHistory={scholarHistory}
-                    publishers={publishers}
-                    currentUser={currentUser}
-                    setIsActivateServiceModalOpen={setIsActivateServiceModalOpen}
-                    setServiceToActivate={setServiceToActivate}
-                    isAdmin={isAdmin}
-                    check={check}
-                    setIsIndexingModalOpen={setIsIndexingModalOpen}
-                    setIsScholarModalOpen={setIsScholarModalOpen}
-                    copiedField={copiedField}
-                    setCopiedField={setCopiedField}
-                    formatDateForInput={formatDateForInput}
-                    onNavigateToPublisher={onNavigateToPublisher}
-                    employees={employees}
-                    onToggleSubscription={handleToggleSubscription}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  {/* Left Column: Category, APC & Scopes */}
+                  <div className="space-y-6">
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                        <BookOpen size={14} className="text-indigo-500" />
+                        Classification & Financials
+                      </h3>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Category selection */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Journal Category</label>
+                          {isEditing ? (
+                            <select
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.category || ''}
+                              onChange={(e) => setEditData({ ...editData, category: e.target.value })}
+                            >
+                              <option value="">Select Category</option>
+                              {((globalSettings?.journalCategories || [
+                                'Multidisciplinary', 'Computer Science', 'Medicine', 'Engineering', 
+                                'Social Sciences', 'Business & Management', 'Arts & Humanities'
+                              ]) as string[]).map((cat: string) => (
+                                <option key={cat} value={cat}>{cat}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="px-3 py-2 bg-slate-50 rounded-xl text-xs font-bold text-slate-700 border border-slate-100">
+                              {journal.category || 'Not Classified'}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Subject category input */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Subject Sector</label>
+                          {isEditing ? (
+                            <input
+                              type="text"
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.subjectCategory || ''}
+                              onChange={(e) => setEditData({ ...editData, subjectCategory: e.target.value })}
+                              placeholder="e.g. Artificial Intelligence"
+                            />
+                          ) : (
+                            <div className="px-3 py-2 bg-slate-50 rounded-xl text-xs font-bold text-slate-700 border border-slate-100">
+                              {journal.subjectCategory || 'Not set'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* APC amount input */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">APC Amount ($ USD)</label>
+                          {isEditing ? (
+                            <div className="relative">
+                              <span className="absolute left-2.5 top-2 text-xs font-bold text-slate-400">$</span>
+                              <input
+                                type="number"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-6 pr-2 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                                value={editData.apcAmount ?? ''}
+                                onChange={(e) => setEditData({ ...editData, apcAmount: e.target.value ? Number(e.target.value) : undefined })}
+                                placeholder="0"
+                              />
+                            </div>
+                          ) : (
+                            <div className="px-3 py-2 bg-emerald-50/50 rounded-xl text-xs font-bold text-emerald-700 border border-emerald-100 flex items-center gap-1.5">
+                              <DollarSign size={14} className="text-emerald-500" />
+                              <span>APC: ${journal.apcAmount || 0} USD</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* OJS platform version selection */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">OJS Platform Version</label>
+                          {isEditing ? (
+                            <select
+                              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={editData.ojsVersion || ''}
+                              onChange={(e) => setEditData({ ...editData, ojsVersion: e.target.value })}
+                            >
+                              <option value="">Select Version</option>
+                              {['3.3.0.8', '3.3.0.10', '3.3.0.12', '3.3.0.14', '3.3.0.15', '3.3.0.16', '3.3.0.17', '3.4.0.1', '3.4.0.2', '3.4.0.3', '3.x'].map(v => (
+                                <option key={v} value={v}>OJS {v}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="px-3 py-2 bg-indigo-50/50 rounded-xl text-xs font-bold text-indigo-700 border border-indigo-100 flex items-center gap-1.5">
+                              <Settings2 size={14} className="text-indigo-400" />
+                              <span>Version: {journal.ojsVersion || 'No CMS Recorded'}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Scope Keywords with AI Suggester */}
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                          <Sparkles size={14} className="text-indigo-500" />
+                          Scope & Keywords
+                        </h3>
+                        {isEditing && (
+                          <button
+                            type="button"
+                            disabled={isSuggestingKeywords}
+                            onClick={handleSuggestKeywords}
+                            className="text-[10px] font-black uppercase text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-2 py-1 rounded-lg transition-all flex items-center gap-1 hover:scale-105 active:scale-95 disabled:opacity-50 border border-indigo-100 shadow-sm"
+                          >
+                            <Sparkles size={12} className={cn(isSuggestingKeywords ? "animate-spin" : "")} />
+                            {isSuggestingKeywords ? 'Analyzing...' : 'Suggest with AI'}
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 p-4 bg-slate-50 border border-slate-100 rounded-2xl min-h-[100px]">
+                        {((isEditing ? editData.scope : journal.scope) || []).length > 0 ? (
+                          ((isEditing ? editData.scope : journal.scope) || []).map((tag: string) => (
+                            <span 
+                              key={tag} 
+                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-100 text-slate-600 rounded-full text-xs font-bold shadow-sm transition-all hover:border-indigo-100 hover:text-slate-800"
+                            >
+                              {tag}
+                              {isEditing && (
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    const currentScope = editData.scope || [];
+                                    setEditData({ ...editData, scope: currentScope.filter(t => t !== tag) });
+                                  }}
+                                  className="w-4 h-4 rounded-full flex items-center justify-center hover:bg-rose-50 hover:text-rose-600 transition-colors text-[9px] font-black"
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </span>
+                          ))
+                        ) : (
+                          <div className="text-slate-400 text-xs italic m-auto">No scope/keyword tags defined yet.</div>
+                        )}
+                      </div>
+
+                      {isEditing && (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="Add scope tag (Press Enter...)"
+                            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                            value={newScopeTag || ''}
+                            onChange={(e) => setNewScopeTag(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const tagStr = newScopeTag.trim();
+                                if (tagStr) {
+                                  const currentScope = editData.scope || [];
+                                  if (!currentScope.includes(tagStr)) {
+                                    setEditData({ ...editData, scope: [...currentScope, tagStr] });
+                                  }
+                                  setNewScopeTag('');
+                                }
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const tagStr = newScopeTag.trim();
+                              if (tagStr) {
+                                const currentScope = editData.scope || [];
+                                if (!currentScope.includes(tagStr)) {
+                                  setEditData({ ...editData, scope: [...currentScope, tagStr] });
+                                }
+                                setNewScopeTag('');
+                              }
+                            }}
+                            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all active:scale-95 shadow-sm"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: CFP settings & Editorial Board */}
+                  <div className="space-y-6">
+                    {/* Call for Papers profile */}
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                        <Volume2 size={14} className="text-indigo-500" />
+                        Call For Papers (CFP) Profile
+                      </h3>
+
+                      <div className="p-5 bg-slate-50 border border-slate-100 rounded-3xl space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs font-black text-slate-700 uppercase">Use for CFP</p>
+                            <p className="text-[10px] text-slate-400 font-bold mt-0.5">Indicate if this journal is actively accepting paper submissions</p>
+                          </div>
+                          {isEditing ? (
+                            <button
+                              type="button"
+                              onClick={() => setEditData({ ...editData, useForCfp: !editData.useForCfp })}
+                              className={cn(
+                                "w-12 h-6 rounded-full p-1 transition-all duration-200 outline-none flex items-center",
+                                editData.useForCfp ? "bg-indigo-600 justify-end" : "bg-slate-300 justify-start"
+                              )}
+                            >
+                              <span className="w-4 h-4 rounded-full bg-white shadow-md block" />
+                            </button>
+                          ) : (
+                            <span className={cn(
+                              "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                              journal.useForCfp 
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-100" 
+                                : "bg-slate-100 text-slate-500 border-slate-200"
+                            )}>
+                              {journal.useForCfp ? "Active CFP" : "No CFP Enlisted"}
+                            </span>
+                          )}
+                        </div>
+
+                        {((isEditing ? editData.useForCfp : journal.useForCfp)) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-200/50 animate-in fade-in slide-in-from-top-2">
+                            <div className="space-y-1">
+                              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CFP Discipline / Subject</label>
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                                  value={editData.cfpDiscipline || ''}
+                                  onChange={(e) => setEditData({ ...editData, cfpDiscipline: e.target.value })}
+                                  placeholder="e.g. Science & Tech"
+                                />
+                              ) : (
+                                <div className="text-xs font-bold text-slate-700">{journal.cfpDiscipline || 'General Multi-disciplinary'}</div>
+                              )}
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Submission Deadline</label>
+                              {isEditing ? (
+                                <input
+                                  type="date"
+                                  className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                                  value={editData.cfpDeadline || ''}
+                                  onChange={(e) => setEditData({ ...editData, cfpDeadline: e.target.value })}
+                                />
+                              ) : (
+                                <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                  <Calendar size={12} className="text-slate-400" />
+                                  {journal.cfpDeadline ? journal.cfpDeadline : 'No Deadline Assigned'}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Editorial team board members */}
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                        <Users size={14} className="text-indigo-500" />
+                        Editorial Team & Board Members
+                      </h3>
+
+                      <div className="p-5 bg-slate-50 border border-slate-100 rounded-3xl space-y-4">
+                        <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1 no-scrollbar">
+                          {((isEditing ? editData.editorialBoardMembers : journal.editorialBoardMembers) || []).length > 0 ? (
+                            ((isEditing ? editData.editorialBoardMembers : journal.editorialBoardMembers) || []).map((member: string, index: number) => (
+                              <div key={`${member}-${index}`} className="flex justify-between items-center p-2.5 bg-white border border-slate-100 rounded-xl shadow-xs">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-5 h-5 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center text-[10px] font-black">
+                                    {index + 1}
+                                  </div>
+                                  <span className="text-xs font-bold text-slate-700">{member}</span>
+                                </div>
+                                {isEditing && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const currentBoard = editData.editorialBoardMembers || [];
+                                      setEditData({ ...editData, editorialBoardMembers: currentBoard.filter(m => m !== member) });
+                                    }}
+                                    className="text-slate-400 hover:text-rose-600 transition-colors p-1"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-slate-400 text-xs italic py-4 text-center">No team members listed yet.</div>
+                          )}
+                        </div>
+
+                        {isEditing && (
+                          <div className="flex gap-2 pt-2 border-t border-slate-200/50">
+                            <input
+                              type="text"
+                              placeholder="Enter board member name..."
+                              className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={newBoardMember || ''}
+                              onChange={(e) => setNewBoardMember(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const memberName = newBoardMember.trim();
+                                  if (memberName) {
+                                    const currentBoard = editData.editorialBoardMembers || [];
+                                    if (!currentBoard.includes(memberName)) {
+                                      setEditData({ ...editData, editorialBoardMembers: [...currentBoard, memberName] });
+                                    }
+                                    setNewBoardMember('');
+                                  }
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const memberName = newBoardMember.trim();
+                                if (memberName) {
+                                  const currentBoard = editData.editorialBoardMembers || [];
+                                  if (!currentBoard.includes(memberName)) {
+                                    setEditData({ ...editData, editorialBoardMembers: [...currentBoard, memberName] });
+                                  }
+                                  setNewBoardMember('');
+                                }
+                              }}
+                              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all active:scale-95 shadow-sm"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Additional Google Scholar & Indexing Summaries */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8 border-t border-slate-100">
+                  {/* Google Scholar Quick Status */}
+                  <div className="space-y-4">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <GraduationCap size={14} className="text-indigo-500" />
+                      Google Scholar Status
+                    </h3>
+                    <div className="p-5 bg-slate-50 border border-slate-100 rounded-3xl flex justify-between items-center">
+                      <div>
+                        <p className="text-xs font-black text-slate-700 uppercase">Scholar Indexing Status</p>
+                        <p className="text-[10px] text-slate-400 font-bold mt-0.5">Define overall Google Scholar state</p>
+                      </div>
+
+                      {isEditing ? (
+                        <select
+                          className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                          value={editData.googleScholarStatus || journal.googleScholarStatus || 'Not Indexed'}
+                          onChange={(e) => setEditData({ ...editData, googleScholarStatus: e.target.value })}
+                        >
+                          <option value="Not Indexed">Not Indexed</option>
+                          <option value="Indexed">Indexed</option>
+                          <option value="Pending">Pending</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="Rejected">Rejected</option>
+                        </select>
+                      ) : (
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                          (journal.googleScholarStatus || (scholarHistory.length > 0 ? scholarHistory[0].status : 'Not Indexed')) === "Indexed"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                            : (journal.googleScholarStatus || (scholarHistory.length > 0 ? scholarHistory[0].status : 'Not Indexed')) === "Pending" || (journal.googleScholarStatus || (scholarHistory.length > 0 ? scholarHistory[0].status : 'Not Indexed')) === "In Progress"
+                              ? "bg-amber-50 text-amber-700 border-amber-100"
+                              : "bg-slate-100 text-slate-500 border-slate-200"
+                        )}>
+                          {journal.googleScholarStatus || (scholarHistory.length > 0 ? scholarHistory[0].status : 'Not Indexed')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Indexing Summary quick status */}
+                  <div className="space-y-4">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <Globe size={14} className="text-indigo-500" />
+                      Registry Indexing Status
+                    </h3>
+                    <div className="p-5 bg-slate-50 border border-slate-100 rounded-3xl flex justify-between items-center">
+                      <div>
+                        <p className="text-xs font-black text-slate-700 uppercase">Indexing Presence</p>
+                        <p className="text-[10px] text-slate-400 font-bold mt-0.5">
+                          Currently present in <strong className="text-indigo-600">{indexingRecords.filter(r => r.status === 'indexed').length}</strong> active registry indexes.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsIndexingModalOpen(true)}
+                        className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-100 rounded-xl text-xs font-black transition-all active:scale-95 shadow-xs"
+                      >
+                        Manage Indexing
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
+
+              {/* SERVICE TABS INTERFACE */}
+              {(() => {
+                const visibleServiceTabs = ALL_AVAILABLE_TABS.filter(tab => 
+                  journal?.active_tabs?.includes(tab.id)
+                );
+
+                return (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                        {visibleServiceTabs.map(tab => (
+                          <button
+                            key={tab.id}
+                            onClick={() => setActiveServiceTab(tab.id as any)}
+                            className={cn(
+                              "flex items-center gap-2 px-4 py-2 rounded-t-xl font-bold transition-all whitespace-nowrap text-xs group relative",
+                              activeServiceTab === tab.id 
+                                ? "bg-white text-indigo-600 border-x border-t border-slate-100 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]" 
+                                : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                            )}
+                          >
+                            <tab.icon size={14} />
+                            {tab.label}
+                            {/* Option to remove active tab */}
+                            <span 
+                              onClick={(e) => handleRemoveActiveTab(tab.id, e)}
+                              className="ml-1.5 p-0.5 rounded-full hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                              title={`Hide ${tab.label} Tab`}
+                            >
+                              <X size={10} />
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* "+" Button to add tab */}
+                      <button
+                        onClick={() => setIsAddTabModalOpen(true)}
+                        className="p-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 text-xs font-black uppercase tracking-wider"
+                        title="Add Service Tab"
+                      >
+                        <Plus size={16} />
+                        <span className="hidden sm:inline">Add Tab</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 min-h-[400px]">
+                      {visibleServiceTabs.length === 0 ? (
+                        <div className="py-20 text-center space-y-4">
+                          <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mx-auto">
+                            <Plus size={32} />
+                          </div>
+                          <div>
+                            <p className="text-slate-500 font-bold text-sm">No service tabs active yet.</p>
+                            <p className="text-xs text-slate-400 font-medium max-w-sm mx-auto mt-1">
+                              Click the "+ Add Tab" button above to activate and configure your journal services.
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setIsAddTabModalOpen(true)}
+                            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all shadow-sm shadow-indigo-100"
+                          >
+                            Activate First Tab
+                          </button>
+                        </div>
+                      ) : (
+                        /* Service Render Logic */
+                        <ServiceTabContent 
+                          tab={activeServiceTab}
+                          journal={journal}
+                          isEditing={isEditing}
+                          editData={editData}
+                          setEditData={setEditData}
+                          indexingRecords={indexingRecords}
+                          agencies={agencies}
+                          journalTasks={journalTasks}
+                          journalClientServices={journalClientServices}
+                          scholarHistory={scholarHistory}
+                          publishers={publishers}
+                          currentUser={currentUser}
+                          setIsActivateServiceModalOpen={setIsActivateServiceModalOpen}
+                          setServiceToActivate={setServiceToActivate}
+                          isAdmin={isAdmin}
+                          check={check}
+                          setIsIndexingModalOpen={setIsIndexingModalOpen}
+                          setIsScholarModalOpen={setIsScholarModalOpen}
+                          copiedField={copiedField}
+                          setCopiedField={setCopiedField}
+                          formatDateForInput={formatDateForInput}
+                          onNavigateToPublisher={onNavigateToPublisher}
+                          employees={employees}
+                          onToggleSubscription={handleToggleSubscription}
+                          setSelectedCsId={setSelectedCsId}
+                          setIsChecklistModalOpen={setIsChecklistModalOpen}
+                          toggleChecklistItem={toggleChecklistItem}
+                          domains={domains}
+                          onOpenQuickDataModal={handleOpenQuickDataModal}
+                        />
+                      )}
+                    </div>
+
+                    {/* Separate Card for Vault */}
+                    {(isAdmin || check('journals', 'edit')) && journal && (
+                      <div id="vault-card" className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 space-y-6 animate-in fade-in slide-in-from-left-4 mt-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                            <Key size={20} />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-black text-slate-900 uppercase">Credential Vault</h3>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Secure access credentials storage</p>
+                          </div>
+                        </div>
+                        <CredentialVault journalId={journal.id} currentUser={currentUser} />
+                      </div>
+                    )}
+
+                    {/* Separate Card for Work Performance */}
+                    {journal && (
+                      <div id="work-history-card" className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 space-y-6 animate-in fade-in slide-in-from-left-4 mt-8">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
+                              <Activity size={20} />
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-black text-slate-900 uppercase">Task Performance</h3>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Operational task history</p>
+                            </div>
+                          </div>
+                          <span className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-[10px] font-bold uppercase tracking-widest">
+                            {journalTasks.length} Tasks
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          {journalTasks.map((task: any) => (
+                            <div key={task.id} className="p-4 bg-slate-50 hover:bg-white border border-transparent hover:border-slate-100 rounded-2xl shadow-xs transition-all group">
+                              <div className="flex justify-between items-start">
+                                <div className="space-y-1">
+                                  <p className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight">{task.title}</p>
+                                  <div className="flex items-center gap-2">
+                                    <span className={cn(
+                                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                                      task.status === 'completed' ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                                    )}>{task.status}</span>
+                                    <span className="text-[10px] text-slate-400 font-medium">Assigned to: {(employees.find((e: any) => e.id === task.assignedTo))?.name || 'Unassigned'}</span>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-sm font-black text-slate-900">+{task.points}</p>
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase">Points</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                          {journalTasks.length === 0 && (
+                            <div className="text-center py-12 text-slate-400 italic bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                              No operational tasks found.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {/* Journal Publication Lifecycle module removed */}
             </div>
-          )}
         </div>
 
         {/* Right Column: Discovery & AI */}
@@ -891,62 +2000,149 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                   <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mt-1">Available to Unlock</p>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {['Hosting', 'Indexing', 'Editorial', 'OJS'].filter(s => !journal.subscribed_services?.includes(s)).slice(0, 4).map(s => (
-                    <div key={s} className="px-3 py-2 bg-white/50 rounded-xl text-[10px] font-bold text-indigo-700 border border-indigo-100 flex items-center gap-2">
+                  {['Hosting', 'Indexing', 'Editorial', 'OJS'].filter(s => !journal.subscribed_services?.includes(s)).slice(0, 4).map((s, idx) => (
+                    <div key={`${s}-${idx}`} className="px-3 py-2 bg-white/50 rounded-xl text-[10px] font-bold text-indigo-700 border border-indigo-100 flex items-center gap-2">
                       <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
                       {s}
                     </div>
                   ))}
                 </div>
               </div>
-              <button 
-                onClick={handleGetAiHealth}
-                className="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100"
-              >
-                AI Insights Analysis
-              </button>
+
             </div>
         </div>
       </div>
 
-      {/* AI Health Modal */}
+
+
+      {/* Custom Add Service Tab Modal */}
       <Modal
-        isOpen={isAiModalOpen}
-        onClose={() => setIsAiModalOpen(false)}
-        title="Gemini AI Health Check"
+        isOpen={isAddTabModalOpen}
+        onClose={() => {
+          setIsAddTabModalOpen(false);
+          setSelectedTabToActivate('');
+        }}
+        title="Activate Service Tab"
+        maxWidth="lg"
       >
         <div className="space-y-6">
-          <div className="flex items-center gap-4 p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
-            <div className="p-3 bg-white text-indigo-600 rounded-xl shadow-sm">
-              <Sparkles size={24} />
-            </div>
-            <div>
-              <h4 className="font-bold text-indigo-900">Journal Health Analysis</h4>
-              <p className="text-xs text-indigo-600">Powered by Gemini 1.5 Flash</p>
+          <div>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Select Tab to Activate</p>
+            <div className="grid grid-cols-2 gap-3">
+              {ALL_AVAILABLE_TABS.map(tab => {
+                const isActive = journal?.active_tabs?.includes(tab.id);
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    disabled={isActive}
+                    onClick={() => setSelectedTabToActivate(tab.id)}
+                    className={cn(
+                      "flex items-center gap-3 p-3 rounded-2xl border text-left transition-all relative",
+                      isActive 
+                        ? "bg-slate-50 border-slate-200 opacity-50 cursor-not-allowed text-slate-400"
+                        : selectedTabToActivate === tab.id
+                          ? "bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm shadow-indigo-50/50"
+                          : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700"
+                    )}
+                  >
+                    <div className={cn(
+                      "w-8 h-8 rounded-lg flex items-center justify-center",
+                      isActive 
+                        ? "bg-slate-100 text-slate-400"
+                        : selectedTabToActivate === tab.id
+                          ? "bg-indigo-100 text-indigo-600"
+                          : "bg-slate-50 text-slate-500"
+                    )}>
+                      <tab.icon size={16} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-black uppercase tracking-tight truncate leading-none">{tab.label}</p>
+                      <p className="text-[9px] text-slate-400 mt-0.5 truncate font-medium">
+                        {isActive ? 'Already Active' : 'Available'}
+                      </p>
+                    </div>
+                    {selectedTabToActivate === tab.id && (
+                      <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-indigo-600" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 min-h-[200px] relative">
-            {isAiLoading ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400">
-                <Loader2 className="animate-spin" size={32} />
-                <p className="text-sm font-medium">Analyzing journal data...</p>
-              </div>
-            ) : (
-              <div className="prose prose-slate prose-sm max-w-none">
-                <div className="whitespace-pre-wrap text-slate-700 leading-relaxed">
-                  {aiHealth}
+          {selectedTabToActivate && (
+            <div className="space-y-4 pt-4 border-t border-slate-100 animate-in fade-in slide-in-from-top-2">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Choose Activation Condition</p>
+                <div className="space-y-3">
+                  <label className={cn(
+                    "flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                    activationCondition === 'subscribed'
+                      ? "bg-indigo-50/30 border-indigo-200 text-indigo-950"
+                      : "bg-white border-slate-200 hover:border-slate-300 text-slate-700"
+                  )}>
+                    <input 
+                      type="radio" 
+                      name="activationCondition" 
+                      value="subscribed"
+                      checked={activationCondition === 'subscribed'}
+                      onChange={() => setActivationCondition('subscribed')}
+                      className="mt-1 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <p className="text-xs font-black uppercase">1. Subscribed and Active</p>
+                      <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                        Activate this service tab and link as an active billed subscription for the journal client.
+                      </p>
+                    </div>
+                  </label>
+
+                  <label className={cn(
+                    "flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all",
+                    activationCondition === 'unsubscribed'
+                      ? "bg-indigo-50/30 border-indigo-200 text-indigo-950"
+                      : "bg-white border-slate-200 hover:border-slate-300 text-slate-700"
+                  )}>
+                    <input 
+                      type="radio" 
+                      name="activationCondition" 
+                      value="unsubscribed"
+                      checked={activationCondition === 'unsubscribed'}
+                      onChange={() => setActivationCondition('unsubscribed')}
+                      className="mt-1 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <p className="text-xs font-black uppercase">2. Active without Subscription</p>
+                      <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                        Activate this service tab for technical/manual configuration details, without creating any client billing subscriptions.
+                      </p>
+                    </div>
+                  </label>
                 </div>
               </div>
-            )}
-          </div>
 
-          <button
-            onClick={() => setIsAiModalOpen(false)}
-            className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all"
-          >
-            Close Health Check
-          </button>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddTabModalOpen(false);
+                    setSelectedTabToActivate('');
+                  }}
+                  className="flex-1 py-2.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-black hover:bg-slate-50 transition-all active:scale-95"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddActiveTab(selectedTabToActivate, activationCondition)}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-all active:scale-95 shadow-sm shadow-indigo-100"
+                >
+                  Confirm Activation
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -979,7 +2175,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 { label: "Rejected", value: "Rejected" },
                 { label: "Tag Optimization", value: "Tag Optimization" }
               ]}
-              value={newScholarLog.status}
+              value={newScholarLog.status || 'Indexed'}
               onChange={(value) => setNewScholarLog({ ...newScholarLog, status: value })}
             />
           </div>
@@ -989,7 +2185,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               required
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 h-24 resize-none"
               placeholder="Enter tag optimization details or status notes..."
-              value={newScholarLog.tagOptimization}
+              value={newScholarLog.tagOptimization || ''}
               onChange={(e) => setNewScholarLog({ ...newScholarLog, tagOptimization: e.target.value })}
             />
           </div>
@@ -1024,15 +2220,18 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               label="Service to Activate"
               required
               options={globalSettings?.activatableServices?.length > 0 ? (
-                globalSettings.activatableServices.map((service: string) => ({ label: service, value: service }))
+                Array.from(new Set(globalSettings.activatableServices as string[])).map((service: string) => ({ label: service, value: service }))
               ) : [
                 { label: "Hosting", value: "Hosting" },
+                { label: "Hosting (External)", value: "Hosting (External)" },
                 { label: "DOI", value: "DOI" },
                 { label: "ISSN", value: "ISSN" },
                 { label: "OJS Setup", value: "OJS" },
                 { label: "Editorial", value: "Editorial" },
                 { label: "Indexing", value: "Indexing" },
-                { label: "Plagiarism Check", value: "Plagiarism" },
+                { label: "Publisher", value: "Publisher" },
+                { label: "Domain", value: "Domain" },
+                { label: "Domain (External)", value: "Domain (External)" },
                 { label: "Marketing & Boost", value: "Marketing" },
                 { label: "Call for Papers", value: "Call for Papers" },
                 { label: "Editorial Team Setup", value: "Editorial Setup" },
@@ -1055,10 +2254,12 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               label="Link Invoice (Optional)"
               options={[
                 { label: "Select Invoice", value: "" },
-                ...invoices.map(inv => ({ 
-                  label: `${inv.invoiceNumber} - ${inv.total} ${inv.status}`, 
-                  value: inv.id 
-                }))
+                ...invoices
+                  .sort((a, b) => (b.invoiceNumber || '').localeCompare(a.invoiceNumber || ''))
+                  .map(inv => ({ 
+                    label: `${inv.invoiceNumber} - ${inv.total} ${inv.status}`, 
+                    value: inv.id 
+                  }))
               ]}
               value={activationData.invoiceId}
               onChange={(value) => {
@@ -1078,7 +2279,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               type="text"
               placeholder="e.g. INV-2024-001"
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-              value={activationData.invoiceNumber}
+              value={activationData.invoiceNumber || ''}
               onChange={(e) => setActivationData({ ...activationData, invoiceNumber: e.target.value })}
             />
           </div>
@@ -1090,7 +2291,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 type="date"
                 required
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                value={activationData.startDate}
+                value={activationData.startDate || ''}
                 onChange={(e) => setActivationData({ ...activationData, startDate: e.target.value })}
               />
             </div>
@@ -1100,7 +2301,7 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 type="date"
                 required
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                value={activationData.expiryDate}
+                value={activationData.expiryDate || ''}
                 onChange={(e) => setActivationData({ ...activationData, expiryDate: e.target.value })}
               />
             </div>
@@ -1114,10 +2315,35 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
                 { label: "Monthly", value: "monthly" },
                 { label: "Annual", value: "annual" }
               ]}
-              value={activationData.subscriptionType}
+              value={activationData.subscriptionType || 'annual'}
               onChange={(value) => setActivationData({ ...activationData, subscriptionType: value as any })}
             />
           </div>
+
+          {serviceToActivate === 'Publisher' && (
+            <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-2">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Sale Price (PKR)</label>
+                <input 
+                  type="number"
+                  required
+                  className="w-full p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                  value={activationData.salePrice || 0 || ''}
+                  onChange={(e) => setActivationData({ ...activationData, salePrice: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700">Cost Price (PKR)</label>
+                <input 
+                  type="number"
+                  required
+                  className="w-full p-2.5 bg-rose-50 border border-rose-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-bold"
+                  value={activationData.costPrice || 0 || ''}
+                  onChange={(e) => setActivationData({ ...activationData, costPrice: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-3 pt-4">
             <button 
@@ -1132,6 +2358,96 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
               className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
             >
               Activate
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Add Checklist Item Modal */}
+      <Modal
+        isOpen={isChecklistModalOpen}
+        onClose={() => setIsChecklistModalOpen(false)}
+        title="Add Checklist Item"
+      >
+        <form onSubmit={handleAddChecklistItem} className="space-y-4">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-slate-700">Requirement / Task Name</label>
+                <div className="flex gap-2">
+                   <button 
+                    type="button"
+                    onClick={() => setNewChecklistItem('TEMP')}
+                    className="text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded hover:bg-amber-100 transition-all uppercase tracking-tight"
+                  >
+                    Set Temp
+                  </button>
+                </div>
+              </div>
+              <input 
+                required
+                type="text"
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                placeholder="e.g. Scanned copy of ISSN certificate"
+                value={newChecklistItem || ''}
+                onChange={(e) => setNewChecklistItem(e.target.value)}
+                autoFocus
+              />
+              <div className="flex flex-wrap gap-2 pt-1">
+                {[
+                  { label: 'Journal', value: journal.title },
+                  { label: 'Client', value: journal.clientName },
+                  { label: 'Publisher', value: publishers.find(p => p.id === journal.publisherId)?.name || 'Publisher' },
+                  { label: 'Domain', value: domains.find(d => d.id === journal.domainId)?.domainName || 'Domain' },
+                  { label: 'No Link', value: 'NO LINK' }
+                ].map(chip => (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    onClick={() => setNewChecklistItem(prev => prev ? `${prev} - ${chip.value}` : chip.value)}
+                    className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded hover:bg-indigo-50 hover:text-indigo-600 transition-all uppercase tracking-wider border border-slate-200"
+                  >
+                    + {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+               {[
+                 { label: 'Text', color: 'bg-blue-50 text-blue-600 border-blue-100' },
+                 { label: 'New Requirement', color: 'bg-purple-50 text-purple-600 border-purple-100' },
+                 { label: 'Important', color: 'bg-rose-50 text-rose-600 border-rose-100' },
+                 { label: 'Template', color: 'bg-amber-50 text-amber-600 border-amber-100' }
+               ].map(badge => (
+                 <button
+                   key={badge.label}
+                   type="button"
+                   onClick={() => setNewChecklistItem(prev => `${badge.label}: ${prev}`)}
+                   className={cn(
+                     "px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all hover:scale-105 active:scale-95",
+                     badge.color
+                   )}
+                 >
+                   Prepend {badge.label}
+                 </button>
+               ))}
+            </div>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setIsChecklistModalOpen(false)}
+              className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!newChecklistItem.trim()}
+              className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
+            >
+              Add Item
             </button>
           </div>
         </form>
@@ -1157,6 +2473,445 @@ export const JournalDetail: React.FC<JournalDetailProps> = ({
           initialItems={globalSettings?.journalScopes || []}
         />
       )}
+      {/* Quick Data Modal for Active Service Tabs */}
+      <Modal
+        isOpen={!!quickDataModalType}
+        onClose={() => setQuickDataModalType(null)}
+        title={
+          quickDataModalType === 'issn' ? 'Add / Update ISSN Data' :
+          quickDataModalType === 'doi' ? 'Update DOI Infrastructure' :
+          quickDataModalType === 'publisher' ? 'Link / Select Publisher' :
+          quickDataModalType === 'hec' ? 'Add / Update HEC Recognition Details' :
+          quickDataModalType === 'doaj' ? 'Add / Update DOAJ Indexing Details' :
+          quickDataModalType === 'ojs' ? 'Add / Update OJS Platform Details' :
+          quickDataModalType === 'domain' ? 'Add / Update Domain Infrastructure' :
+          quickDataModalType === 'hosting' ? 'Add / Update Hosting Environment' : 'Tab Data'
+        }
+        maxWidth="lg"
+      >
+        <form onSubmit={handleSaveQuickData} className="space-y-4">
+          {quickDataModalType === 'issn' && (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Print ISSN</label>
+                <input 
+                  type="text"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="e.g. 1234-5678"
+                  value={quickFormData.issnPrint || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, issnPrint: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Online ISSN</label>
+                <input 
+                  type="text"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="e.g. 8765-4321"
+                  value={quickFormData.issnOnline || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, issnOnline: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'doi' && (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">DOI Prefix</label>
+                <input 
+                  type="text"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="e.g. 10.12345"
+                  value={quickFormData.doiPrefix || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, doiPrefix: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Journal Public URL</label>
+                <input 
+                  type="url"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="https://..."
+                  value={quickFormData.url || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, url: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'publisher' && (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Select Existing Publisher</label>
+                <select
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  value={quickFormData.publisherId || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, publisherId: e.target.value, newPublisherName: '' })}
+                >
+                  <option value="">-- Choose Publisher --</option>
+                  {publishers.map((p: any) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.city}, {p.country})</option>
+                  ))}
+                </select>
+              </div>
+
+              {!quickFormData.publisherId && (
+                <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-3">
+                  <p className="text-xs font-black text-indigo-900 uppercase">Or Create New Publisher</p>
+                  <input 
+                    type="text"
+                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold"
+                    placeholder="Publisher Name"
+                    value={quickFormData.newPublisherName || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, newPublisherName: e.target.value })}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input 
+                      type="text"
+                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold"
+                      placeholder="City"
+                      value={quickFormData.newPublisherCity || ''}
+                      onChange={(e) => setQuickFormData({ ...quickFormData, newPublisherCity: e.target.value })}
+                    />
+                    <input 
+                      type="text"
+                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold"
+                      placeholder="Country"
+                      value={quickFormData.newPublisherCountry || ''}
+                      onChange={(e) => setQuickFormData({ ...quickFormData, newPublisherCountry: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {quickDataModalType === 'hec' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">HEC Category</label>
+                  <select
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.category || 'Y'}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, category: e.target.value })}
+                  >
+                    <option value="W">W Category</option>
+                    <option value="X">X Category</option>
+                    <option value="Y">Y Category</option>
+                    <option value="Z">Z Category</option>
+                    <option value="Uncategorized">Uncategorized</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Recognition Status</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. Recognized"
+                    value={quickFormData.recognitionStatus || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, recognitionStatus: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Approval Date</label>
+                  <input 
+                    type="date"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.approvalDate || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, approvalDate: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Expiry Date</label>
+                  <input 
+                    type="date"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.expiryDate || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, expiryDate: e.target.value })}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'doaj' && (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">DOAJ Inclusion Date</label>
+                <input 
+                  type="date"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  value={quickFormData.inclusionDate || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, inclusionDate: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">DOAJ Profile Link</label>
+                <input 
+                  type="url"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="https://doaj.org/toc/..."
+                  value={quickFormData.link || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, link: e.target.value })}
+                />
+              </div>
+              <div className="flex items-center gap-3 pt-2">
+                <input 
+                  type="checkbox"
+                  id="metadataCompliance"
+                  checked={quickFormData.metadataCompliance ?? true}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, metadataCompliance: e.target.checked })}
+                  className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                />
+                <label htmlFor="metadataCompliance" className="text-xs font-bold text-slate-700 cursor-pointer">
+                  Metadata Compliant with DOAJ Standards
+                </label>
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'ojs' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">OJS Version</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. 3.3.0.20"
+                    value={quickFormData.ojsVersion || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, ojsVersion: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Support Plan</label>
+                  <select
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.supportStatus || 'Community Support'}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, supportStatus: e.target.value })}
+                  >
+                    <option value="Community Support">Community Support</option>
+                    <option value="Managed OJS Standard">Managed OJS Standard</option>
+                    <option value="Enterprise OJS Premium">Enterprise OJS Premium</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Public URL</label>
+                  <input 
+                    type="url"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="https://journal.org/index.php"
+                    value={quickFormData.url || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, url: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Admin URL</label>
+                  <input 
+                    type="url"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="https://journal.org/index.php/admin"
+                    value={quickFormData.adminUrl || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, adminUrl: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Admin Username</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="admin"
+                    value={quickFormData.adminUsername || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, adminUsername: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">PHP Version / DB</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. 8.1 / MySQL"
+                    value={quickFormData.phpVersion || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, phpVersion: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Notes</label>
+                <textarea 
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs h-20 resize-none"
+                  placeholder="Additional technical setup details..."
+                  value={quickFormData.notes || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, notes: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'domain' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Domain Name</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. journaldomain.org"
+                    value={quickFormData.domainName || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, domainName: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Registrar</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. Namecheap"
+                    value={quickFormData.registrar || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, registrar: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Expiration Date</label>
+                  <input 
+                    type="date"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.expirationDate || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, expirationDate: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Nameservers</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="ns1.hosta.com, ns2.hosta.com"
+                    value={quickFormData.nameservers || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, nameservers: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Notes</label>
+                <textarea 
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs h-20 resize-none"
+                  placeholder="DNS records or domain transfer notes..."
+                  value={quickFormData.notes || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, notes: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          {quickDataModalType === 'hosting' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Provider / Server</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. Hesta Managed Cloud"
+                    value={quickFormData.provider || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, provider: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Server Status</label>
+                  <select
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    value={quickFormData.status || 'Running'}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, status: e.target.value })}
+                  >
+                    <option value="Running">Running</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Offline">Offline</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Server IP</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. 192.168.1.10"
+                    value={quickFormData.ipAddress || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, ipAddress: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase">Server Specs</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    placeholder="e.g. 4 vCPU / 8GB RAM"
+                    value={quickFormData.serverSpecs || ''}
+                    onChange={(e) => setQuickFormData({ ...quickFormData, serverSpecs: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Control Panel / Access URL</label>
+                <input 
+                  type="url"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                  placeholder="https://cpanel.domain.com"
+                  value={quickFormData.controlPanelUrl || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, controlPanelUrl: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 uppercase">Notes</label>
+                <textarea 
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-xs h-20 resize-none"
+                  placeholder="Technical hosting details..."
+                  value={quickFormData.notes || ''}
+                  onChange={(e) => setQuickFormData({ ...quickFormData, notes: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-3 pt-4">
+            <button 
+              type="button"
+              onClick={() => setQuickDataModalType(null)}
+              className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all text-xs"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              disabled={isSavingQuickData}
+              className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100 text-xs flex items-center justify-center gap-2"
+            >
+              {isSavingQuickData ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              Save Data
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDeleteJournal}
+        title="Move to Trash"
+        message={`Are you sure you want to move "${journal.title}" to trash?`}
+        confirmText="Move to Trash"
+        variant="danger"
+      />
     </div>
   );
 };
@@ -1238,7 +2993,13 @@ const ServiceTabContent = ({
   formatDateForInput,
   onNavigateToPublisher,
   employees,
-  onToggleSubscription
+  onToggleSubscription,
+  journalClientServices,
+  setSelectedCsId,
+  setIsChecklistModalOpen,
+  toggleChecklistItem,
+  domains,
+  onOpenQuickDataModal
 }: any) => {
   const isSubscribed = (service: string) => journal.subscribed_services?.includes(service);
   
@@ -1287,6 +3048,15 @@ const ServiceTabContent = ({
               )}
             </div>
           </div>
+
+          <div className="border-t border-slate-100 pt-6 mt-6">
+            <ISSNRequests 
+              currentUser={currentUser}
+              journalId={journal.id}
+              onNavigateToPublisher={onNavigateToPublisher}
+              searchQuery=""
+            />
+          </div>
         </div>
       );
 
@@ -1299,16 +3069,12 @@ const ServiceTabContent = ({
             serviceName="DOI"
             isAdmin={isAdmin}
           />
-          <div className="p-8 border-2 border-dashed border-slate-200 rounded-3xl text-center space-y-4">
-            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 mx-auto">
-              <LinkIcon size={32} />
-            </div>
-            <h3 className="text-lg font-bold text-slate-900">DOI Management Portal</h3>
-            <p className="text-sm text-slate-500 max-w-sm mx-auto">
-              {isSubscribed('DOI') 
-                ? 'Your DOI subscription is active. Advanced prefix management and article metadata submission portal is tracked.' 
-                : 'DOI data can be stored here for reference. Subscribe to activate automatic metadata deposits.'}
-            </p>
+          
+          <div className="border-t border-slate-100 pt-2">
+            <DOIManagement 
+              currentUser={currentUser}
+              journalId={journal.id}
+            />
           </div>
         </div>
       );
@@ -1322,7 +3088,7 @@ const ServiceTabContent = ({
           </div>
           {publisher ? (
             <div 
-              onClick={() => onNavigateToPublisher(publisher.id)}
+              onClick={() => onNavigateToPublisher?.(publisher.id)}
               className="p-6 bg-slate-50 rounded-3xl border border-slate-100 cursor-pointer hover:bg-slate-100 hover:border-indigo-200 transition-all group"
             >
               <div className="flex items-center gap-4">
@@ -1422,7 +3188,7 @@ const ServiceTabContent = ({
                   <p className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1">
                     <FileText size={10} /> Attachments
                   </p>
-                  {journal.hec_details.documents.map((doc: string, idx: number) => (
+                  {journal.hec_details?.documents?.map((doc: string, idx: number) => (
                     <a 
                       key={idx}
                       href={doc} 
@@ -1437,6 +3203,14 @@ const ServiceTabContent = ({
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="border-t border-slate-100 pt-6 mt-6">
+            <HEC 
+              currentUser={currentUser}
+              journalId={journal.id}
+              onNavigateToPublisher={onNavigateToPublisher}
+            />
           </div>
         </div>
       );
@@ -1496,6 +3270,13 @@ const ServiceTabContent = ({
               )}
             </div>
           </div>
+
+          <div className="border-t border-slate-100 pt-6 mt-6">
+            <DOAJApplications 
+              currentUser={currentUser}
+              journalId={journal.id}
+            />
+          </div>
         </div>
       );
 
@@ -1511,13 +3292,20 @@ const ServiceTabContent = ({
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-bold text-slate-900">OJS Platform</h3>
             {isEditing ? (
-              <input 
-                type="text"
-                placeholder="Version e.g. 3.3.0.14"
+              <select 
                 className="px-3 py-1 bg-white border border-slate-200 rounded-lg font-bold text-[10px] uppercase outline-none focus:ring-1 focus:ring-indigo-500"
                 value={editData.ojsVersion || ''}
                 onChange={(e) => setEditData({ ...editData, ojsVersion: e.target.value })}
-              />
+              >
+                <option value="">Version</option>
+                {[
+                  '3.3.0.8', '3.3.0.9', '3.3.0.10', '3.3.0.11', '3.3.0.12', 
+                  '3.3.0.13', '3.3.0.14', '3.3.0.15', '3.3.0.16', '3.3.0.17', 
+                  '3.3.0.18', '3.3.0.19', '3.3.0.20', '3.3.0.21'
+                ].sort((a, b) => a.localeCompare(b)).map(v => (
+                  <option key={v} value={v}>OJS {v}</option>
+                ))}
+              </select>
             ) : (
               <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg font-bold text-[10px] uppercase">
                 Version {journal.ojsVersion || '3.x'}
@@ -1580,10 +3368,10 @@ const ServiceTabContent = ({
 
           <div className="space-y-3">
             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Agency Records</h4>
-            {indexingRecords.map((record: any) => {
+            {indexingRecords.filter((r: any) => r.status !== 'not_indexed').map((record: any) => {
               const agency = agencies.find((a: any) => a.id === record.agencyId);
               return (
-                <div key={record.id} className="p-4 bg-white border border-slate-100 rounded-2xl shadow-sm flex items-center justify-between hover:border-indigo-100 transition-all">
+                <div key={`idx-record-${record.id}`} className="p-4 bg-white border border-slate-100 rounded-2xl shadow-sm flex items-center justify-between hover:border-indigo-100 transition-all">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center overflow-hidden border border-slate-100">
                       {agency?.logoUrl ? (
@@ -1604,7 +3392,7 @@ const ServiceTabContent = ({
                       record.status === 'not_indexed' ? "bg-rose-100 text-rose-700" :
                       "bg-amber-100 text-amber-700"
                     )}>
-                      {record.status.replace('_', ' ')}
+                      {(record.status && typeof record.status === 'string') ? record.status.replace('_', ' ') : 'Pending'}
                     </span>
                     {record.journalPageUrl && (
                       <a href={record.journalPageUrl} target="_blank" rel="noreferrer" className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
@@ -1615,7 +3403,7 @@ const ServiceTabContent = ({
                 </div>
               );
             })}
-            {indexingRecords.length === 0 && <div className="text-center py-12 text-slate-400 italic">No indexing records found.</div>}
+            {indexingRecords.filter((r: any) => r.status !== 'not_indexed').length === 0 && <div className="text-center py-12 text-slate-400 italic">No indexing records found.</div>}
           </div>
         </div>
       );
@@ -1624,49 +3412,277 @@ const ServiceTabContent = ({
       if (!(isAdmin || check('journals', 'edit'))) return <div className="text-center py-20 text-slate-400 italic">Restricted Access</div>;
       return <CredentialVault journalId={journal.id} currentUser={currentUser} />;
 
-    case 'history':
+    case 'catalog':
       return (
         <div className="space-y-6 animate-in fade-in slide-in-from-left-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <GraduationCap className="text-indigo-600" size={24} />
-              <h3 className="text-lg font-bold text-slate-900">Google Scholar History</h3>
-            </div>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xl font-black text-slate-900 uppercase">Service Catalog Subscriptions</h3>
             <button 
-              onClick={() => setIsScholarModalOpen(true)}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-sm"
+              onClick={() => setIsActivateServiceModalOpen(true)}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100 flex items-center gap-2"
             >
-              <Plus size={16} /> Update History
+              <Plus size={14} /> New Subscription
             </button>
           </div>
-          <div className="space-y-3">
-            {scholarHistory.map((item: any) => (
-              <div key={item.id} className="p-5 bg-white border border-slate-100 rounded-2xl shadow-sm flex items-center justify-between hover:shadow-md transition-all">
-                <div className="flex items-center gap-4">
-                  <div className={cn(
-                    "p-2 rounded-xl",
-                    item.status === 'Indexed' ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
-                  )}>
-                    <Activity size={20} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-900">{item.status}</p>
-                    <p className="text-[10px] text-slate-500 font-medium">Recorded: {new Date(item.timestamp?.toDate?.() || item.timestamp).toLocaleDateString()}</p>
-                  </div>
+          
+          <div className="space-y-4">
+            {journalClientServices.length === 0 ? (
+              <div className="py-20 text-center space-y-4 bg-slate-50 rounded-[2rem] border border-dashed border-slate-200">
+                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center text-slate-300 mx-auto shadow-sm">
+                  <Package size={32} />
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tag optimization</p>
-                  <p className="text-xs font-black text-indigo-600">{item.tagOptimization || 'Standard'}</p>
+                <div>
+                  <p className="text-slate-500 font-bold">No catalog services linked to this journal.</p>
+                  <p className="text-[10px] text-slate-400 font-medium">Activate professional services via the Service Catalog system.</p>
                 </div>
               </div>
-            ))}
-            {scholarHistory.length === 0 && (
-              <div className="text-center py-16 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-                <History className="mx-auto text-slate-300 mb-3" size={32} />
-                <p className="text-sm text-slate-400 italic">No Google Scholar logs recorded yet.</p>
-              </div>
+            ) : (
+              journalClientServices.map(cs => (
+                <div key={cs.id} className="p-6 bg-white border border-slate-100 rounded-3xl shadow-sm hover:border-indigo-100 transition-all space-y-4 group">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
+                        <Package size={24} />
+                      </div>
+                      <div>
+                        <h4 className="font-black text-slate-900 text-lg uppercase leading-none">{cs.serviceName}</h4>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest px-2 py-0.5 bg-indigo-50 rounded">{cs.tierName}</span>
+                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">• Subscribed {new Date(cs.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="flex items-center gap-3">
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+                          cs.status === 'Completed' ? "bg-emerald-50 text-emerald-600 border-emerald-100" :
+                          cs.status === 'In Progress' ? "bg-indigo-50 text-indigo-600 border-indigo-100" :
+                          "bg-slate-50 text-slate-500 border-slate-100"
+                        )}>
+                          {cs.status}
+                        </span>
+                        <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-indigo-600" style={{ width: `${cs.progress}%` }} />
+                        </div>
+                        <span className="text-xs font-black text-slate-900">{cs.progress}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+                    <div className="space-y-4">
+                       <div className="flex items-center justify-between">
+                         <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                           <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" /> Client Checklist
+                         </h5>
+                         <button 
+                           onClick={() => {
+                             setSelectedCsId(cs.id);
+                             setIsChecklistModalOpen(true);
+                           }}
+                           className="text-[9px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100 transition-all uppercase tracking-tight flex items-center gap-1"
+                         >
+                           <Plus size={10} /> Add Item
+                         </button>
+                       </div>
+                       <div className="space-y-2">
+                         {cs.clientChecklistProgress && Object.entries(cs.clientChecklistProgress).length > 0 ? (
+                            Object.entries(cs.clientChecklistProgress).map(([id, item]: [string, any]) => (
+                              <div 
+                               key={id} 
+                               onClick={() => toggleChecklistItem(cs.id, id, item.status)}
+                               className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg group/item cursor-pointer hover:bg-slate-100 transition-all"
+                             >
+                               <div className={cn(
+                                 "mt-0.5 w-3.5 h-3.5 rounded border flex items-center justify-center transition-all",
+                                 item.status === 'completed' ? "bg-emerald-500 border-emerald-500" : "bg-white border-slate-300"
+                               )}>
+                                 {item.status === 'completed' && <Check size={10} className="text-white" />}
+                               </div>
+                               <div className="flex-1">
+                                 <p className={cn(
+                                   "text-[11px] font-bold leading-tight",
+                                   item.status === 'completed' ? "text-slate-400 line-through" : "text-slate-700"
+                                 )}>
+                                   {item.label}
+                                 </p>
+                                 {item.updatedAt && (
+                                   <p className="text-[8px] text-slate-400 mt-0.5">Updated {new Date(item.updatedAt).toLocaleDateString()}</p>
+                                 )}
+                               </div>
+                             </div>
+                           ))
+                         ) : (
+                           <p className="text-[10px] text-slate-500 italic">No checklist items defined yet.</p>
+                         )}
+                       </div>
+                    </div>
+                    <div className="space-y-4">
+                       <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Employee Tasks
+                       </h5>
+                       <div className="space-y-2">
+                         {journalTasks.filter(t => t.clientServiceId === cs.id).slice(0, 3).map(task => (
+                           <div key={task.id} className="flex items-center justify-between text-[10px] font-bold p-2 bg-slate-50 rounded-lg">
+                             <span className="text-slate-700 truncate max-w-[150px]">{task.title}</span>
+                             <span className={cn(
+                               "px-1.5 py-0.5 rounded uppercase",
+                               task.status === 'completed' ? "text-emerald-600 bg-emerald-100" : "text-amber-600 bg-amber-100"
+                             )}>{task.status}</span>
+                           </div>
+                         ))}
+                         {journalTasks.filter(t => t.clientServiceId === cs.id).length === 0 && (
+                           <p className="text-[10px] text-slate-400 italic">No tasks active yet.</p>
+                         )}
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              ))
             )}
           </div>
+        </div>
+      );
+
+    case 'history':
+      return (
+        <ScholarHistory journalId={journal.id} currentUser={currentUser} />
+      );
+
+    case 'domain':
+      const linkedDomain = domains?.find((d: any) => d.id === journal.domainId);
+      const domainName = journal.domain_details?.domainName || linkedDomain?.domainName || 'External Domain';
+      const registrar = journal.domain_details?.registrar || linkedDomain?.registrar || 'Namecheap';
+      const expDate = journal.domain_details?.expirationDate || linkedDomain?.expirationDate || 'N/A';
+      const nameservers = journal.domain_details?.nameservers || 'ns1.hosta.com, ns2.hosta.com';
+
+      return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-left-4">
+          <SubscriptionBadge 
+            isSubscribed={isSubscribed('Domain')} 
+            onToggle={handleToggle('Domain')} 
+            serviceName="Domain"
+            isAdmin={isAdmin}
+          />
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Globe className="text-indigo-600" size={20} />
+              <h3 className="text-lg font-bold text-slate-900">Domain Infrastructure</h3>
+            </div>
+            {onOpenQuickDataModal && (
+              <button 
+                onClick={() => onOpenQuickDataModal('domain')}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all"
+              >
+                <Edit size={14} />
+                Add / Edit Domain Data
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Registered Domain</p>
+              <p className="text-base font-black text-indigo-900">{domainName}</p>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Registrar</p>
+              <p className="text-base font-bold text-slate-800">{registrar}</p>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Expiration Date</p>
+              <p className="text-sm font-bold text-slate-800">{expDate}</p>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Nameservers</p>
+              <p className="text-xs font-mono font-bold text-slate-700">{nameservers}</p>
+            </div>
+          </div>
+
+          {journal.domain_details?.notes && (
+            <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl">
+              <p className="text-[10px] font-black text-indigo-900 uppercase tracking-wider mb-1">Domain Notes</p>
+              <p className="text-xs text-slate-700 font-medium">{journal.domain_details.notes}</p>
+            </div>
+          )}
+        </div>
+      );
+
+    case 'hosting':
+      const hostingProvider = journal.hosting_details?.provider || (isSubscribed('Hosting') ? 'Hesta Enterprise Server' : 'External Hosting');
+      const hostingStatus = journal.hosting_details?.status || 'Running';
+      const serverSpecs = journal.hosting_details?.serverSpecs || '4 vCPU / 8GB RAM / 100GB NVMe SSD';
+      const ipAddress = journal.hosting_details?.ipAddress || '192.168.1.1';
+
+      return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-left-4">
+          <SubscriptionBadge 
+            isSubscribed={isSubscribed('Hosting')} 
+            onToggle={handleToggle('Hosting')} 
+            serviceName="Hosting"
+            isAdmin={isAdmin}
+          />
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Server className="text-indigo-600" size={20} />
+              <h3 className="text-lg font-bold text-slate-900">Hosting Environment</h3>
+            </div>
+            {onOpenQuickDataModal && (
+              <button 
+                onClick={() => onOpenQuickDataModal('hosting')}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all"
+              >
+                <Edit size={14} />
+                Add / Edit Hosting Data
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Provider / Machine</p>
+              <p className="text-base font-black text-slate-900">{hostingProvider}</p>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Status</p>
+              <span className="inline-block px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full text-[10px] font-black uppercase">
+                {hostingStatus}
+              </span>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Server Specs</p>
+              <p className="text-xs font-bold text-slate-800">{serverSpecs}</p>
+            </div>
+            <div className="p-5 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Server IP</p>
+              <p className="text-xs font-mono font-bold text-slate-800">{ipAddress}</p>
+            </div>
+          </div>
+
+          {journal.hosting_details?.controlPanelUrl && (
+            <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase">Control Panel Link</p>
+                <p className="text-xs font-bold text-slate-800">{journal.hosting_details.controlPanelUrl}</p>
+              </div>
+              <a 
+                href={journal.hosting_details.controlPanelUrl} 
+                target="_blank" 
+                rel="noreferrer"
+                className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-indigo-700 transition-all"
+              >
+                <ExternalLink size={14} /> Open Control Panel
+              </a>
+            </div>
+          )}
+
+          {journal.hosting_details?.notes && (
+            <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl">
+              <p className="text-[10px] font-black text-indigo-900 uppercase tracking-wider mb-1">Hosting Notes</p>
+              <p className="text-xs text-slate-700 font-medium">{journal.hosting_details.notes}</p>
+            </div>
+          )}
         </div>
       );
 

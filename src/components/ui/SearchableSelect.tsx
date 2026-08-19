@@ -126,7 +126,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 type="text"
                 placeholder="Search..."
                 className="w-full bg-transparent outline-none text-sm font-bold text-slate-700 placeholder:text-slate-300"
-                value={search}
+                value={search || ''}
                 onChange={(e) => setSearch(e.target.value)}
               />
               {search && (
@@ -137,10 +137,10 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
             </div>
             
             <div className="max-h-60 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-              {filteredOptions.length > 0 ? (
-                filteredOptions.map((opt) => (
+                {filteredOptions.length > 0 ? (
+                filteredOptions.map((opt, index) => (
                   <div
-                    key={opt.value}
+                    key={`${opt.value}-${index}`}
                     onClick={() => {
                       onChange(opt.value);
                       setIsOpen(false);

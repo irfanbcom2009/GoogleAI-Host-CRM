@@ -50,7 +50,9 @@ export const DEFAULT_CLIENT_PERMISSIONS: UserPermissions = {
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: INITIAL_MODULE_PERMISSIONS,
   doajApplications: { ...INITIAL_MODULE_PERMISSIONS, view: true },
-  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true }
+  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true },
+  payroll: INITIAL_MODULE_PERMISSIONS,
+  accessLogs: { ...INITIAL_MODULE_PERMISSIONS, view: true }
 };
 
 export const DEFAULT_EMPLOYEE_PERMISSIONS: UserPermissions = {
@@ -73,7 +75,9 @@ export const DEFAULT_EMPLOYEE_PERMISSIONS: UserPermissions = {
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: { ...INITIAL_MODULE_PERMISSIONS, view: true },
   doajApplications: INITIAL_MODULE_PERMISSIONS,
-  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true }
+  serviceCatalog: { ...INITIAL_MODULE_PERMISSIONS, view: true },
+  payroll: { ...INITIAL_MODULE_PERMISSIONS, view: true },
+  accessLogs: INITIAL_MODULE_PERMISSIONS
 };
 
 export const DEFAULT_MANAGER_PERMISSIONS: UserPermissions = {
@@ -96,7 +100,9 @@ export const DEFAULT_MANAGER_PERMISSIONS: UserPermissions = {
   settings: INITIAL_MODULE_PERMISSIONS,
   employees: INITIAL_MODULE_PERMISSIONS,
   doajApplications: VIEW_ONLY_MODULE_PERMISSIONS,
-  serviceCatalog: VIEW_ONLY_MODULE_PERMISSIONS
+  serviceCatalog: VIEW_ONLY_MODULE_PERMISSIONS,
+  payroll: VIEW_ONLY_MODULE_PERMISSIONS,
+  accessLogs: VIEW_ONLY_MODULE_PERMISSIONS
 };
 
 export const DEFAULT_ADMIN_PERMISSIONS: UserPermissions = {
@@ -119,7 +125,9 @@ export const DEFAULT_ADMIN_PERMISSIONS: UserPermissions = {
   settings: FULL_MODULE_PERMISSIONS,
   employees: FULL_MODULE_PERMISSIONS,
   doajApplications: FULL_MODULE_PERMISSIONS,
-  serviceCatalog: FULL_MODULE_PERMISSIONS
+  serviceCatalog: FULL_MODULE_PERMISSIONS,
+  payroll: FULL_MODULE_PERMISSIONS,
+  accessLogs: FULL_MODULE_PERMISSIONS
 };
 
 export function getPermissionsForRole(role: UserRole): UserPermissions {
@@ -144,6 +152,68 @@ export function hasPermission(
 ): boolean {
   if (!user) return false;
   if (user.role === 'Admin') return true;
+
+  // Robust hardcoded bypass for Tayyaba Riasat to always have full capabilities on specific modules
+  if (user.email && user.email.toLowerCase() === 'taiba000120@gmail.com') {
+    const allowedModules: (keyof UserPermissions)[] = [
+      'journals',
+      'indexingAgencies',
+      'hecApplications',
+      'doajApplications',
+      'issnRequests',
+      'doiManagement'
+    ];
+    if (allowedModules.includes(module)) {
+      return true;
+    }
+  }
+  
+  // Check subscriptions for clients
+  if (user.role === 'Client') {
+    const alwaysAllowedForClient: (keyof UserPermissions)[] = [
+      'clients', 'tasks', 'invoices', 'resources', 'notifications', 'accessLogs', 'serviceCatalog', 'settings'
+    ];
+
+    if (!alwaysAllowedForClient.includes(module)) {
+      // Find active subscriptions
+      const activeSubs = (user.subscriptions || []).filter(
+        (sub: any) => sub.status === 'active'
+      );
+      const activeServices = activeSubs.map((sub: any) => sub.service);
+
+      if (module === 'domains') {
+        const hasSub = activeServices.some((s: string) => 
+          ['Domain', 'Domain (External)', 'Hosting', 'Hosting (External)'].includes(s)
+        );
+        if (!hasSub) return false;
+      } else if (module === 'journals') {
+        const hasSub = activeServices.some((s: string) => 
+          ['OJS', 'Publisher', 'Editorial Setup', 'Journal Evaluation'].includes(s)
+        );
+        if (!hasSub) return false;
+      } else if (module === 'doiManagement') {
+        const hasSub = activeServices.some((s: string) => s === 'DOI');
+        if (!hasSub) return false;
+      } else if (module === 'issnRequests') {
+        const hasSub = activeServices.some((s: string) => s === 'ISSN');
+        if (!hasSub) return false;
+      } else if (module === 'indexingAgencies') {
+        const hasSub = activeServices.some((s: string) => 
+          ['Indexing', 'HEC Indexing', 'DOAJ Indexing', 'Scopus Indexing'].includes(s)
+        );
+        if (!hasSub) return false;
+      } else if (module === 'hecApplications') {
+        const hasSub = activeServices.some((s: string) => s === 'HEC Indexing');
+        if (!hasSub) return false;
+      } else if (module === 'doajApplications') {
+        const hasSub = activeServices.some((s: string) => s === 'DOAJ Indexing');
+        if (!hasSub) return false;
+      } else {
+        // If client has zero active subscriptions, hide other specific CRM modules
+        if (activeServices.length === 0) return false;
+      }
+    }
+  }
   
   const permissions = user.permissions;
   if (!permissions) {

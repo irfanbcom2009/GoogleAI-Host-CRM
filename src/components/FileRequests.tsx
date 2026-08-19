@@ -17,7 +17,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
-import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, updateDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, serverTimestamp, query, orderBy, updateDoc, doc, where } from 'firebase/firestore';
 import { FileRequest, Client, User as CRMUser, Task } from '../types';
 
 interface FileRequestsProps {
@@ -49,7 +49,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
       setLoading(false);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'file_requests'));
 
-    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client)));
     });
 
@@ -114,8 +114,8 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
     <div className="p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">File Requests</h2>
-          <p className="text-slate-500 mt-1">Request missing documents from clients or employees.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">File Requests</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Request missing documents from clients or employees.</p>
         </div>
         <button 
           onClick={() => setIsModalOpen(true)}
@@ -258,7 +258,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                     type="text" 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Missing SECP Certificate"
-                    value={newRequest.title}
+                    value={newRequest.title || ''}
                     onChange={e => setNewRequest(prev => ({ ...prev, title: e.target.value }))}
                   />
                 </div>
@@ -267,7 +267,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                   <textarea 
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all h-24 resize-none"
                     placeholder="Explain what file is needed and why..."
-                    value={newRequest.description}
+                    value={newRequest.description || ''}
                     onChange={e => setNewRequest(prev => ({ ...prev, description: e.target.value }))}
                   />
                 </div>
@@ -277,7 +277,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                     <select 
                       required
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRequest.clientId}
+                      value={newRequest.clientId || ''}
                       onChange={e => setNewRequest(prev => ({ ...prev, clientId: e.target.value }))}
                     >
                       <option value="">Select Client</option>
@@ -290,7 +290,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                     <label className="text-sm font-bold text-slate-700">Task (Optional)</label>
                     <select 
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRequest.taskId}
+                      value={newRequest.taskId || ''}
                       onChange={e => setNewRequest(prev => ({ ...prev, taskId: e.target.value }))}
                     >
                       <option value="">No Task</option>
@@ -306,7 +306,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                     <select 
                       required
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRequest.assignedRole}
+                      value={newRequest.assignedRole || ''}
                       onChange={e => setNewRequest(prev => ({ ...prev, assignedRole: e.target.value as any }))}
                     >
                       <option value="Client">Client</option>
@@ -318,7 +318,7 @@ export const FileRequests: React.FC<FileRequestsProps> = ({ searchQuery = '' }) 
                     <select 
                       required
                       className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRequest.assignedTo}
+                      value={newRequest.assignedTo || ''}
                       onChange={e => setNewRequest(prev => ({ ...prev, assignedTo: e.target.value }))}
                     >
                       <option value="">Select User</option>

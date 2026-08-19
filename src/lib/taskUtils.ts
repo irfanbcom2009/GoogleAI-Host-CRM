@@ -1,6 +1,6 @@
 import { ServiceType, TaskStatus, TaskPriority, Task } from '../types';
 import { db } from './firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, doc, limit } from 'firebase/firestore';
 
 interface TaskTemplate {
   title: string;
@@ -10,7 +10,7 @@ interface TaskTemplate {
   daysToComplete: number;
 }
 
-const SERVICE_TASK_TEMPLATES: Record<ServiceType, TaskTemplate[]> = {
+const SERVICE_TASK_TEMPLATES: Record<string, TaskTemplate[]> = {
   'Hosting': [
     { title: 'Arrange Hosting', description: 'Setup server and hosting environment.', department: 'Technical', priority: 'high', daysToComplete: 2 },
     { title: 'Record Hosting Details', description: 'Enter panel URL, username, and password in CRM.', department: 'Technical', priority: 'medium', daysToComplete: 3 }
@@ -33,8 +33,9 @@ const SERVICE_TASK_TEMPLATES: Record<ServiceType, TaskTemplate[]> = {
   'Indexing': [
     { title: 'Submit to Indexing Agencies', description: 'Submit journal to relevant databases (DOAJ, Google Scholar, etc.).', department: 'Editorial', priority: 'medium', daysToComplete: 30 }
   ],
-  'Plagiarism': [
-    { title: 'Run Plagiarism Check', description: 'Check submitted articles for originality.', department: 'Editorial', priority: 'high', daysToComplete: 2 }
+  'Publisher': [
+    { title: 'Register Publisher for Client', description: 'Register the specific publisher for the client as requested.', department: 'Technical', priority: 'high', daysToComplete: 7 },
+    { title: 'Update Publisher Agreement', description: 'Finalize and upload the signed publisher agreement.', department: 'Editorial', priority: 'medium', daysToComplete: 14 }
   ],
   'Domain': [
     { title: 'Purchase Domain', description: 'Register the requested domain name.', department: 'Technical', priority: 'high', daysToComplete: 1 },
@@ -72,6 +73,12 @@ const SERVICE_TASK_TEMPLATES: Record<ServiceType, TaskTemplate[]> = {
   ],
   'Site Score': [
     { title: 'Site Score Analysis', description: 'Analyze and report journal site score.', department: 'Technical', priority: 'low', daysToComplete: 3 }
+  ],
+  'Domain (External)': [
+    { title: 'Record External Domain', description: 'Document external domain registrar and expiration date.', department: 'Technical', priority: 'medium', daysToComplete: 2 }
+  ],
+  'Hosting (External)': [
+    { title: 'Record External Hosting', description: 'Document external hosting provider and control panel access.', department: 'Technical', priority: 'medium', daysToComplete: 2 }
   ]
 };
 
@@ -83,6 +90,24 @@ export const generateTasksForService = async (
 ) => {
   const templates = SERVICE_TASK_TEMPLATES[service] || [];
   
+  // Find Haseeb Dashbarod for Publisher tasks
+  let defaultAssigneeId: string | undefined;
+  let defaultAssigneeName: string | undefined;
+
+  if (service === 'Publisher') {
+    try {
+      const haseebQuery = query(collection(db, 'users'), where('name', '==', 'Haseeb Dashbarod'), limit(1));
+      const haseebSnapshot = await getDocs(haseebQuery);
+      if (!haseebSnapshot.empty) {
+        const haseebDoc = haseebSnapshot.docs[0];
+        defaultAssigneeId = haseebDoc.id;
+        defaultAssigneeName = haseebDoc.data().name;
+      }
+    } catch (error) {
+      console.error("Error finding Haseeb Dashbarod:", error);
+    }
+  }
+
   for (const template of templates) {
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + template.daysToComplete);
@@ -92,11 +117,13 @@ export const generateTasksForService = async (
       clientName,
       serviceType: service,
       serviceId: serviceId || '',
-      title: template.title,
-      description: template.description,
+      title: `${template.title}: ${clientName}`,
+      description: `${template.description} (Client Info: ${clientName})`,
       department: template.department,
       status: 'pending',
       priority: template.priority,
+      assignedTo: defaultAssigneeId || '',
+      assignedToName: defaultAssigneeName || '',
       points: template.priority === 'high' ? 50 : template.priority === 'medium' ? 30 : 10,
       dueDate: dueDate.toISOString().split('T')[0],
       createdAt: serverTimestamp(),

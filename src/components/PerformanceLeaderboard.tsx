@@ -17,6 +17,7 @@ import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestor
 import { User, Task } from '../types';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { DEFAULT_IMAGES } from '../constants/images';
 
 export const PerformanceLeaderboard: React.FC = () => {
   const [employees, setEmployees] = useState<User[]>([]);
@@ -84,8 +85,8 @@ export const PerformanceLeaderboard: React.FC = () => {
                 "w-20 h-20 rounded-3xl border-4 border-white shadow-lg overflow-hidden mb-4",
                 isWinner ? "w-24 h-24 -mt-12 bg-indigo-600" : "bg-white"
               )}>
-                {emp.photoURL ? (
-                  <img src={emp.photoURL} alt={emp.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                {(emp.photoURL || (emp.gender === 'Female' && DEFAULT_IMAGES.FEMALE_STAFF)) ? (
+                  <img src={emp.photoURL || DEFAULT_IMAGES.FEMALE_STAFF} alt={emp.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-2xl font-black text-slate-300">
                     {emp.name.charAt(0)}
@@ -178,8 +179,8 @@ export const PerformanceLeaderboard: React.FC = () => {
                     <td className="px-8 py-6">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0">
-                          {emp.photoURL ? (
-                            <img src={emp.photoURL} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          {(emp.photoURL || (emp.gender === 'Female' && DEFAULT_IMAGES.FEMALE_STAFF)) ? (
+                            <img src={emp.photoURL || DEFAULT_IMAGES.FEMALE_STAFF} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-400">
                               <UserIcon size={20} />

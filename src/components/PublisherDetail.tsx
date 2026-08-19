@@ -19,11 +19,16 @@ import {
   Mail,
   Ticket,
   Lock,
-  Settings2
+  Settings2,
+  Calendar,
+  History,
+  ArrowLeftRight,
+  Phone,
+  MapPin
 } from 'lucide-react';
-import { Publisher, Client, Journal, Domain, DOIApplication, ServiceType } from '../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, onSnapshot, updateDoc, serverTimestamp, collection, query, where, addDoc, orderBy } from 'firebase/firestore';
+import { Publisher, Client, Journal, Domain, DOIApplication, ServiceType, ClientHistoryEntry } from '../types';
+import { db, handleFirestoreError, OperationType, getErrorMessage } from '../lib/firebase';
+import { doc, onSnapshot, updateDoc, serverTimestamp, collection, query, where, addDoc, orderBy, deleteDoc } from 'firebase/firestore';
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
 
@@ -38,6 +43,7 @@ interface PublisherDetailProps {
 
 export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, onBack, onNavigate }) => {
   const [publisher, setPublisher] = useState<Publisher | null>(null);
+  const [client, setClient] = useState<Client | null>(null);
   const [journals, setJournals] = useState<Journal[]>([]);
   const [domains, setDomains] = useState<Domain[]>([]);
   const [doiApplications, setDoiApplications] = useState<DOIApplication[]>([]);
@@ -47,6 +53,16 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
   const [isDoiModalOpen, setIsDoiModalOpen] = useState(false);
   const [editData, setEditData] = useState<Partial<Publisher>>({});
   const [uploading, setUploading] = useState<string | null>(null);
+
+  // New Client Transfer states
+  const [allClients, setAllClients] = useState<Client[]>([]);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [transferForm, setTransferForm] = useState({
+    newClientId: '',
+    startDate: new Date().toISOString().split('T')[0],
+    remarks: ''
+  });
+  const [isTransferring, setIsTransferring] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -95,12 +111,26 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
     let unsubJournals: (() => void) | null = null;
     let unsubDomains: (() => void) | null = null;
 
-    const unsubPub = onSnapshot(doc(db, 'publishers', publisherId), (doc) => {
-      if (doc.exists()) {
-        const pubData = { id: doc.id, ...doc.data() } as Publisher;
+    const unsubAllClients = onSnapshot(collection(db, 'users'), (snapshot) => {
+      setAllClients(snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as any))
+        .filter(c => c.role === 'Client' || c.role === undefined)
+      );
+    });
+
+    const unsubPub = onSnapshot(doc(db, 'publishers', publisherId), (docSnap) => {
+      if (docSnap.exists()) {
+        const pubData = { id: docSnap.id, ...docSnap.data() } as Publisher;
         setPublisher(pubData);
         setEditData(pubData);
         
+        // Fetch client info
+        onSnapshot(doc(db, 'users', pubData.clientId), (cSnap) => {
+          if (cSnap.exists()) {
+            setClient({ id: cSnap.id, ...cSnap.data() } as Client);
+          }
+        });
+
         // Fetch journals for this publisher
         if (!unsubJournals) {
           const journalsQuery = query(
@@ -147,6 +177,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
 
     return () => {
       unsubPub();
+      unsubAllClients();
       if (unsubJournals) unsubJournals();
       if (unsubDomains) unsubDomains();
     };
@@ -189,8 +220,56 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
     if (!publisher) return;
     setIsSaving(true);
     try {
+      const activeHistory = [...(publisher.clientHistory || [])];
+      
+      // If clientId was changed via edit mode
+      if (editData.clientId && editData.clientId !== publisher.clientId) {
+        let birthDate = '2026-01-01';
+        if (publisher.createdAt) {
+          try {
+            const seconds = (publisher.createdAt as any).seconds;
+            if (seconds) {
+              birthDate = new Date(seconds * 1000).toISOString().split('T')[0];
+            } else {
+              birthDate = new Date(publisher.createdAt).toISOString().split('T')[0];
+            }
+          } catch (err) {
+            console.warn("Could not parse publisher creation date:", err);
+          }
+        }
+
+        // If no history existed yet, seed current association first
+        if (activeHistory.length === 0) {
+          activeHistory.push({
+            clientId: publisher.clientId,
+            clientName: client?.name || 'Previous Client',
+            startDate: birthDate,
+            endDate: new Date().toISOString().split('T')[0],
+            remarks: 'Initial assignment'
+          });
+        } else {
+          // close previous entry
+          const lastIndex = activeHistory.length - 1;
+          if (activeHistory[lastIndex] && !activeHistory[lastIndex].endDate) {
+            activeHistory[lastIndex] = {
+              ...activeHistory[lastIndex],
+              endDate: new Date().toISOString().split('T')[0]
+            };
+          }
+        }
+
+        const selectedClient = allClients.find(c => c.id === editData.clientId);
+        activeHistory.push({
+          clientId: editData.clientId,
+          clientName: selectedClient?.name || 'New Client',
+          startDate: new Date().toISOString().split('T')[0],
+          remarks: 'Direct edit profile update'
+        });
+      }
+
       await updateDoc(doc(db, 'publishers', publisherId), {
         ...editData,
+        clientHistory: activeHistory.length > 0 ? activeHistory : (publisher.clientHistory || []),
         updatedAt: serverTimestamp()
       });
       setIsEditing(false);
@@ -201,6 +280,124 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleTransferClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!publisher) return;
+    if (!transferForm.newClientId) {
+      toast.error('Please select a client to transfer to.');
+      return;
+    }
+    if (transferForm.newClientId === publisher.clientId) {
+      toast.error('Publisher is already associated with this client.');
+      return;
+    }
+
+    setIsTransferring(true);
+    try {
+      const selectedClient = allClients.find(c => c.id === transferForm.newClientId);
+      if (!selectedClient) {
+        throw new Error('Selected client not found.');
+      }
+
+      const activeHistory: ClientHistoryEntry[] = publisher.clientHistory ? [...publisher.clientHistory] : [];
+
+      // If no history exists, seed the current client association first
+      if (activeHistory.length === 0) {
+        let birthDate = '2026-01-01'; // Default backup
+        if (publisher.createdAt) {
+          try {
+            const seconds = (publisher.createdAt as any).seconds;
+            if (seconds) {
+              birthDate = new Date(seconds * 1000).toISOString().split('T')[0];
+            } else {
+              birthDate = new Date(publisher.createdAt).toISOString().split('T')[0];
+            }
+          } catch (err) {
+            console.warn("Could not parse publisher creation date:", err);
+          }
+        }
+        activeHistory.push({
+          clientId: publisher.clientId,
+          clientName: client?.name || 'Previous Client',
+          startDate: birthDate,
+          endDate: transferForm.startDate,
+          remarks: 'Initial assignment'
+        });
+      } else {
+        // Update the last active history entry with endDate set to new startDate
+        const lastIndex = activeHistory.length - 1;
+        if (activeHistory[lastIndex] && !activeHistory[lastIndex].endDate) {
+          activeHistory[lastIndex] = {
+            ...activeHistory[lastIndex],
+            endDate: transferForm.startDate
+          };
+        }
+      }
+
+      // Add the new association
+      activeHistory.push({
+        clientId: transferForm.newClientId,
+        clientName: selectedClient.name,
+        startDate: transferForm.startDate,
+        remarks: transferForm.remarks || 'Transfer assignment'
+      });
+
+      // Update firestore publisher details
+      await updateDoc(doc(db, 'publishers', publisherId), {
+        clientId: transferForm.newClientId,
+        ownerName: selectedClient.name, // Link owner name matching new client Name
+        clientHistory: activeHistory,
+        updatedAt: serverTimestamp()
+      });
+
+      toast.success(`Successfully transferred publisher to client "${selectedClient.name}"`);
+      setIsTransferModalOpen(false);
+      setTransferForm({
+        newClientId: '',
+        startDate: new Date().toISOString().split('T')[0],
+        remarks: ''
+      });
+    } catch (error) {
+      console.error("Transfer client error:", error);
+      toast.error('Failed to transfer client. Please try again.');
+    } finally {
+      setIsTransferring(false);
+    }
+  };
+
+  const handleDeletePublisher = async () => {
+    if (!publisher) return;
+    if (!confirm(`Are you sure you want to permanently delete publisher "${publisher.name}"? This cannot be undone.`)) return;
+    
+    const loadingToast = toast.loading(`Deleting publisher "${publisher.name}"...`);
+    try {
+      await deleteDoc(doc(db, 'publishers', publisherId));
+      toast.success(`Publisher "${publisher.name}" deleted.`, { id: loadingToast });
+      onBack();
+    } catch (error) {
+      console.error("Delete error:", error);
+      toast.error(getErrorMessage(error), { id: loadingToast });
+    }
+  };
+
+  const handleResetDoi = () => {
+    setNewDoi({
+      memberName: '',
+      doiPrefix: '',
+      role: 'Member',
+      password: '',
+      ticketNo: '',
+      otherEmails: '',
+      domainName: '',
+      contactEmail: '',
+      sponsoringOrgName: '',
+      orgUrl: '',
+      orgPubUrl: '',
+      remarks: '',
+      journalId: ''
+    });
   };
 
   const handleCreateDoi = async (e: React.FormEvent) => {
@@ -289,6 +486,16 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
             <Settings2 size={18} />
             {isEditing ? 'Editing Mode' : 'Edit Details'}
           </button>
+          {!isEditing && (
+            <button 
+              onClick={handleDeletePublisher}
+              className="px-5 py-2.5 bg-white text-rose-600 border border-slate-200 rounded-xl font-bold hover:bg-rose-50 transition-all flex items-center gap-2"
+              title="Delete Publisher Permanently"
+            >
+              <Trash2 size={18} />
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
@@ -319,6 +526,81 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
             </div>
 
             <div className="space-y-6">
+              {/* Associated Client Area */}
+              <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Associated Client</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTransferForm({
+                        newClientId: '',
+                        startDate: new Date().toISOString().split('T')[0],
+                        remarks: ''
+                      });
+                      setIsTransferModalOpen(true);
+                    }}
+                    className="text-[10px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-2 py-1 rounded transition-colors flex items-center gap-1"
+                  >
+                    <ArrowLeftRight size={10} />
+                    Transfer Client
+                  </button>
+                </div>
+
+                {isEditing ? (
+                  <select
+                    className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800"
+                    value={editData.clientId || ''}
+                    onChange={(e) => {
+                      const selectedId = e.target.value;
+                      const selected = allClients.find(c => c.id === selectedId);
+                      setEditData({
+                        ...editData,
+                        clientId: selectedId,
+                        ownerName: selected ? (selected.name || '') : ''
+                      });
+                    }}
+                  >
+                    <option value="">Select Associated Client</option>
+                    {allClients.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : client ? (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate?.('clients', client.id)}
+                    className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-bold transition-colors group/client w-full text-left"
+                  >
+                    <User size={16} className="text-indigo-400 group-hover/client:text-indigo-600" />
+                    <span className="text-sm underline decoration-indigo-200 underline-offset-4 group-hover/client:decoration-indigo-600">
+                      {client.name}
+                    </span>
+                    <ExternalLink size={12} className="ml-auto opacity-0 group-hover/client:opacity-100 transition-opacity" />
+                  </button>
+                ) : (
+                  <p className="text-sm text-slate-500 italic">No associated client</p>
+                )}
+
+                {/* Date Frame Display for Currently Active Client */}
+                {publisher.clientHistory && publisher.clientHistory.length > 0 ? (
+                  (() => {
+                    const activeEntry = publisher.clientHistory[publisher.clientHistory.length - 1];
+                    if (activeEntry && activeEntry.clientId === publisher.clientId) {
+                      return (
+                        <div className="text-[10px] text-indigo-505 font-semibold flex items-center gap-1 mt-1 text-indigo-500">
+                          <Calendar size={12} />
+                          Active since: {activeEntry.startDate}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()
+                ) : null}
+              </div>
+
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Owner Name</p>
                 <div className="flex items-center gap-2 text-slate-700">
@@ -369,7 +651,161 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   )}
                 </div>
               </div>
+
+              {/* Contact & Address Section */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Contact & Location</p>
+                
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <Mail size={16} className="text-slate-400 shrink-0" />
+                    {isEditing ? (
+                      <input 
+                        type="email"
+                        placeholder="Publisher Email"
+                        className="text-xs bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                        value={editData.email || ''}
+                        onChange={(e) => setEditData({ ...editData, email: e.target.value })}
+                      />
+                    ) : (
+                      <span className="text-xs truncate font-semibold">{publisher.email || 'No email specified'}</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <Phone size={16} className="text-slate-400 shrink-0" />
+                    {isEditing ? (
+                      <input 
+                        type="tel"
+                        placeholder="Publisher Phone"
+                        className="text-xs bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                        value={editData.phone || ''}
+                        onChange={(e) => setEditData({ ...editData, phone: e.target.value })}
+                      />
+                    ) : (
+                      <span className="text-xs font-semibold">{publisher.phone || 'No phone specified'}</span>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/50">
+                    <div className="flex items-start gap-2 text-slate-700 font-sans">
+                      <MapPin size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                      <div className="flex-1 space-y-1">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Publisher Address</p>
+                        {isEditing ? (
+                          <textarea 
+                            rows={2}
+                            placeholder="Full physical address"
+                            className="text-xs bg-white border border-slate-200 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-500 w-full resize-none leading-relaxed text-slate-800"
+                            value={editData.address || ''}
+                            onChange={(e) => setEditData({ ...editData, address: e.target.value })}
+                          />
+                        ) : (
+                          <p className="text-xs text-slate-600 font-medium leading-relaxed bg-white/80 border border-slate-100 rounded-lg p-2">
+                            {publisher.address || 'No address specified'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <Lock size={10} />
+                  Login Credentials
+                </p>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <User size={14} className="text-slate-400" />
+                    {isEditing ? (
+                      <input 
+                        type="text"
+                        placeholder="Username"
+                        className="text-xs font-bold bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                        value={editData.loginUsername || ''}
+                        onChange={(e) => setEditData({ ...editData, loginUsername: e.target.value })}
+                      />
+                    ) : (
+                      <span className="text-xs font-bold">{publisher.loginUsername || 'Not set'}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <Lock size={14} className="text-slate-400" />
+                    {isEditing ? (
+                      <input 
+                        type="text"
+                        placeholder="Password"
+                        className="text-xs font-mono bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                        value={editData.loginPassword || ''}
+                        onChange={(e) => setEditData({ ...editData, loginPassword: e.target.value })}
+                      />
+                    ) : (
+                      <span className="text-xs font-mono text-indigo-600 font-bold">{publisher.loginPassword || '••••••••'}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
+          </div>
+
+          {/* Client History Card */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 space-y-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-50 text-slate-700 rounded-xl">
+                <History size={20} />
+              </div>
+              <div>
+                <h4 className="text-base font-bold text-slate-900 font-sans tracking-tight">Client History</h4>
+                <p className="text-xs text-slate-500">Timeline of associated clients with date frames</p>
+              </div>
+            </div>
+
+            {!publisher.clientHistory || publisher.clientHistory.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-xs">
+                <p className="font-semibold text-slate-500">No transfer history recorded.</p>
+                <p className="mt-1">Future transfers will be logged here with explicit start/end dates.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {publisher.clientHistory.map((entry, idx) => {
+                  const isActive = !entry.endDate && entry.clientId === publisher.clientId;
+                  return (
+                    <div key={idx} className="relative pl-5 pb-4 border-l border-slate-100 last:pb-0">
+                      <div className={cn(
+                        "absolute left-[-5px] top-1.5 w-2.5 h-2.5 rounded-full border-2 bg-white",
+                        isActive ? "border-emerald-500" : "border-slate-300"
+                      )} />
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className={cn(
+                            "text-sm font-bold font-sans",
+                            isActive ? "text-slate-800" : "text-slate-500"
+                          )}>
+                            {entry.clientName || 'Unknown Client'}
+                          </span>
+                          {isActive && (
+                            <span className="text-[9px] bg-emerald-50 text-emerald-700 font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 flex items-center gap-1 font-mono font-medium">
+                          <Calendar size={10} />
+                          {entry.startDate} {entry.endDate ? `to ${entry.endDate}` : '— Present'}
+                        </div>
+                        {entry.remarks && (
+                          <p className="text-xs text-slate-500 bg-slate-50 rounded p-2 italic mt-1 font-medium border border-slate-100/50">
+                            "{entry.remarks}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -396,8 +832,8 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   Uploaded Documents
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {documentTypes.filter(dt => publisher.documents[dt.id as keyof Publisher['documents']]).map((docType) => {
-                    const docUrl = publisher.documents[docType.id as keyof Publisher['documents']];
+                  {documentTypes.filter(dt => publisher.documents?.[dt.id as keyof Publisher['documents']]).map((docType) => {
+                    const docUrl = publisher.documents?.[docType.id as keyof Publisher['documents']];
                     return (
                       <div key={docType.id} className="p-4 bg-emerald-50/30 border border-emerald-100 rounded-2xl flex items-center justify-between group hover:bg-white hover:shadow-md transition-all">
                         <div className="flex items-center gap-3">
@@ -430,7 +866,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                       </div>
                     );
                   })}
-                  {documentTypes.filter(dt => publisher.documents[dt.id as keyof Publisher['documents']]).length === 0 && (
+                  {documentTypes.filter(dt => publisher.documents?.[dt.id as keyof Publisher['documents']]).length === 0 && (
                     <div className="col-span-full py-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
                       <p className="text-sm text-slate-400">No documents uploaded yet.</p>
                     </div>
@@ -445,7 +881,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   Missing Documents
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {documentTypes.filter(dt => !publisher.documents[dt.id as keyof Publisher['documents']]).map((docType) => {
+                  {documentTypes.filter(dt => !publisher.documents?.[dt.id as keyof Publisher['documents']]).map((docType) => {
                     const isUploading = uploading === docType.id;
                     return (
                       <div key={docType.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between group hover:border-indigo-200 transition-all">
@@ -474,7 +910,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                       </div>
                     );
                   })}
-                  {documentTypes.filter(dt => !publisher.documents[dt.id as keyof Publisher['documents']]).length === 0 && (
+                  {documentTypes.filter(dt => !publisher.documents?.[dt.id as keyof Publisher['documents']]).length === 0 && (
                     <div className="col-span-full py-8 text-center bg-emerald-50 rounded-2xl border border-dashed border-emerald-200">
                       <p className="text-sm text-emerald-600 font-bold">All required documents are uploaded!</p>
                     </div>
@@ -683,7 +1119,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                 <select 
                   required
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.journalId}
+                  value={newDoi.journalId || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, journalId: e.target.value }))}
                 >
                   <option value="">Select Journal</option>
@@ -696,7 +1132,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   required
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.memberName}
+                  value={newDoi.memberName || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, memberName: e.target.value }))}
                 />
               </div>
@@ -707,7 +1143,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                   type="text"
                   placeholder="10.xxxx"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.doiPrefix}
+                  value={newDoi.doiPrefix || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, doiPrefix: e.target.value }))}
                 />
               </div>
@@ -726,7 +1162,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                     required
                     type="text"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDoi.role}
+                    value={newDoi.role || ''}
                     onChange={e => setNewDoi(prev => ({ ...prev, role: e.target.value }))}
                   />
                 </div>
@@ -737,7 +1173,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                     <input 
                       type="password"
                       className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={newDoi.password}
+                      value={newDoi.password || ''}
                       onChange={e => setNewDoi(prev => ({ ...prev, password: e.target.value }))}
                     />
                   </div>
@@ -751,7 +1187,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                     <input 
                       type="text"
                       className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={newDoi.ticketNo}
+                      value={newDoi.ticketNo || ''}
                       onChange={e => setNewDoi(prev => ({ ...prev, ticketNo: e.target.value }))}
                     />
                   </div>
@@ -765,7 +1201,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                       type="text"
                       placeholder="example.com"
                       className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={newDoi.domainName}
+                      value={newDoi.domainName || ''}
                       onChange={e => setNewDoi(prev => ({ ...prev, domainName: e.target.value }))}
                     />
                   </div>
@@ -779,7 +1215,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                     required
                     type="email"
                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDoi.contactEmail}
+                    value={newDoi.contactEmail || ''}
                     onChange={e => setNewDoi(prev => ({ ...prev, contactEmail: e.target.value }))}
                   />
                 </div>
@@ -799,7 +1235,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                 <input 
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.sponsoringOrgName}
+                  value={newDoi.sponsoringOrgName || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, sponsoringOrgName: e.target.value }))}
                 />
               </div>
@@ -808,7 +1244,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                 <input 
                   type="url"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.orgUrl}
+                  value={newDoi.orgUrl || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, orgUrl: e.target.value }))}
                 />
               </div>
@@ -817,7 +1253,7 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
                 <input 
                   type="url"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDoi.orgPubUrl}
+                  value={newDoi.orgPubUrl || ''}
                   onChange={e => setNewDoi(prev => ({ ...prev, orgPubUrl: e.target.value }))}
                 />
               </div>
@@ -827,18 +1263,130 @@ export const PublisherDetail: React.FC<PublisherDetailProps> = ({ publisherId, o
               <textarea 
                 rows={2}
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={newDoi.remarks}
+                value={newDoi.remarks || ''}
                 onChange={e => setNewDoi(prev => ({ ...prev, remarks: e.target.value }))}
               />
             </div>
           </div>
 
-          <div className="pt-4">
+          <div className="pt-4 flex gap-4">
+            <button 
+              type="button"
+              onClick={handleResetDoi}
+              className="px-6 bg-slate-100 hover:bg-slate-200 text-slate-705 py-4 rounded-2xl font-semibold transition-all"
+            >
+              Reset Form
+            </button>
             <button 
               type="submit"
-              className="w-full bg-rose-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-rose-700 transition-all shadow-xl shadow-rose-200"
+              className="flex-1 bg-rose-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-rose-700 transition-all shadow-xl shadow-rose-200"
             >
               Submit DOI Application
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Transfer Client Modal */}
+      <Modal
+        isOpen={isTransferModalOpen}
+        onClose={() => setIsTransferModalOpen(false)}
+        title="Transfer Publisher to Another Client"
+        maxWidth="lg"
+      >
+        <form onSubmit={handleTransferClient} className="space-y-6">
+          <div className="p-4 bg-indigo-50 text-indigo-800 rounded-2xl text-xs space-y-1.5 border border-indigo-100">
+            <p className="font-bold flex items-center gap-1.5">
+              <AlertCircle size={14} />
+              About Publisher Client Transfer
+            </p>
+            <p className="leading-relaxed">
+              Transferring this publisher will update their primary Associated Client. 
+              The previous client association will be archived with an End Date which matches the chosen Start Date, preserving historical transition accuracy.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Currently Associated Client</label>
+              <div className="px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl font-bold text-sm text-slate-700">
+                {client?.name || 'Unknown / Initial Client'}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">New Client Target <span className="text-rose-500">*</span></label>
+              <select
+                required
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-semibold"
+                value={transferForm.newClientId || ''}
+                onChange={e => setTransferForm(prev => ({ ...prev, newClientId: e.target.value }))}
+              >
+                <option value="">Select Target Client</option>
+                {allClients
+                  .filter(c => c.id !== publisher.clientId)
+                  .map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))
+                }
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Start Date of New Association <span className="text-rose-500">*</span></label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  required
+                  type="date"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-semibold"
+                  value={transferForm.startDate || ''}
+                  onChange={e => setTransferForm(prev => ({ ...prev, startDate: e.target.value }))}
+                />
+              </div>
+              <p className="text-[10px] text-slate-400 font-medium">
+                The current client's association end date will automatically be set to this date.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Transfer Notes / Reason (Optional)</label>
+              <textarea
+                rows={3}
+                placeholder="E.g., Client transferred ownership, merger, contract transition..."
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                value={transferForm.remarks || ''}
+                onChange={e => setTransferForm(prev => ({ ...prev, remarks: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setIsTransferModalOpen(false)}
+              className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isTransferring || !transferForm.newClientId}
+              className="flex-1 bg-indigo-600 border border-transparent text-white font-bold py-3 rounded-xl text-sm hover:bg-indigo-700 transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {isTransferring ? (
+                <>
+                  <Loader2 className="animate-spin" size={16} />
+                  Transferring...
+                </>
+              ) : (
+                <>
+                  <ArrowLeftRight size={16} />
+                  Confirm Transfer
+                </>
+              )}
             </button>
           </div>
         </form>

@@ -1,5 +1,5 @@
 import { db } from './firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 
 const employeeData = [
   {
@@ -641,7 +641,7 @@ const employeeData = [
     "whatsappPersonal": "92-309-5151069",
     "homePhone": "92-300-6588101",
     "address": "Pattoki Old Mandi",
-    "qualification": "Metric",
+    "qualification": "Matric",
     "gender": "Female",
     "endingDate": "9-Aug-2025",
     "experience": "Fresh",
@@ -1259,11 +1259,24 @@ export const seedEmployees = async () => {
 
   for (const emp of employeeData) {
     try {
-      await addDoc(collection(db, 'users'), {
-        ...emp,
-        permissions: defaultPermissions,
-        createdAt: serverTimestamp()
-      });
+      let exists = false;
+      if (emp.employeeId) {
+        const qId = query(collection(db, 'users'), where('employeeId', '==', emp.employeeId));
+        const snapId = await getDocs(qId);
+        if (!snapId.empty) exists = true;
+      }
+      if (!exists && emp.email) {
+        const qEmail = query(collection(db, 'users'), where('email', '==', emp.email));
+        const snapEmail = await getDocs(qEmail);
+        if (!snapEmail.empty) exists = true;
+      }
+      if (!exists) {
+        await addDoc(collection(db, 'users'), {
+          ...emp,
+          permissions: defaultPermissions,
+          createdAt: serverTimestamp()
+        });
+      }
     } catch (error) {
       console.error(`Error adding employee ${emp.name}:`, error);
     }

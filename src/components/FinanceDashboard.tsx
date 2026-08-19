@@ -42,6 +42,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [usdPkrRate, setUsdPkrRate] = useState(280);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -54,7 +55,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
   const handleAiAnalysis = async () => {
     setIsAiAnalyzing(true);
     try {
-      const summary = `Total Revenue: $${stats.totalRevenue}, Pending: $${stats.pendingRevenue}, Expenses: $${stats.totalExpenses}, Profit: $${stats.netProfit}`;
+      const summary = `Revenue (PKR): ${stats.totalRevenuePKR}, Expenses (PKR): ${stats.totalExpensesPKR}, Net Profit (PKR): ${netProfitPKR}, Exchange Rate: ${usdPkrRate}`;
       const analysis = await geminiService.generateTaskDescription(summary, "Financial Analysis & Recommendations");
       setAiAnalysis(analysis);
     } catch (error) {
@@ -64,6 +65,13 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
   };
 
   useEffect(() => {
+    onSnapshot(doc(db, 'settings', 'global'), (doc) => {
+      if (doc.exists()) {
+        const settings = doc.data();
+        if (settings.usdPkrRate) setUsdPkrRate(settings.usdPkrRate);
+      }
+    });
+
     const ordersQuery = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
     const expensesQuery = query(collection(db, 'expenses'), orderBy('date', 'desc'));
 
@@ -134,12 +142,36 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
   };
 
   const stats = {
-    totalRevenue: orders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
-    pendingRevenue: orders.reduce((sum, o) => sum + (o.totalAmount - (o.paidAmount || 0)), 0),
-    totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
-    netProfit: orders.reduce((sum, o) => sum + (o.paidAmount || 0), 0) - expenses.reduce((sum, e) => sum + e.amount, 0),
-    totalBilled: orders.reduce((sum, o) => sum + o.totalAmount, 0)
+    totalRevenuePKR: orders.reduce((sum, o) => {
+      const isUSD = o.currency === 'USD';
+      return sum + (isUSD ? (o.paidAmount || 0) * usdPkrRate : (o.paidAmount || 0));
+    }, 0),
+    totalRevenueUSD: orders.reduce((sum, o) => {
+      const isUSD = o.currency === 'USD';
+      return sum + (isUSD ? (o.paidAmount || 0) : (o.paidAmount || 0) / usdPkrRate);
+    }, 0),
+    pendingRevenuePKR: orders.reduce((sum, o) => {
+      const isUSD = o.currency === 'USD';
+      const balance = o.totalAmount - (o.paidAmount || 0);
+      return sum + (isUSD ? balance * usdPkrRate : balance);
+    }, 0),
+    pendingRevenueUSD: orders.reduce((sum, o) => {
+      const isUSD = o.currency === 'USD';
+      const balance = o.totalAmount - (o.paidAmount || 0);
+      return sum + (isUSD ? balance : balance / usdPkrRate);
+    }, 0),
+    totalExpensesPKR: expenses.reduce((sum, e) => {
+      const isUSD = e.currency === 'USD';
+      return sum + (isUSD ? e.amount * usdPkrRate : e.amount);
+    }, 0),
+    totalExpensesUSD: expenses.reduce((sum, e) => {
+      const isUSD = e.currency === 'USD';
+      return sum + (isUSD ? e.amount : e.amount / usdPkrRate);
+    }, 0),
   };
+
+  const netProfitPKR = stats.totalRevenuePKR - stats.totalExpensesPKR;
+  const netProfitUSD = stats.totalRevenueUSD - stats.totalExpensesUSD;
 
   const filteredOrders = orders.filter(order => 
     (order.orderNumber || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -147,7 +179,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
   );
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-black text-slate-900 tracking-tight">Finance Dashboard</h2>
@@ -207,7 +239,8 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
               </span>
             </div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Total Revenue</p>
-            <h3 className="text-2xl font-black text-slate-900 leading-none">${stats.totalRevenue.toLocaleString()}</h3>
+            <h3 className="text-xl font-black text-slate-900 leading-none">PKR {Math.round(stats.totalRevenuePKR).toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">$ {Math.round(stats.totalRevenueUSD).toLocaleString()}</p>
           </div>
         </div>
 
@@ -220,7 +253,8 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
               </div>
             </div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Pending Payments</p>
-            <h3 className="text-2xl font-black text-slate-900 leading-none">${stats.pendingRevenue.toLocaleString()}</h3>
+            <h3 className="text-xl font-black text-slate-900 leading-none">PKR {Math.round(stats.pendingRevenuePKR).toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">$ {Math.round(stats.pendingRevenueUSD).toLocaleString()}</p>
           </div>
         </div>
 
@@ -233,7 +267,8 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
               </div>
             </div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Total Expenses</p>
-            <h3 className="text-2xl font-black text-slate-900 leading-none">${stats.totalExpenses.toLocaleString()}</h3>
+            <h3 className="text-xl font-black text-slate-900 leading-none">PKR {Math.round(stats.totalExpensesPKR).toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">$ {Math.round(stats.totalExpensesUSD).toLocaleString()}</p>
           </div>
         </div>
 
@@ -246,7 +281,8 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
               </div>
             </div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Net Profit</p>
-            <h3 className="text-2xl font-black text-slate-900 leading-none">${stats.netProfit.toLocaleString()}</h3>
+            <h3 className="text-xl font-black text-slate-900 leading-none">PKR {Math.round(netProfitPKR).toLocaleString()}</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">$ {Math.round(netProfitUSD).toLocaleString()}</p>
           </div>
         </div>
 
@@ -258,8 +294,9 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                 <Receipt size={24} />
               </div>
             </div>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Order Payments</p>
-            <h3 className="text-2xl font-black text-slate-900 leading-none">${stats.totalRevenue.toLocaleString()}</h3>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-2">Exchange Rate</p>
+            <h3 className="text-xl font-black text-slate-900 leading-none">1 USD = {usdPkrRate} PKR</h3>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">System Setting</p>
           </div>
         </div>
       </div>
@@ -275,7 +312,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                 type="text"
                 placeholder="Search orders..."
                 className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500"
-                value={searchQuery}
+                value={searchQuery || ''}
                 onChange={e => setSearchQuery(e.target.value)}
               />
             </div>
@@ -316,10 +353,10 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                         <span className="text-sm font-medium text-slate-700">{order.clientName}</span>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="font-bold text-slate-900">${order.totalAmount}</span>
+                        <span className="font-bold text-slate-900">{order.currency === 'USD' ? '$' : 'PKR '}{order.totalAmount.toLocaleString()}</span>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="font-bold text-emerald-600">${order.paidAmount || 0}</span>
+                        <span className="font-bold text-emerald-600">{order.currency === 'USD' ? '$' : 'PKR '}{(order.paidAmount || 0).toLocaleString()}</span>
                       </td>
                       <td className="px-6 py-4">
                         <span className={cn(
@@ -403,7 +440,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-black text-rose-600">-${expense.amount}</p>
+                  <p className="text-sm font-black text-rose-600">-{expense.currency === 'USD' ? '$' : 'PKR '}{expense.amount.toLocaleString()}</p>
                   <p className="text-[10px] text-slate-400 uppercase">{expense.currency}</p>
                 </div>
               </div>
@@ -422,28 +459,32 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
           <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl">
             <div className="flex justify-between text-sm mb-2">
               <span className="text-slate-500">Order Total:</span>
-              <span className="font-bold text-slate-900">${selectedOrder?.totalAmount}</span>
+              <span className="font-bold text-slate-900">{selectedOrder?.currency === 'USD' ? '$' : 'PKR '}{selectedOrder?.totalAmount}</span>
             </div>
             <div className="flex justify-between text-sm mb-2">
               <span className="text-slate-500">Already Paid:</span>
-              <span className="font-bold text-emerald-600">${selectedOrder?.paidAmount || 0}</span>
+              <span className="font-bold text-emerald-600">{selectedOrder?.currency === 'USD' ? '$' : 'PKR '}{selectedOrder?.paidAmount || 0}</span>
             </div>
             <div className="flex justify-between text-sm pt-2 border-t border-indigo-200">
               <span className="text-slate-500 font-bold">Remaining Balance:</span>
-              <span className="font-black text-indigo-600">${(selectedOrder?.totalAmount || 0) - (selectedOrder?.paidAmount || 0)}</span>
+              <span className="font-black text-indigo-600">{selectedOrder?.currency === 'USD' ? '$' : 'PKR '}{(selectedOrder?.totalAmount || 0) - (selectedOrder?.paidAmount || 0)}</span>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">Payment Amount ($)</label>
-            <div className="relative">
-              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input 
-                type="number"
-                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={paymentAmount}
-                onChange={e => setPaymentAmount(Number(e.target.value))}
-              />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700">Payment Amount</label>
+              <div className="relative">
+                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">
+                  {selectedOrder?.currency === 'USD' ? '$' : 'PKR'}
+                </div>
+                <input 
+                  type="number"
+                  className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  value={paymentAmount || ''}
+                  onChange={e => setPaymentAmount(Number(e.target.value))}
+                />
+              </div>
             </div>
           </div>
 
@@ -480,7 +521,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                 type="text"
                 placeholder="e.g. Office Rent, Electricity Bill..."
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newExpense.head}
+                value={newExpense.head || ''}
                 onChange={e => setNewExpense(prev => ({ ...prev, head: e.target.value }))}
               />
             </div>
@@ -492,7 +533,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                   <input 
                     type="number"
                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                    value={newExpense.amount}
+                    value={newExpense.amount || ''}
                     onChange={e => setNewExpense(prev => ({ ...prev, amount: Number(e.target.value) }))}
                   />
                 </div>
@@ -501,7 +542,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
                 <label className="text-sm font-bold text-slate-700">Currency</label>
                 <select 
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  value={newExpense.currency}
+                  value={newExpense.currency || ''}
                   onChange={e => setNewExpense(prev => ({ ...prev, currency: e.target.value as any }))}
                 >
                   <option value="PKR">PKR</option>
@@ -514,7 +555,7 @@ export const FinanceDashboard: React.FC<FinanceDashboardProps> = ({ currentUser 
               <input 
                 type="date"
                 className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newExpense.date}
+                value={newExpense.date || ''}
                 onChange={e => setNewExpense(prev => ({ ...prev, date: e.target.value }))}
               />
             </div>

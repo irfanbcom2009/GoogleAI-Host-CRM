@@ -24,6 +24,7 @@ import { collection, query, where, onSnapshot, orderBy, addDoc, serverTimestamp 
 import { cn } from '../lib/utils';
 import { Modal } from './Modal';
 import { DomainManager } from './DomainManager';
+import { JournalForm } from './JournalForm';
 import { JournalDetail } from './JournalDetail';
 import { recommendationService } from '../services/recommendationService';
 
@@ -50,8 +51,8 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
   const [isJournalModalOpen, setIsJournalModalOpen] = useState(false);
 
   const [newPublisher, setNewPublisher] = useState({ name: '', ownerName: '' });
-  const [newDomain, setNewDomain] = useState({ domainName: '', registrar: '' });
-  const [newJournal, setNewJournal] = useState({ title: '', ojsVersion: '3.3.0' });
+  const [newDomain, setNewDomain] = useState({ domainName: '', registrar: '', registrarId: '' });
+  const [newJournal, setNewJournal] = useState({ title: '', ojsVersion: '3.3.0.21' });
 
   const handleAddPublisher = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,7 +85,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
         createdAt: serverTimestamp()
       });
       setIsDomainModalOpen(false);
-      setNewDomain({ domainName: '', registrar: '' });
+      setNewDomain({ domainName: '', registrar: '', registrarId: '' });
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'domains');
     }
@@ -103,7 +104,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
         createdAt: serverTimestamp()
       });
       setIsJournalModalOpen(false);
-      setNewJournal({ title: '', ojsVersion: '3.3.0' });
+      setNewJournal({ title: '', ojsVersion: '3.3.0.21' });
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, 'journals');
     }
@@ -235,7 +236,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {publishers.map(pub => (
+                  {[...publishers].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(pub => (
                     <button
                       key={pub.id}
                       onClick={() => setSelectedPublisherId(pub.id)}
@@ -294,7 +295,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredDomains.map(dom => (
+                  {[...filteredDomains].sort((a, b) => (a.domainName || '').localeCompare(b.domainName || '')).map(dom => (
                     <button
                       key={dom.id}
                       onClick={() => setSelectedDomainId(dom.id)}
@@ -353,7 +354,7 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {filteredJournals.map(journal => (
+                  {[...filteredJournals].sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(journal => (
                     <div
                       key={journal.id}
                       onClick={() => setSelectedJournalId({ id: journal.id, editMode: false })}
@@ -419,11 +420,11 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
         <form onSubmit={handleAddPublisher} className="space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Publisher Name</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newPublisher.name} onChange={e => setNewPublisher({...newPublisher, name: e.target.value})} />
+            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newPublisher.name || ''} onChange={e => setNewPublisher({...newPublisher, name: e.target.value})} />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Owner Name</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newPublisher.ownerName} onChange={e => setNewPublisher({...newPublisher, ownerName: e.target.value})} />
+            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newPublisher.ownerName || ''} onChange={e => setNewPublisher({...newPublisher, ownerName: e.target.value})} />
           </div>
           <button type="submit" className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold">Save Publisher</button>
         </form>
@@ -433,19 +434,27 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
         <form onSubmit={handleAddDomain} className="space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Domain Name</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" placeholder="example.com" value={newDomain.domainName} onChange={e => setNewDomain({...newDomain, domainName: e.target.value})} />
+            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" placeholder="example.com" value={newDomain.domainName || ''} onChange={e => setNewDomain({...newDomain, domainName: e.target.value})} />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-bold text-slate-700">Registrar</label>
             <select 
               required 
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" 
-              value={newDomain.registrar} 
-              onChange={e => setNewDomain({...newDomain, registrar: e.target.value})}
+              value={newDomain.registrarId || ''} 
+              onChange={e => {
+                const regId = e.target.value;
+                const regObj = registrars.find(r => r.id === regId);
+                setNewDomain({
+                  ...newDomain,
+                  registrarId: regId,
+                  registrar: regObj ? regObj.name : ''
+                });
+              }}
             >
               <option value="">Select Registrar...</option>
-              {registrars.map(reg => (
-                <option key={reg.id} value={reg.name}>{reg.name}</option>
+              {[...registrars].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(reg => (
+                <option key={reg.id} value={reg.id}>{reg.name}</option>
               ))}
             </select>
           </div>
@@ -454,17 +463,13 @@ export const HierarchyWorkflow: React.FC<HierarchyWorkflowProps> = ({ client, cu
       </Modal>
 
       <Modal isOpen={isJournalModalOpen} onClose={() => setIsJournalModalOpen(false)} title="Add New Journal">
-        <form onSubmit={handleAddJournal} className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">Journal Title</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newJournal.title} onChange={e => setNewJournal({...newJournal, title: e.target.value})} />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-bold text-slate-700">OJS Version</label>
-            <input required className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl" value={newJournal.ojsVersion} onChange={e => setNewJournal({...newJournal, ojsVersion: e.target.value})} />
-          </div>
-          <button type="submit" className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold">Save Journal</button>
-        </form>
+        <JournalForm 
+          currentUser={currentUser} 
+          onClose={() => setIsJournalModalOpen(false)} 
+          initialClientId={client.id}
+          initialPublisherId={selectedPublisherId || ''}
+          initialDomainId={selectedDomainId || ''}
+        />
       </Modal>
 
       {selectedJournalId && (

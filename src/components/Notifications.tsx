@@ -141,8 +141,8 @@ export const Notifications: React.FC = () => {
     <div className="p-8 max-w-4xl mx-auto space-y-6">
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Notifications</h2>
-          <p className="text-slate-500 mt-1">Stay updated with domain expirations, ISSN requests, and tasks.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Notifications</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Stay updated with domain expirations, ISSN requests, and tasks.</p>
         </div>
         <button 
           onClick={markAllAsRead}

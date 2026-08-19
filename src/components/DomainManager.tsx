@@ -18,7 +18,10 @@ import {
   Eye,
   EyeOff,
   Search,
-  ChevronDown
+  ChevronDown,
+  Mail,
+  ExternalLink,
+  Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Domain, RegistrarHistory, HostingMigrationLog, User as UserType, Client, OwnershipHistory, DomainRegistrar } from '../types';
@@ -27,6 +30,7 @@ import { doc, updateDoc, arrayUnion, arrayRemove, serverTimestamp, deleteDoc, co
 import { cn, sanitizeUrl } from '../lib/utils';
 import { CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { moveToTrash } from '../lib/firebase';
+import { toast } from 'react-hot-toast';
 
 interface DomainManagerProps {
   domain: Domain;
@@ -36,9 +40,24 @@ interface DomainManagerProps {
 }
 
 export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, isEmployee, currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'history' | 'hosting' | 'credentials' | 'renewals' | 'ownership'>('history');
+  const isTaiba = (val: string | undefined) => {
+    if (!val) return false;
+    return val.toLowerCase().includes('taiba@0045');
+  };
+
+  const [activeTab, setActiveTab] = useState<'history' | 'hosting' | 'credentials' | 'renewals' | 'ownership' | 'emails'>('history');
   const [loading, setLoading] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
+  const [emails, setEmails] = useState<any[]>(domain.emails || []);
+  const [newEmail, setNewEmail] = useState({
+    email: '',
+    username: '',
+    password: '',
+    webmailLink: '',
+    label: ''
+  });
+  const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
+  const [showEmailPasswords, setShowEmailPasswords] = useState<Record<string, boolean>>({});
   const [registrars, setRegistrars] = useState<DomainRegistrar[]>([]);
 
   // Form states
@@ -54,9 +73,16 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
   const [newOwnership, setNewOwnership] = useState({ clientId: '', startDate: new Date().toISOString().split('T')[0], notes: '' });
   const [newRenewal, setNewRenewal] = useState({ date: new Date().toISOString().split('T')[0], costPrice: 0, salePrice: 0, notes: '' });
   const [primaryRegistrarId, setPrimaryRegistrarId] = useState(domain.registrarId || '');
-  const [registrarCreds, setRegistrarCreds] = useState(domain.registrarCredentials || { username: '', password: '' });
+  const [registrarCreds, setRegistrarCreds] = useState({
+    username: domain.registrarCredentials?.username || '',
+    password: domain.registrarCredentials?.password || ''
+  });
   const [showRegistrarPassword, setShowRegistrarPassword] = useState(false);
-  const [credentials, setCredentials] = useState(domain.hostingCredentials || { panelUrl: '', username: '', password: '' });
+  const [credentials, setCredentials] = useState({
+    panelUrl: domain.hostingCredentials?.panelUrl || '',
+    username: domain.hostingCredentials?.username || '',
+    password: domain.hostingCredentials?.password || ''
+  });
   const [showHostingPassword, setShowHostingPassword] = useState(false);
   const [eppCode, setEppCode] = useState(domain.eppCode || '');
   const [isDomainSubscribedFromUs, setIsDomainSubscribedFromUs] = useState(domain.isDomainSubscribedFromUs ?? domain.isSubscribed ?? true);
@@ -64,6 +90,26 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
   const [isRegistrarHistoryDropdownOpen, setIsRegistrarHistoryDropdownOpen] = useState(false);
   const [isPrimaryRegistrarDropdownOpen, setIsPrimaryRegistrarDropdownOpen] = useState(false);
   const [isHostingSubscribedFromUs, setIsHostingSubscribedFromUs] = useState(domain.isHostingSubscribedFromUs ?? domain.isSubscribed ?? true);
+  const [registrationSource, setRegistrationSource] = useState<'System' | 'External'>(domain.registrationSource || 'System');
+
+  // Sync state when domain prop changes
+  React.useEffect(() => {
+    setPrimaryRegistrarId(domain.registrarId || '');
+    setRegistrarCreds({
+      username: domain.registrarCredentials?.username || '',
+      password: domain.registrarCredentials?.password || ''
+    });
+    setCredentials({
+      panelUrl: domain.hostingCredentials?.panelUrl || '',
+      username: domain.hostingCredentials?.username || '',
+      password: domain.hostingCredentials?.password || ''
+    });
+    setEppCode(domain.eppCode || '');
+    setIsDomainSubscribedFromUs(domain.isDomainSubscribedFromUs ?? domain.isSubscribed ?? true);
+    setIsHostingSubscribedFromUs(domain.isHostingSubscribedFromUs ?? domain.isSubscribed ?? true);
+    setRegistrationSource(domain.registrationSource || 'System');
+    setEmails(domain.emails || []);
+  }, [domain]);
 
   React.useEffect(() => {
     if (isEmployee) {
@@ -84,17 +130,30 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
     }
   }, [isEmployee]);
 
-  const handleUpdateSubscription = async (field: 'isDomainSubscribedFromUs' | 'isHostingSubscribedFromUs', value: boolean) => {
+  const handleUpdateSubscription = async (field: 'isDomainSubscribedFromUs' | 'isHostingSubscribedFromUs' | 'registrationSource', value: any) => {
     setLoading(true);
     try {
-      await updateDoc(doc(db, 'domains', domain.id), {
+      const updates: any = {
         [field]: value,
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name,
         updatedById: currentUser.id
-      });
-      if (field === 'isDomainSubscribedFromUs') setIsDomainSubscribedFromUs(value);
-      if (field === 'isHostingSubscribedFromUs') setIsHostingSubscribedFromUs(value);
+      };
+
+      if (field === 'registrationSource') {
+        setRegistrationSource(value);
+      } else {
+        // If either is true, isSubscribed must be true
+        if (value === true || (field === 'isDomainSubscribedFromUs' ? isHostingSubscribedFromUs : isDomainSubscribedFromUs)) {
+          updates.isSubscribed = true;
+        }
+        
+        if (field === 'isDomainSubscribedFromUs') setIsDomainSubscribedFromUs(value);
+        if (field === 'isHostingSubscribedFromUs') setIsHostingSubscribedFromUs(value);
+      }
+
+      await updateDoc(doc(db, 'domains', domain.id), updates);
+      toast.success('Subscription settings updated');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -120,6 +179,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
         updatedById: currentUser.id
       });
       setCredentials(sanitizedCredentials);
+      toast.success('Access details saved successfully');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -139,6 +199,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
         updatedById: currentUser.id
       });
       setNewRegistrar({ registrarName: '', date: new Date().toISOString().split('T')[0], notes: '' });
+      toast.success('Registrar record added');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -166,6 +227,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
         updatedById: currentUser.id
       });
       setNewMigration({ date: new Date().toISOString().split('T')[0], fromServer: '', toServer: '', fromNS: '', toNS: '', notes: '' });
+      toast.success('Hosting migration log added');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -213,6 +275,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
       });
 
       setNewOwnership({ clientId: '', startDate: new Date().toISOString().split('T')[0], notes: '' });
+      toast.success('Domain ownership transferred');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -232,6 +295,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
         updatedById: currentUser.id
       });
       setNewRenewal({ date: new Date().toISOString().split('T')[0], costPrice: 0, salePrice: 0, notes: '' });
+      toast.success('Renewal record added');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     } finally {
@@ -251,6 +315,73 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'domains');
     }
+  };
+
+  const handleSaveEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmail.email) {
+      toast.error('Email address is required');
+      return;
+    }
+    setLoading(true);
+    try {
+      let updatedEmails = [...emails];
+      if (editingEmailId) {
+        updatedEmails = updatedEmails.map(item => 
+          item.id === editingEmailId ? { ...item, ...newEmail } : item
+        );
+      } else {
+        const id = crypto.randomUUID();
+        updatedEmails.push({ id, ...newEmail });
+      }
+
+      await updateDoc(doc(db, 'domains', domain.id), {
+        emails: updatedEmails,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.name,
+        updatedById: currentUser.id
+      });
+
+      setEmails(updatedEmails);
+      setNewEmail({ email: '', username: '', password: '', webmailLink: '', label: '' });
+      setEditingEmailId(null);
+      toast.success(editingEmailId ? 'Webmail credential updated successfully' : 'Webmail credential saved successfully');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'domains');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteEmail = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this webmail credential?')) return;
+    setLoading(true);
+    try {
+      const updatedEmails = emails.filter(item => item.id !== id);
+      await updateDoc(doc(db, 'domains', domain.id), {
+        emails: updatedEmails,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.name,
+        updatedById: currentUser.id
+      });
+      setEmails(updatedEmails);
+      toast.success('Webmail credential deleted');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'domains');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditEmail = (item: any) => {
+    setEditingEmailId(item.id);
+    setNewEmail({
+      email: item.email || '',
+      username: item.username || item.email || '',
+      password: item.password || '',
+      webmailLink: item.webmailLink || '',
+      label: item.label || ''
+    });
   };
 
   const handleDeleteDomain = async () => {
@@ -338,33 +469,56 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
         )}
       </div>
 
-      <div className="bg-amber-50/50 p-6 rounded-3xl border border-amber-100 space-y-4 mb-8">
-        <h3 className="text-sm font-bold text-amber-900 flex items-center gap-2">
-          <Shield size={18} />
-          Subscription Awareness
-        </h3>
-        <p className="text-xs text-amber-700">Identify which services are subscribed through us to enable billing and support features.</p>
-        
-        <div className="grid grid-cols-2 gap-4">
-          <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
-            <input 
-              type="checkbox"
-              className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-              checked={isDomainSubscribedFromUs}
-              onChange={e => handleUpdateSubscription('isDomainSubscribedFromUs', e.target.checked)}
-            />
-            <span className="text-xs font-bold text-slate-700">Domain (Us)</span>
-          </label>
-          <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-amber-200 cursor-pointer hover:bg-amber-50 transition-colors">
-            <input 
-              type="checkbox"
-              className="w-4 h-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-              checked={isHostingSubscribedFromUs}
-              onChange={e => handleUpdateSubscription('isHostingSubscribedFromUs', e.target.checked)}
-            />
-            <span className="text-xs font-bold text-slate-700">Hosting (Us)</span>
-          </label>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
+          <p className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">Registration Source</p>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => handleUpdateSubscription('registrationSource', 'System')}
+              className={cn(
+                "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all",
+                registrationSource === 'System' ? "bg-indigo-600 text-white shadow-sm" : "hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"
+              )}
+            >
+              System
+            </button>
+            <button 
+              onClick={() => handleUpdateSubscription('registrationSource', 'External')}
+              className={cn(
+                "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all",
+                registrationSource === 'External' ? "bg-amber-600 text-white shadow-sm" : "hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"
+              )}
+            >
+              External
+            </button>
+          </div>
         </div>
+
+        <label className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+          <input 
+            type="checkbox"
+            className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
+            checked={isDomainSubscribedFromUs}
+            onChange={e => handleUpdateSubscription('isDomainSubscribedFromUs', e.target.checked)}
+          />
+          <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            Domain (Us)
+            {isDomainSubscribedFromUs && <span className="ml-2 text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded font-black uppercase">Subscribed</span>}
+          </span>
+        </label>
+
+        <label className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+          <input 
+            type="checkbox"
+            className="w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-indigo-600 focus:ring-indigo-500"
+            checked={isHostingSubscribedFromUs}
+            onChange={e => handleUpdateSubscription('isHostingSubscribedFromUs', e.target.checked)}
+          />
+          <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+            Hosting (Us)
+            {isHostingSubscribedFromUs && <span className="ml-2 text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded font-black uppercase">Subscribed</span>}
+          </span>
+        </label>
       </div>
 
       <div className="flex gap-1 p-1 bg-slate-100 rounded-xl w-fit">
@@ -418,6 +572,16 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
           <RefreshCw size={16} />
           Renewal History
         </button>
+        <button 
+          onClick={() => setActiveTab('emails')}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all",
+            activeTab === 'emails' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+          )}
+        >
+          <Mail size={16} />
+          Webmails & Emails
+        </button>
       </div>
 
       <div className="min-h-[400px] space-y-8">
@@ -461,7 +625,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                                     type="text"
                                     placeholder="Search registrars..."
                                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
-                                    value={registrarSearch}
+                                    value={registrarSearch || ''}
                                     onChange={e => setRegistrarSearch(e.target.value)}
                                   />
                                 </div>
@@ -469,6 +633,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                               <div className="max-h-60 overflow-y-auto p-1">
                                 {registrars
                                   .filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase()))
+                                  .sort((a, b) => a.name.localeCompare(b.name))
                                   .map(reg => (
                                     <button
                                       key={reg.id}
@@ -508,7 +673,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       required
                       type="date" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRegistrar.date}
+                      value={newRegistrar.date || ''}
                       onChange={e => setNewRegistrar(prev => ({ ...prev, date: e.target.value }))}
                     />
                   </div>
@@ -519,7 +684,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Initial registration"
-                    value={newRegistrar.notes}
+                    value={newRegistrar.notes || ''}
                     onChange={e => setNewRegistrar(prev => ({ ...prev, notes: e.target.value }))}
                   />
                 </div>
@@ -580,7 +745,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       required
                       type="date" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newMigration.date}
+                      value={newMigration.date || ''}
                       onChange={e => setNewMigration(prev => ({ ...prev, date: e.target.value }))}
                     />
                   </div>
@@ -591,7 +756,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="text" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="Old Server IP/Name"
-                      value={newMigration.fromServer}
+                      value={newMigration.fromServer || ''}
                       onChange={e => setNewMigration(prev => ({ ...prev, fromServer: e.target.value }))}
                     />
                   </div>
@@ -602,7 +767,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="text" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="New Server IP/Name"
-                      value={newMigration.toServer}
+                      value={newMigration.toServer || ''}
                       onChange={e => setNewMigration(prev => ({ ...prev, toServer: e.target.value }))}
                     />
                   </div>
@@ -614,7 +779,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="text" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="ns1.old.com, ns2.old.com"
-                      value={newMigration.fromNS}
+                      value={newMigration.fromNS || ''}
                       onChange={e => setNewMigration(prev => ({ ...prev, fromNS: e.target.value }))}
                     />
                   </div>
@@ -624,7 +789,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="text" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="ns1.new.com, ns2.new.com"
-                      value={newMigration.toNS}
+                      value={newMigration.toNS || ''}
                       onChange={e => setNewMigration(prev => ({ ...prev, toNS: e.target.value }))}
                     />
                   </div>
@@ -635,7 +800,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Upgraded to dedicated server"
-                    value={newMigration.notes}
+                    value={newMigration.notes || ''}
                     onChange={e => setNewMigration(prev => ({ ...prev, notes: e.target.value }))}
                   />
                 </div>
@@ -761,7 +926,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                                     type="text"
                                     placeholder="Search registrars..."
                                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500"
-                                    value={registrarSearch}
+                                    value={registrarSearch || ''}
                                     onChange={e => setRegistrarSearch(e.target.value)}
                                   />
                                 </div>
@@ -769,6 +934,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                               <div className="max-h-60 overflow-y-auto p-1">
                                 {registrars
                                   .filter(r => r.name.toLowerCase().includes(registrarSearch.toLowerCase()))
+                                  .sort((a, b) => a.name.localeCompare(b.name))
                                   .map(reg => (
                                     <button
                                       key={reg.id}
@@ -832,7 +998,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                             type="text" 
                             className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
                             placeholder={registrars.find(r => r.id === domain.registrarId)?.email || "Registrar username"}
-                            value={registrarCreds.username}
+                            value={registrarCreds.username || ''}
                             onChange={e => setRegistrarCreds(prev => ({ ...prev, username: e.target.value }))}
                           />
                         </div>
@@ -841,10 +1007,10 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                           <div className="relative">
                             <input 
                               disabled={!isEmployee}
-                              type={showRegistrarPassword ? "text" : "password"} 
+                              type={showRegistrarPassword && !(isTaiba(registrarCreds.password) && currentUser.role !== 'Admin') ? "text" : "password"} 
                               className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
                               placeholder={registrars.find(r => r.id === domain.registrarId)?.password ? "••••••••" : "Registrar password"}
-                              value={registrarCreds.password}
+                              value={registrarCreds.password || ''}
                               onChange={e => setRegistrarCreds(prev => ({ ...prev, password: e.target.value }))}
                             />
                             <button
@@ -879,7 +1045,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                           type="text" 
                           className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
                           placeholder="https://cpanel.domain.com"
-                          value={credentials.panelUrl}
+                          value={credentials.panelUrl || ''}
                           onChange={e => setCredentials(prev => ({ ...prev, panelUrl: e.target.value }))}
                         />
                       </div>
@@ -890,7 +1056,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                             disabled={!isEmployee}
                             type="text" 
                             className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                            value={credentials.username}
+                            value={credentials.username || ''}
                             onChange={e => setCredentials(prev => ({ ...prev, username: e.target.value }))}
                           />
                         </div>
@@ -899,9 +1065,9 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                           <div className="relative">
                             <input 
                               disabled={!isEmployee}
-                              type={showHostingPassword ? "text" : "password"} 
+                              type={showHostingPassword && !(isTaiba(credentials.password) && currentUser.role !== 'Admin') ? "text" : "password"} 
                               className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500"
-                              value={credentials.password}
+                              value={credentials.password || ''}
                               onChange={e => setCredentials(prev => ({ ...prev, password: e.target.value }))}
                             />
                             <button
@@ -934,7 +1100,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                           type="text" 
                           className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-500 font-mono"
                           placeholder="Enter EPP code for transfer"
-                          value={eppCode}
+                          value={isTaiba(eppCode) && currentUser.role !== 'Admin' ? '••••••••' : eppCode || ''}
                           onChange={e => setEppCode(e.target.value)}
                         />
                       </div>
@@ -969,11 +1135,11 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                     <select 
                       required
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newOwnership.clientId}
+                      value={newOwnership.clientId || ''}
                       onChange={e => setNewOwnership(prev => ({ ...prev, clientId: e.target.value }))}
                     >
                       <option value="">Choose a client...</option>
-                      {clients.map(client => (
+                      {[...clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(client => (
                         <option key={client.id} value={client.id}>{client.name}</option>
                       ))}
                     </select>
@@ -984,7 +1150,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       required
                       type="date" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newOwnership.startDate}
+                      value={newOwnership.startDate || ''}
                       onChange={e => setNewOwnership(prev => ({ ...prev, startDate: e.target.value }))}
                     />
                   </div>
@@ -995,7 +1161,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Domain sold to new client"
-                    value={newOwnership.notes}
+                    value={newOwnership.notes || ''}
                     onChange={e => setNewOwnership(prev => ({ ...prev, notes: e.target.value }))}
                   />
                 </div>
@@ -1057,7 +1223,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       required
                       type="date" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      value={newRenewal.date}
+                      value={newRenewal.date || ''}
                       onChange={e => setNewRenewal(prev => ({ ...prev, date: e.target.value }))}
                     />
                   </div>
@@ -1068,7 +1234,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="number" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="0.00"
-                      value={newRenewal.costPrice}
+                      value={newRenewal.costPrice || ''}
                       onChange={e => setNewRenewal(prev => ({ ...prev, costPrice: Number(e.target.value) }))}
                     />
                   </div>
@@ -1079,7 +1245,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                       type="number" 
                       className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                       placeholder="0.00"
-                      value={newRenewal.salePrice}
+                      value={newRenewal.salePrice || ''}
                       onChange={e => setNewRenewal(prev => ({ ...prev, salePrice: Number(e.target.value) }))}
                     />
                   </div>
@@ -1090,7 +1256,7 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                     type="text" 
                     className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                     placeholder="e.g. Renewed for 1 year"
-                    value={newRenewal.notes}
+                    value={newRenewal.notes || ''}
                     onChange={e => setNewRenewal(prev => ({ ...prev, notes: e.target.value }))}
                   />
                 </div>
@@ -1116,8 +1282,10 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                         <div className="flex items-center gap-4">
                           <p className="font-bold text-slate-900">Renewal on {item.date}</p>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-500">Cost: ${item.costPrice}</span>
-                            <span className="text-xs font-bold text-indigo-600">Sale: ${item.salePrice}</span>
+                            {(currentUser.role === 'Admin' || currentUser.role === 'Manager' || currentUser.role === 'Employee') && (
+                              <span className="text-xs text-slate-500">Cost: ${item.costPrice}</span>
+                            )}
+                            <span className="text-xs font-black text-indigo-600 px-2 py-0.5 bg-indigo-50 rounded">Sale: ${item.salePrice}</span>
                           </div>
                         </div>
                         {item.notes && <p className="text-xs text-slate-500 mt-1">{item.notes}</p>}
@@ -1137,6 +1305,215 @@ export const DomainManager: React.FC<DomainManagerProps> = ({ domain, onClose, i
                 <div className="py-12 text-center text-slate-400">
                   <RefreshCw size={48} className="mx-auto mb-3 opacity-20" />
                   <p className="text-sm font-medium">No renewal history recorded</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'emails' && (
+          <div className="space-y-6">
+            {isEmployee && (
+              <form onSubmit={handleSaveEmail} className="bg-slate-50 p-6 rounded-2xl border border-slate-200 space-y-4">
+                <h4 className="text-sm font-bold text-slate-800 mb-2">
+                  {editingEmailId ? 'Edit Webmail Credential' : 'Add Webmail / Email Credential'}
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 block">Label / Name</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      placeholder="e.g. Editor-in-Chief Email, Support"
+                      value={newEmail.label || ''}
+                      onChange={e => setNewEmail(prev => ({ ...prev, label: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 block">Email Address *</label>
+                    <input 
+                      required
+                      type="email" 
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      placeholder="e.g. info@journaldomain.com"
+                      value={newEmail.email || ''}
+                      onChange={e => setNewEmail(prev => ({ ...prev, email: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 block">Login Username (if distinct)</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      placeholder="Leave empty to use Email address"
+                      value={newEmail.username || ''}
+                      onChange={e => setNewEmail(prev => ({ ...prev, username: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-600 block">Password</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                      placeholder="Webmail Password"
+                      value={newEmail.password || ''}
+                      onChange={e => setNewEmail(prev => ({ ...prev, password: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-600 block">Webmail Link</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                    placeholder="e.g. https://webmail.journaldomain.com"
+                    value={newEmail.webmailLink || ''}
+                    onChange={e => setNewEmail(prev => ({ ...prev, webmailLink: e.target.value }))}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="submit"
+                    disabled={loading}
+                    className="flex-1 bg-indigo-600 text-white py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 text-sm"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
+                    {editingEmailId ? 'Update Credential' : 'Save Credential'}
+                  </button>
+                  {editingEmailId && (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setEditingEmailId(null);
+                        setNewEmail({ email: '', username: '', password: '', webmailLink: '', label: '' });
+                      }}
+                      className="px-4 py-2.5 bg-slate-200 text-slate-700 rounded-xl hover:bg-slate-300 transition-all text-sm font-bold"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </form>
+            )}
+
+            <div className="space-y-4">
+              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Mail size={16} className="text-indigo-600" />
+                Saved Email & Webmail Accounts
+              </h4>
+              {emails && emails.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4">
+                  {emails.map((item) => (
+                    <div key={item.id} className="p-5 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all group relative">
+                      <div className="flex justify-between items-start">
+                        <div className="space-y-1 pr-12 w-full">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.label && (
+                              <span className="text-[10px] font-black uppercase bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
+                                {item.label}
+                              </span>
+                            )}
+                            <span className="font-bold text-slate-900 text-sm">{item.email}</span>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mt-3 pt-2 border-t border-slate-100">
+                            <div>
+                              <span className="text-[10px] text-slate-400 block uppercase font-bold">Username</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-mono text-slate-700">
+                                  {isTaiba(item.username || item.email) && currentUser.role !== 'Admin' ? '••••••••' : (item.username || item.email)}
+                                </span>
+                                {currentUser.role === 'Admin' && (
+                                  <button 
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(item.username || item.email);
+                                      toast.success('Username copied');
+                                    }}
+                                    className="text-[10px] text-indigo-500 hover:text-indigo-700 font-bold"
+                                  >
+                                    Copy
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <div>
+                              <span className="text-[10px] text-slate-400 block uppercase font-bold">Password</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-mono text-slate-700">
+                                  {showEmailPasswords[item.id] ? (
+                                    isTaiba(item.password) && currentUser.role !== 'Admin' ? '••••••••' : (item.password || 'N/A')
+                                  ) : '••••••••'}
+                                </span>
+                                <button 
+                                  type="button"
+                                  onClick={() => setShowEmailPasswords(prev => ({ ...prev, [item.id] : !prev[item.id] }))}
+                                  className="text-[10px] text-slate-400 hover:text-indigo-600 font-bold"
+                                >
+                                  {showEmailPasswords[item.id] ? 'Hide' : 'Show'}
+                                </button>
+                                {item.password && currentUser.role === 'Admin' && (
+                                  <button 
+                                    onClick={() => {
+                                      if (isTaiba(item.password)) {
+                                        toast.error('Access Denied');
+                                        return;
+                                      }
+                                      navigator.clipboard.writeText(item.password);
+                                      toast.success('Password copied');
+                                    }}
+                                    className="text-[10px] text-indigo-500 hover:text-indigo-700 font-bold"
+                                  >
+                                    Copy
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {item.webmailLink && (
+                            <div className="mt-3 pt-2">
+                              <span className="text-[10px] text-slate-400 block uppercase font-bold">Webmail Link</span>
+                              <a 
+                                href={sanitizeUrl(item.webmailLink)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1 w-fit mt-1"
+                              >
+                                {item.webmailLink}
+                                <ExternalLink size={12} />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+                        {isEmployee && (
+                          <div className="flex gap-1 absolute right-3 top-3">
+                            <button 
+                              onClick={() => handleEditEmail(item)}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                              title="Edit credential"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteEmail(item.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                              title="Delete credential"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
+                  <Mail size={48} className="mx-auto mb-3 opacity-20" />
+                  <p className="text-sm font-medium">No webmail/email credentials saved yet</p>
+                  <p className="text-xs text-slate-400 mt-1">Add details above to store access for this domain.</p>
                 </div>
               )}
             </div>

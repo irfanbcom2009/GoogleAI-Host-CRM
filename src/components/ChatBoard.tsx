@@ -114,6 +114,8 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [isSearchVisible, setIsSearchVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isOrdering, setIsOrdering] = useState(false);
   const [isAttaching, setIsAttaching] = useState(false);
@@ -134,7 +136,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
         .map(doc => ({ id: doc.id, ...doc.data() } as UserType))
         .filter(u => u.id !== currentUser.id);
       setAllUsers(usersData);
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'users'));
 
     return () => unsubscribe();
   }, [currentUser.role, isNewChatModalOpen, currentUser.id]);
@@ -146,7 +148,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
     const q = query(collection(db, 'chats'), orderBy('lastMessageAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setSessions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChatSession[]);
-    });
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'chats'));
 
     return () => unsubscribe();
   }, [currentUser.role]);
@@ -185,10 +187,27 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
   }, [activeClientId, currentUser.role]);
 
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && !messageSearchQuery) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, messageSearchQuery]);
+
+  const filteredMessages = messages.filter(m => 
+    m.text.toLowerCase().includes(messageSearchQuery.toLowerCase()) ||
+    (m.orderData?.description && m.orderData.description.toLowerCase().includes(messageSearchQuery.toLowerCase())) ||
+    m.senderName.toLowerCase().includes(messageSearchQuery.toLowerCase())
+  );
+
+  const formatMessageTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
 
   const handleStartChat = (user: UserType) => {
     setActiveClientId(user.id);
@@ -489,15 +508,48 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
             </p>
           </div>
         </div>
-        <button 
-          onClick={() => setIsOrdering(true)}
-          disabled={hasSubscribedServices === false}
-          className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs sm:text-sm hover:bg-indigo-700 transition-all shadow-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
-          <span className="hidden xs:inline">Place Order</span>
-          <span className="xs:hidden">Order</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <div className={cn(
+            "flex items-center bg-white border border-slate-200 rounded-xl px-3 py-1.5 transition-all",
+            isSearchVisible ? "w-48 sm:w-64 opacity-100" : "w-0 opacity-0 overflow-hidden border-transparent p-0"
+          )}>
+            <Search size={14} className="text-slate-400 mr-2" />
+            <input 
+              type="text"
+              placeholder="Search messages..."
+              className="bg-transparent text-xs outline-none w-full font-medium"
+              value={messageSearchQuery || ''}
+              onChange={e => setMessageSearchQuery(e.target.value)}
+            />
+            {messageSearchQuery && (
+              <button onClick={() => setMessageSearchQuery('')} className="text-slate-400 hover:text-slate-600">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          <button 
+            onClick={() => {
+              setIsSearchVisible(!isSearchVisible);
+              if (isSearchVisible) setMessageSearchQuery('');
+            }}
+            className={cn(
+              "p-2 rounded-xl transition-all",
+              isSearchVisible ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-600 bg-white border border-slate-200"
+            )}
+            title="Search history"
+          >
+            <Search size={20} />
+          </button>
+          <button 
+            onClick={() => setIsOrdering(true)}
+            disabled={hasSubscribedServices === false}
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs sm:text-sm hover:bg-indigo-700 transition-all shadow-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
+            <span className="hidden xs:inline">Place Order</span>
+            <span className="xs:hidden">Order</span>
+          </button>
+        </div>
       </div>
 
       {/* Messages Area */}
@@ -510,18 +562,18 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
             <Loader2 className="animate-spin" size={24} />
             <p className="text-xs font-medium">Loading conversation...</p>
           </div>
-        ) : messages.length === 0 ? (
+        ) : filteredMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-400 text-center max-w-xs mx-auto">
             <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center">
-              <MessageSquare size={32} className="opacity-20" />
+              <Search size={32} className="opacity-20" />
             </div>
             <div>
-              <p className="font-bold text-slate-600">Start a conversation</p>
-              <p className="text-xs">Ask a question or place an order for any service.</p>
+              <p className="font-bold text-slate-600">{messageSearchQuery ? 'No results found' : 'Start a conversation'}</p>
+              <p className="text-xs">{messageSearchQuery ? `No messages matching "${messageSearchQuery}"` : 'Ask a question or place an order for any service.'}</p>
             </div>
           </div>
         ) : (
-          messages.map((msg) => (
+          filteredMessages.map((msg) => (
             <div 
               key={msg.id}
               className={cn(
@@ -576,7 +628,9 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
               </div>
               <div className="flex items-center gap-2 mt-1 px-1">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">{msg.senderName}</span>
-                <span className="text-[10px] text-slate-300">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-[10px] text-slate-300 font-medium tracking-tight">
+                  {formatMessageTime(msg.createdAt)}
+                </span>
               </div>
             </div>
           ))
@@ -608,7 +662,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
           placeholder={hasSubscribedServices === false ? "Support restricted to subscribed services only" : "Type your message..."}
           disabled={hasSubscribedServices === false}
           className="flex-1 px-4 py-2.5 bg-slate-100 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          value={newMessage}
+          value={newMessage || ''}
           onChange={(e) => setNewMessage(e.target.value)}
         />
         <button 
@@ -655,7 +709,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
                     type="text" 
                     placeholder="Search users..."
                     className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
-                    value={userSearchQuery}
+                    value={userSearchQuery || ''}
                     onChange={e => setUserSearchQuery(e.target.value)}
                   />
                 </div>
@@ -734,7 +788,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
                   <label className="text-sm font-bold text-slate-700">Service Type</label>
                   <select 
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
-                    value={orderForm.isCustom ? 'custom' : orderForm.serviceType}
+                    value={orderForm.isCustom ? 'custom' : orderForm.serviceType || ''}
                     onChange={e => {
                       const val = e.target.value;
                       if (val === 'custom') {
@@ -775,7 +829,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
                       required
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
                       placeholder="e.g. Specialized Indexing"
-                      value={orderForm.serviceType}
+                      value={orderForm.serviceType || ''}
                       onChange={e => setOrderForm(prev => ({ ...prev, serviceType: e.target.value }))}
                     />
                   </div>
@@ -803,7 +857,7 @@ export const ChatBoard: React.FC<ChatBoardProps> = ({ currentUser, targetClientI
                     required
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium min-h-[100px]"
                     placeholder="Describe what you need..."
-                    value={orderForm.description}
+                    value={orderForm.description || ''}
                     onChange={e => setOrderForm(prev => ({ ...prev, description: e.target.value }))}
                   />
                 </div>

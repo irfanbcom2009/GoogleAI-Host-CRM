@@ -91,7 +91,7 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({
             type="text"
             placeholder={`Add new ${type === 'journal-categories' ? 'category' : 'item'}...`}
             className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-            value={newItem}
+            value={newItem || ''}
             onChange={e => setNewItem(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAddItem()}
           />

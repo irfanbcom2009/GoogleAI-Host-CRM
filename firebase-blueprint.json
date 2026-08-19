@@ -46,6 +46,8 @@
         "clientId": { "type": "string" },
         "publisherId": { "type": "string" },
         "title": { "type": "string" },
+        "abbreviation": { "type": "string" },
+        "initials": { "type": "string" },
         "url": { "type": "string" },
         "ojsVersion": { "type": "string" },
         "sslStatus": { "type": "string", "enum": ["Active", "Expired", "Pending", "None"] },
@@ -98,6 +100,17 @@
       },
       "required": ["clientId", "title", "status", "priority", "deadline"]
     },
+    "Subscriptions": {
+      "title": "Subscriptions",
+      "description": "Subscription boolean flags for ojs, issn, hec, and doi services",
+      "type": "object",
+      "properties": {
+        "ojs": { "type": "boolean" },
+        "issn": { "type": "boolean" },
+        "hec": { "type": "boolean" },
+        "doi": { "type": "boolean" }
+      }
+    },
     "User": {
       "title": "User",
       "description": "A CRM user",
@@ -113,7 +126,17 @@
         "employeeId": { "type": "string" },
         "joiningDate": { "type": "string", "format": "date" },
         "department": { "type": "string" },
-        "officialMail": { "type": "string" }
+        "officialMail": { "type": "string" },
+        "serviceSubscriptions": {
+          "type": "object",
+          "description": "Subscription boolean flags for ojs, issn, hec, and doi services",
+          "properties": {
+            "ojs": { "type": "boolean" },
+            "issn": { "type": "boolean" },
+            "hec": { "type": "boolean" },
+            "doi": { "type": "boolean" }
+          }
+        }
       },
       "required": ["name", "email", "role"]
     },
@@ -459,6 +482,27 @@
       },
       "required": ["userId", "type", "points", "reason"]
     },
+    "SalaryPayment": {
+      "title": "Salary Payment",
+      "description": "A payment record for employee salary/advance/bonus",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "payrollId": { "type": "string" },
+        "amount": { "type": "number" },
+        "amountUSD": { "type": "number" },
+        "amountPKR": { "type": "number" },
+        "usdPkrRate": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "PKR"] },
+        "date": { "type": "string", "format": "date" },
+        "type": { "type": "string", "enum": ["salary", "advance", "bonus", "commission"] },
+        "method": { "type": "string", "enum": ["Bank Transfer", "Cash", "Online", "Cheque"] },
+        "reference": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["employeeId", "employeeName", "amount", "currency", "date", "type", "method"]
+    },
     "ProfileUpdateRequest": {
       "title": "Profile Update Request",
       "description": "A request to update user profile fields that require approval",
@@ -605,6 +649,60 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "title", "message", "isRead"]
+    },
+    "PaymentReceived": {
+      "title": "Payment Received",
+      "description": "A payment received from a client for services or tasks",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "journalId": { "type": "string" },
+        "journalTitle": { "type": "string" },
+        "taskId": { "type": "string" },
+        "taskTitle": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "PKR"] },
+        "usdPkrRate": { "type": "number" },
+        "date": { "type": "string", "format": "date" },
+        "method": { "type": "string" },
+        "category": { "type": "string" },
+        "reference": { "type": "string" },
+        "notes": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["amount", "currency", "date"]
+    },
+    "TaskCostRecord": {
+      "title": "Task Cost Record",
+      "description": "A cost record associated with a task, project, or employee execution",
+      "type": "object",
+      "properties": {
+        "taskTitle": { "type": "string" },
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "journalId": { "type": "string" },
+        "journalTitle": { "type": "string" },
+        "assignedEmployeeId": { "type": "string" },
+        "costAmount": { "type": "number" },
+        "costDate": { "type": "string", "format": "date" },
+        "category": { "type": "string" },
+        "notes": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["costAmount", "costDate"]
+    },
+    "Server": {
+      "title": "Hosting Server",
+      "description": "A pre-configured hosting server details",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ipAddress": { "type": "string" }
+      },
+      "required": ["name"]
     }
   },
   "firestore": {
@@ -637,12 +735,16 @@
     "/vault": { "schema": "CredentialVaultRecord", "description": "Collection of encrypted credentials" },
     "/notifications": { "schema": "Notification", "description": "Collection of user notifications" },
     "/point_history": { "schema": "PointHistory", "description": "Collection of point history records" },
+    "/salaryPayments": { "schema": "SalaryPayment", "description": "Collection of employee salary payments" },
     "/profile_update_requests": { "schema": "ProfileUpdateRequest", "description": "Collection of profile update requests" },
     "/hec_categories": { "schema": "HECCategory", "description": "Collection of HEC managed categories" },
     "/hec_workflows": { "schema": "HECApplicationWorkflow", "description": "Collection of HEC workflow trackers" },
     "/registration_requests": { "schema": "RegistrationRequest", "description": "Collection of registration requests" },
     "/access_logs": { "schema": "AccessLog", "description": "Collection of access logs" },
     "/employment_history": { "schema": "EmploymentHistory", "description": "Collection of employee career history events" },
-    "/field_permissions": { "schema": "EmployeeFieldPermission", "description": "Collection of field-level permissions" }
+    "/field_permissions": { "schema": "EmployeeFieldPermission", "description": "Collection of field-level permissions" },
+    "/paymentsReceived": { "schema": "PaymentReceived", "description": "Collection of payments received from clients" },
+    "/taskCosts": { "schema": "TaskCostRecord", "description": "Collection of task and service costs" },
+    "/servers": { "schema": "Server", "description": "Collection of hosting servers" }
   }
 }

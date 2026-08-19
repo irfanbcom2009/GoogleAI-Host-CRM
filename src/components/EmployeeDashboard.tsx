@@ -13,13 +13,15 @@ import {
   TrendingUp,
   Calendar,
   History,
-  Award
+  Award,
+  DollarSign
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
 import { collection, onSnapshot, query, where, orderBy, limit, doc } from 'firebase/firestore';
 import { Task, User as CRMUser, ActivityLog } from '../types';
 import { cn } from '../lib/utils';
+import { financeService } from '../services/financeService';
 
 interface EmployeeDashboardProps {
   currentUser: CRMUser;
@@ -30,7 +32,17 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
   const [tasks, setTasks] = useState<Task[]>([]);
   const [user, setUser] = useState<CRMUser>(currentUser);
   const [activities, setActivities] = useState<ActivityLog[]>([]);
+  const [payrollData, setPayrollData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchPayroll = async () => {
+      const now = new Date();
+      const data = await financeService.calculatePayroll(currentUser.id, now.getMonth(), now.getFullYear());
+      setPayrollData(data);
+    };
+    fetchPayroll();
+  }, [currentUser.id]);
 
   useEffect(() => {
     const unsubUser = onSnapshot(doc(db, 'users', currentUser.id), (doc) => {
@@ -97,26 +109,26 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
   }
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
+    <div className="py-4 md:py-8 space-y-6 md:space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       {/* Welcome Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-1.5 flex-wrap">
             Welcome back, {user?.name}
             <HelpIcon policyTitle="Employee Portal Policy" />
           </h2>
-          <p className="text-slate-500 mt-1 flex items-center gap-2">
+          <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
             <Calendar size={14} />
             {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
-        <div className="flex items-center gap-4 bg-white p-2 pr-6 rounded-2xl border border-slate-100 shadow-sm">
-          <div className="w-12 h-12 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
-            <Trophy size={24} />
+        <div className="flex items-center gap-4 bg-white p-2 pr-6 rounded-2xl border border-slate-100 shadow-sm w-fit">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 shrink-0">
+            <Trophy size={20} className="sm:w-6 sm:h-6" />
           </div>
           <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your Performance</p>
-            <p className="text-xl font-black text-indigo-600">{stats.points.toLocaleString()} <span className="text-xs font-bold text-slate-400">PTS</span></p>
+            <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your Performance</p>
+            <p className="text-lg sm:text-xl font-black text-indigo-600">{stats.points.toLocaleString()} <span className="text-xs font-bold text-slate-400">PTS</span></p>
           </div>
         </div>
       </div>
@@ -172,24 +184,24 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="divide-y divide-slate-50">
               {recentTasks.map((task) => (
-                <div key={task.id} className="p-4 hover:bg-slate-50 transition-all group flex items-center justify-between">
-                  <div className="flex items-center gap-4">
+                <div key={task.id} className="p-4 hover:bg-slate-50 transition-all group flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+                  <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0">
                     <div className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center border",
+                      "w-10 h-10 rounded-xl flex items-center justify-center border shrink-0 mt-0.5 sm:mt-0",
                       task.status === 'completed' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-indigo-50 text-indigo-600 border-indigo-100"
                     )}>
                       {task.status === 'completed' ? <CheckCircle2 size={20} /> : <Briefcase size={20} />}
                     </div>
-                    <div>
-                      <p className="font-bold text-sm text-slate-900">{task.title}</p>
-                      <p className="text-xs text-slate-500 flex items-center gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm text-slate-900 break-words">{task.title}</p>
+                      <p className="text-xs text-slate-500 flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                         <span className="font-bold uppercase text-[10px] text-indigo-600">{task.serviceType}</span>
-                        <span>•</span>
+                        <span className="hidden xs:inline">•</span>
                         <span>Due {task.dueDate}</span>
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-150 shrink-0">
                     <span className={cn(
                       "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase border",
                       task.status === 'completed' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
@@ -198,7 +210,7 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
                     </span>
                     <button 
                       onClick={() => setActiveTab('tasks')}
-                      className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                      className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all sm:opacity-0 sm:group-hover:opacity-100"
                     >
                       <TrendingUp size={16} />
                     </button>
@@ -243,6 +255,53 @@ export const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ currentUse
               </div>
             </div>
           </div>
+
+          {/* Financial Summary */}
+          {payrollData && (
+            <div className="bg-white rounded-3xl p-8 mt-6 border border-slate-100 shadow-sm relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-8 opacity-5 text-indigo-600 group-hover:scale-110 transition-transform">
+                <DollarSign size={100} />
+              </div>
+              <div className="relative z-10 flex flex-col gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                    <DollarSign size={18} />
+                  </div>
+                  <span className="text-sm font-bold uppercase tracking-widest text-slate-400">Monthly Payroll Estimate</span>
+                </div>
+                
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Gross Salary</p>
+                    <p className="text-xl font-black text-slate-900">{payrollData.grossSalary.toLocaleString()} PKR</p>
+                    {payrollData.usdEquiv && (
+                      <p className="text-xs font-bold text-slate-400">$ {(payrollData.usdEquiv.grossSalary || 0).toLocaleString()}</p>
+                    )}
+                    <p className="text-[8px] text-slate-400 mt-0.5 italic">Max of (Points: {payrollData.pointsValue.toLocaleString()} or Base: {payrollData.baseSalary.toLocaleString()})</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Total Paid</p>
+                    <p className="text-xl font-black text-emerald-600">-{payrollData.paidAmount.toLocaleString()} PKR</p>
+                    {payrollData.usdEquiv && (
+                      <p className="text-xs font-bold text-emerald-400">- $ {(payrollData.usdEquiv.paidAmount || 0).toLocaleString()}</p>
+                    )}
+                    <p className="text-[8px] text-slate-400 mt-0.5 italic">Including advances & partial payments</p>
+                  </div>
+                  <div className="col-span-2 lg:col-span-1 border-t lg:border-t-0 lg:border-l border-slate-100 pt-4 lg:pt-0 lg:pl-6">
+                    <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 italic">Remaining Balance</p>
+                    <p className="text-2xl font-black text-indigo-600">{payrollData.balance.toLocaleString()} PKR</p>
+                    {payrollData.usdEquiv && (
+                      <p className="text-sm font-bold text-indigo-400">$ {(payrollData.usdEquiv.balance || 0).toLocaleString()}</p>
+                    )}
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Pending Disbursement</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Activity Window */}

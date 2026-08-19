@@ -43,14 +43,14 @@ export const AccessLogs: React.FC = () => {
   );
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-3">
             <ShieldAlert className="text-rose-500" size={32} />
             Access Logs
           </h2>
-          <p className="text-slate-500 mt-1">Monitoring unauthorized login attempts and security events.</p>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Monitoring unauthorized login attempts and security events.</p>
         </div>
       </div>
 
@@ -61,7 +61,7 @@ export const AccessLogs: React.FC = () => {
             type="text" 
             placeholder="Search logs by email or user agent..."
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>

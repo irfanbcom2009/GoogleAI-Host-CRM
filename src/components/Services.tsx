@@ -54,7 +54,7 @@ export const Services: React.FC<ServicesProps> = ({ currentUser }) => {
   });
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-black text-slate-900 tracking-tight">Service Catalog</h2>
@@ -69,7 +69,7 @@ export const Services: React.FC<ServicesProps> = ({ currentUser }) => {
             type="text"
             placeholder="Search for services..."
             className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-sm"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={e => setSearchQuery(e.target.value)}
           />
         </div>

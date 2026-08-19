@@ -65,9 +65,10 @@ export const Typewriter: React.FC<TypewriterProps> = ({
         <motion.span
           animate={{ opacity: [1, 0] }}
           transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-          className="inline-block w-[4px] bg-slate-900 align-middle shrink-0"
-          style={{ height: '0.8em' }}
-        />
+          className="inline-block align-middle shrink-0 font-bold text-indigo-600"
+        >
+          _
+        </motion.span>
       </span>
     </span>
   );

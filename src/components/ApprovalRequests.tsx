@@ -51,7 +51,7 @@ export const ApprovalRequests: React.FC = () => {
       }
     );
 
-    const unsubClients = onSnapshot(collection(db, 'clients'), (snapshot) => {
+    const unsubClients = onSnapshot(query(collection(db, 'users'), where('role', '==', 'Client')), (snapshot) => {
       setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Client)));
     });
 
@@ -153,10 +153,10 @@ export const ApprovalRequests: React.FC = () => {
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight text-slate-900">Approval Requests</h2>
-        <p className="text-slate-500 mt-1">Centralized dashboard for managers to review and approve pending items.</p>
+        <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Approval Requests</h2>
+        <p className="text-slate-500 dark:text-slate-400 mt-1">Centralized dashboard for managers to review and approve pending items.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

@@ -24,6 +24,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp
 import { RegistrationRequest, UserRole } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { Modal } from './Modal';
 
 export const RegistrationRequests: React.FC = () => {
   const [requests, setRequests] = useState<RegistrationRequest[]>([]);
@@ -50,7 +51,7 @@ export const RegistrationRequests: React.FC = () => {
   }, []);
 
   const handleApprove = async (request: RegistrationRequest) => {
-    if (!request.id) return;
+    if (!request.id || actionLoading) return;
     setActionLoading(request.id);
     try {
       // 1. Create the user document
@@ -110,7 +111,7 @@ export const RegistrationRequests: React.FC = () => {
   };
 
   const handleReject = async () => {
-    if (!selectedRequest?.id) return;
+    if (!selectedRequest?.id || actionLoading) return;
     setActionLoading(selectedRequest.id);
     try {
       await updateDoc(doc(db, 'registration_requests', selectedRequest.id), {
@@ -150,11 +151,11 @@ export const RegistrationRequests: React.FC = () => {
   });
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12">
       <div className="flex items-end justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">Registration Requests</h2>
-          <p className="text-slate-500 mt-1">Manage new account creation requests from unregistered users.</p>
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Registration Requests</h2>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Manage new account creation requests from unregistered users.</p>
         </div>
         <div className="flex items-center gap-3 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
           {(['all', 'pending', 'approved', 'rejected'] as const).map((status) => (
@@ -181,7 +182,7 @@ export const RegistrationRequests: React.FC = () => {
             type="text" 
             placeholder="Search requests by name, email or organization..."
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border-transparent rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 transition-all outline-none text-sm"
-            value={searchQuery}
+            value={searchQuery || ''}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
@@ -312,8 +313,8 @@ export const RegistrationRequests: React.FC = () => {
                       <div className="space-y-3">
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Required Services</p>
                         <div className="flex flex-wrap gap-2">
-                          {selectedRequest.requiredServices.map(service => (
-                            <span key={service} className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold border border-indigo-100">
+                          {selectedRequest.requiredServices.map((service, idx) => (
+                            <span key={`${service}-${idx}`} className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold border border-indigo-100">
                               {service}
                             </span>
                           ))}
@@ -375,62 +376,40 @@ export const RegistrationRequests: React.FC = () => {
       )}
 
       {/* Rejection Modal */}
-      <AnimatePresence>
-        {showRejectionModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowRejectionModal(false)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+      <Modal
+        isOpen={showRejectionModal}
+        onClose={() => setShowRejectionModal(false)}
+        title="Reject Request"
+      >
+        <div className="p-6 space-y-6">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">Please provide a reason for rejecting this registration request. This will be logged for internal records.</p>
+            <textarea 
+              required
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none transition-all text-sm min-h-[120px]"
+              placeholder="e.g. Incomplete information, Duplicate request..."
+              value={rejectionReason || ''}
+              onChange={e => setRejectionReason(e.target.value)}
             />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6"
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-black text-slate-900">Reject Request</h3>
-                <button 
-                  onClick={() => setShowRejectionModal(false)}
-                  className="p-2 hover:bg-slate-100 rounded-full transition-all"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <p className="text-sm text-slate-500">Please provide a reason for rejecting this registration request. This will be logged for internal records.</p>
-                <textarea 
-                  required
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 outline-none transition-all text-sm min-h-[120px]"
-                  placeholder="e.g. Incomplete information, Duplicate request..."
-                  value={rejectionReason}
-                  onChange={e => setRejectionReason(e.target.value)}
-                />
-              </div>
-
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowRejectionModal(false)}
-                  className="flex-1 px-4 py-3 border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleReject}
-                  disabled={!rejectionReason.trim() || !!actionLoading}
-                  className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50"
-                >
-                  Confirm Reject
-                </button>
-              </div>
-            </motion.div>
           </div>
-        )}
-      </AnimatePresence>
+
+          <div className="flex gap-3">
+            <button 
+              onClick={() => setShowRejectionModal(false)}
+              className="flex-1 px-4 py-3 border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={handleReject}
+              disabled={!rejectionReason.trim() || !!actionLoading}
+              className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-200 disabled:opacity-50"
+            >
+              Confirm Reject
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

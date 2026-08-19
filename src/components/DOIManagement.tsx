@@ -19,7 +19,8 @@ import {
   Building2,
   Mail,
   Lock,
-  Ticket
+  Ticket,
+  Users
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DOI, DOIPayment, Client, Journal, User, Publisher } from '../types';
@@ -29,9 +30,11 @@ import { cn, sanitizeUrl } from '../lib/utils';
 import { Modal } from './Modal';
 import { ColumnSelector } from './ColumnSelector';
 import { usePermissions } from '../hooks/usePermissions';
+import { SelectDomainField } from './SelectDomainField';
 
 interface DOIManagementProps {
   currentUser: User;
+  journalId?: string;
 }
 
 const AVAILABLE_COLUMNS = [
@@ -47,7 +50,7 @@ const AVAILABLE_COLUMNS = [
   { id: 'org', label: 'Sponsoring Org' }
 ];
 
-export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => {
+export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser, journalId }) => {
   const { check } = usePermissions(currentUser);
   const [dois, setDois] = useState<DOI[]>([]);
   const [payments, setPayments] = useState<DOIPayment[]>([]);
@@ -55,6 +58,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
   const [journals, setJournals] = useState<Journal[]>([]);
   const [publishers, setPublishers] = useState<Publisher[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -77,8 +81,12 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
     sponsoringOrgName: '',
     sponsoringOrgUrl: '',
     sponsoringOrgPubUrl: '',
-    remarks: ''
+    remarks: '',
+    members: [{ name: '', affiliation: '', email: '', phone: '' }] as { name: string; affiliation: string; email: string; phone: string; }[]
   });
+
+  const [selectedDoi, setSelectedDoi] = useState<DOI | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   const [newPayment, setNewPayment] = useState({
     clientId: '',
@@ -105,19 +113,31 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
     let unsubPayments;
 
     if (isClient) {
+      const doiQuery = journalId
+        ? query(collection(db, 'doi_records'), where('clientId', '==', currentUser.id), where('journalId', '==', journalId))
+        : query(collection(db, 'doi_records'), where('clientId', '==', currentUser.id));
       unsubDois = onSnapshot(
-        query(collection(db, 'doi_records'), where('clientId', '==', currentUser.id)),
+        doiQuery,
         (snapshot) => setDois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOI)))
       );
+      const paymentQuery = journalId
+        ? query(collection(db, 'doi_payments'), where('clientId', '==', currentUser.id), where('journalId', '==', journalId))
+        : query(collection(db, 'doi_payments'), where('clientId', '==', currentUser.id));
       unsubPayments = onSnapshot(
-        query(collection(db, 'doi_payments'), where('clientId', '==', currentUser.id)),
+        paymentQuery,
         (snapshot) => setPayments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOIPayment)))
       );
     } else {
-      unsubDois = onSnapshot(collection(db, 'doi_records'), (snapshot) => {
+      const doiQuery = journalId
+        ? query(collection(db, 'doi_records'), where('journalId', '==', journalId))
+        : collection(db, 'doi_records');
+      unsubDois = onSnapshot(doiQuery, (snapshot) => {
         setDois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOI)));
       });
-      unsubPayments = onSnapshot(collection(db, 'doi_payments'), (snapshot) => {
+      const paymentQuery = journalId
+        ? query(collection(db, 'doi_payments'), where('journalId', '==', journalId))
+        : collection(db, 'doi_payments');
+      unsubPayments = onSnapshot(paymentQuery, (snapshot) => {
         setPayments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DOIPayment)));
       });
     }
@@ -142,15 +162,66 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
       unsubPublishers();
       unsubJournals();
     };
-  }, [isClient, currentUser.id]);
+  }, [isClient, currentUser.id, journalId]);
+
+  useEffect(() => {
+    if (journalId && journals.length > 0) {
+      const j = journals.find(x => x.id === journalId);
+      if (j) {
+        setNewDOI(prev => ({
+          ...prev,
+          journalId: j.id,
+          clientId: j.clientId,
+          publisherId: j.publisherId || '',
+          domainName: j.url || ''
+        }));
+      }
+    }
+  }, [journalId, journals]);
 
   const handleColumnChange = (newColumns: string[]) => {
     setSelectedColumns(newColumns);
     localStorage.setItem(`doi_columns_${currentUser.id}`, JSON.stringify(newColumns));
   };
 
+  const handleMemberChange = (index: number, field: string, value: string) => {
+    setNewDOI(prev => {
+      const updatedMembers = [...prev.members];
+      updatedMembers[index] = { ...updatedMembers[index], [field]: value };
+      const mainMemberName = index === 0 && field === 'name' ? value : prev.memberName || (updatedMembers[0]?.name || '');
+      return {
+        ...prev,
+        members: updatedMembers,
+        memberName: mainMemberName
+      };
+    });
+  };
+
+  const handleResetForm = () => {
+    setNewDOI({
+      clientId: '',
+      publisherId: '',
+      journalId: '',
+      memberName: '',
+      doiPrefix: '',
+      role: 'Member',
+      password: '',
+      ticketNo: '',
+      otherEmails: [],
+      domainName: '',
+      url: '',
+      sponsoringOrgName: '',
+      sponsoringOrgUrl: '',
+      sponsoringOrgPubUrl: '',
+      remarks: '',
+      members: [{ name: '', affiliation: '', email: '', phone: '' }]
+    });
+  };
+
   const handleCreateDOI = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     
     // Strict Rule: 1 Email and 1 Domain per unique Application/Prefix
     const existingWithPrefix = dois.find(d => d.doiPrefix === newDOI.doiPrefix);
@@ -184,15 +255,19 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
         sponsoringOrgName: '',
         sponsoringOrgUrl: '',
         sponsoringOrgPubUrl: '',
-        remarks: ''
+        remarks: '',
+        members: [{ name: '', affiliation: '', email: '', phone: '' }]
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'doi_records');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleBulkAdd = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const urls = bulkUrls.split('\n').map(u => sanitizeUrl(u.trim())).filter(u => u !== '');
     const targetClientId = isClient ? currentUser.id : selectedClientId;
     
@@ -210,6 +285,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
     }
 
     if (confirm(`Found ${newUrls.length} new URLs. Deposit for activation?`)) {
+      setIsSubmitting(true);
       try {
         for (const url of newUrls) {
           await addDoc(collection(db, 'doi_records'), {
@@ -228,12 +304,16 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
         setBulkUrls('');
       } catch (error) {
         handleFirestoreError(error, OperationType.CREATE, 'doi_records');
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
 
   const handleAddPayment = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, 'doi_payments'), {
         ...newPayment,
@@ -250,6 +330,8 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'doi_payments');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -291,12 +373,19 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
   }
 
   return (
-    <div className="p-8 space-y-8">
+    <div className={cn(journalId ? "p-0 space-y-4" : "p-8 space-y-8 max-w-full mx-auto px-4 md:px-8 lg:px-12")}>
       <div className="flex items-end justify-between">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">DOI Management</h2>
-          <p className="text-slate-500 mt-1">Manage Digital Object Identifiers and activation payments.</p>
-        </div>
+        {journalId ? (
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">DOI Management ({dois.length})</h3>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-wider">Manage DOIs for this journal</p>
+          </div>
+        ) : (
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">DOI Management</h2>
+            <p className="text-slate-500 dark:text-slate-400 mt-1">Manage Digital Object Identifiers and activation payments.</p>
+          </div>
+        )}
         <div className="flex gap-3">
           <ColumnSelector 
             availableColumns={AVAILABLE_COLUMNS}
@@ -314,7 +403,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
               </button>
             </>
           )}
-          {!isClient && canAdd && (
+          {!isClient && canAdd && !journalId && (
             <button 
               onClick={() => setIsPaymentModalOpen(true)}
               className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20"
@@ -327,54 +416,56 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
       </div>
 
       {/* Stats Section */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {isClient ? (
-          <>
-            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Activated</p>
-              <h4 className="text-2xl font-bold text-slate-900">{dois.filter(d => d.status === 'activated').length}</h4>
-            </div>
-            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Payments</p>
-              <h4 className="text-2xl font-bold text-emerald-600">${payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}</h4>
-            </div>
-            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Current Balance</p>
-              <h4 className={cn(
-                "text-2xl font-bold",
-                getClientStats(currentUser.id).balance >= 0 ? "text-indigo-600" : "text-rose-600"
-              )}>
-                ${getClientStats(currentUser.id).balance.toLocaleString()}
-              </h4>
-            </div>
-          </>
-        ) : (
-          <div className="md:col-span-3 bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
-            <h3 className="font-bold text-indigo-900 mb-4 flex items-center gap-2">
-              <AlertCircle size={20} />
-              Quick Overview
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div>
-                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Total DOIs</p>
-                <p className="text-xl font-bold text-indigo-900">{dois.length}</p>
+      {!journalId && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {isClient ? (
+            <>
+              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Activated</p>
+                <h4 className="text-2xl font-bold text-slate-900">{dois.filter(d => d.status === 'activated').length}</h4>
               </div>
-              <div>
-                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Pending</p>
-                <p className="text-xl font-bold text-amber-600">{dois.filter(d => d.status === 'pending').length}</p>
+              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total Payments</p>
+                <h4 className="text-2xl font-bold text-emerald-600">${payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}</h4>
               </div>
-              <div>
-                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Activated</p>
-                <p className="text-xl font-bold text-emerald-600">{dois.filter(d => d.status === 'activated').length}</p>
+              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Current Balance</p>
+                <h4 className={cn(
+                  "text-2xl font-bold",
+                  getClientStats(currentUser.id).balance >= 0 ? "text-indigo-600" : "text-rose-600"
+                )}>
+                  ${getClientStats(currentUser.id).balance.toLocaleString()}
+                </h4>
               </div>
-              <div>
-                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Total Revenue</p>
-                <p className="text-xl font-bold text-indigo-900">${payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}</p>
+            </>
+          ) : (
+            <div className="md:col-span-3 bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
+              <h3 className="font-bold text-indigo-900 mb-4 flex items-center gap-2">
+                <AlertCircle size={20} />
+                Quick Overview
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Total DOIs</p>
+                  <p className="text-xl font-bold text-indigo-900">{dois.length}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Pending</p>
+                  <p className="text-xl font-bold text-amber-600">{dois.filter(d => d.status === 'pending').length}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Activated</p>
+                  <p className="text-xl font-bold text-emerald-600">{dois.filter(d => d.status === 'activated').length}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Total Revenue</p>
+                  <p className="text-xl font-bold text-indigo-900">${payments.reduce((sum, p) => sum + p.amount, 0).toLocaleString()}</p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* DOI List */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -493,14 +584,27 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                       </td>
                     )}
                     <td className="px-6 py-4 text-right">
-                      {!isClient && doi.status === 'pending' && canApprove && (
+                      <div className="flex items-center justify-end gap-2">
                         <button 
-                          onClick={() => activateDOI(doi.id)}
-                          className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
+                          onClick={() => {
+                            setSelectedDoi(doi);
+                            setIsDetailModalOpen(true);
+                          }}
+                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                          title="View Details"
                         >
-                          Activate
+                          <FileText size={14} />
+                          Details
                         </button>
-                      )}
+                        {!isClient && doi.status === 'pending' && canApprove && (
+                          <button 
+                            onClick={() => activateDOI(doi.id)}
+                            className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200"
+                          >
+                            Activate
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </motion.tr>
                 ))}
@@ -531,11 +635,11 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                   <select 
                     required
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.clientId}
+                    value={newDOI.clientId || ''}
                     onChange={e => setNewDOI(prev => ({ ...prev, clientId: e.target.value, publisherId: '', journalId: '' }))}
                   >
                     <option value="">Select Client</option>
-                    {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {[...clients].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
               )}
@@ -544,12 +648,13 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 <select 
                   required
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDOI.publisherId}
+                  value={newDOI.publisherId || ''}
                   onChange={e => setNewDOI(prev => ({ ...prev, publisherId: e.target.value, journalId: '' }))}
                 >
                   <option value="">Select Publisher</option>
                   {publishers
                     .filter(p => p.clientId === (isClient ? currentUser.id : newDOI.clientId))
+                    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
                     .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </div>
@@ -558,12 +663,13 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 <select 
                   required
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDOI.journalId}
+                  value={newDOI.journalId || ''}
                   onChange={e => setNewDOI(prev => ({ ...prev, journalId: e.target.value }))}
                 >
                   <option value="">Select Journal</option>
                   {journals
                     .filter(j => j.publisherId === newDOI.publisherId)
+                    .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
                     .map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
                 </select>
               </div>
@@ -577,68 +683,145 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
               </h3>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Member Name</label>
-                  <input 
-                    required
-                    type="text"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.memberName}
-                    onChange={e => setNewDOI(prev => ({ ...prev, memberName: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase">DOI Prefix</label>
                   <input 
                     required
                     type="text"
                     placeholder="10.xxxx"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.doiPrefix}
+                    value={newDOI.doiPrefix || ''}
                     onChange={e => setNewDOI(prev => ({ ...prev, doiPrefix: e.target.value }))}
                   />
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase">Role</label>
                   <input 
                     required
                     type="text"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.role}
+                    value={newDOI.role || ''}
                     onChange={e => setNewDOI(prev => ({ ...prev, role: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
-                  <input 
-                    type="password"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.password}
-                    onChange={e => setNewDOI(prev => ({ ...prev, password: e.target.value }))}
                   />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Password</label>
+                  <input 
+                    type="password"
+                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={newDOI.password || ''}
+                    onChange={e => setNewDOI(prev => ({ ...prev, password: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase">Ticket No</label>
                   <input 
                     type="text"
                     className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.ticketNo}
+                    value={newDOI.ticketNo || ''}
                     onChange={e => setNewDOI(prev => ({ ...prev, ticketNo: e.target.value }))}
                   />
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Domain Name</label>
-                  <input 
+                  <SelectDomainField
                     required
-                    type="text"
-                    placeholder="example.com"
-                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                    value={newDOI.domainName}
-                    onChange={e => setNewDOI(prev => ({ ...prev, domainName: e.target.value }))}
+                    clientId={isClient ? currentUser.id : newDOI.clientId}
+                    selectedDomainNameOrId={newDOI.domainName}
+                    onChange={(val) => setNewDOI(prev => ({ ...prev, domainName: val }))}
+                    label="Linked Domain"
                   />
+                </div>
+              </div>
+
+              {/* Dynamic Members Section */}
+              <div className="space-y-4 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                    <Users size={16} className="text-indigo-500" />
+                    Members List ({newDOI.members.length})
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setNewDOI(prev => ({
+                      ...prev,
+                      members: [...prev.members, { name: '', affiliation: '', email: '', phone: '' }]
+                    }))}
+                    className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 rounded-l transition-all"
+                  >
+                    <Plus size={14} /> Add More
+                  </button>
+                </div>
+
+                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
+                  {newDOI.members.map((member, idx) => (
+                    <div key={idx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl relative space-y-3 group/member">
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                        <span className="text-xs font-bold text-slate-500 uppercase">Member #{idx + 1}</span>
+                        {newDOI.members.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setNewDOI(prev => ({
+                              ...prev,
+                              members: prev.members.filter((_, i) => i !== idx),
+                              memberName: idx === 0 ? (prev.members[1]?.name || '') : prev.memberName
+                            }))}
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-all"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Name</label>
+                          <input
+                            required
+                            type="text"
+                            placeholder="John Doe"
+                            className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                            value={member.name || ''}
+                            onChange={e => handleMemberChange(idx, 'name', e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Affiliation</label>
+                          <input
+                            required
+                            type="text"
+                            placeholder="University of Oxford"
+                            className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                            value={member.affiliation || ''}
+                            onChange={e => handleMemberChange(idx, 'affiliation', e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Email</label>
+                          <input
+                            required
+                            type="email"
+                            placeholder="john@example.com"
+                            className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                            value={member.email || ''}
+                            onChange={e => handleMemberChange(idx, 'email', e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase">Phone</label>
+                          <input
+                            required
+                            type="tel"
+                            placeholder="+1 234 567 8900"
+                            className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                            value={member.phone || ''}
+                            onChange={e => handleMemberChange(idx, 'phone', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -656,7 +839,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 <input 
                   type="text"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDOI.sponsoringOrgName}
+                  value={newDOI.sponsoringOrgName || ''}
                   onChange={e => setNewDOI(prev => ({ ...prev, sponsoringOrgName: e.target.value }))}
                 />
               </div>
@@ -665,7 +848,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 <input 
                   type="url"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDOI.sponsoringOrgUrl}
+                  value={newDOI.sponsoringOrgUrl || ''}
                   onChange={e => setNewDOI(prev => ({ ...prev, sponsoringOrgUrl: e.target.value }))}
                 />
               </div>
@@ -674,7 +857,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 <input 
                   type="url"
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                  value={newDOI.sponsoringOrgPubUrl}
+                  value={newDOI.sponsoringOrgPubUrl || ''}
                   onChange={e => setNewDOI(prev => ({ ...prev, sponsoringOrgPubUrl: e.target.value }))}
                 />
               </div>
@@ -684,18 +867,31 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
               <textarea 
                 rows={2}
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
-                value={newDOI.remarks}
+                value={newDOI.remarks || ''}
                 onChange={e => setNewDOI(prev => ({ ...prev, remarks: e.target.value }))}
               />
             </div>
           </div>
 
-          <div className="pt-4">
+          <div className="pt-4 flex gap-4">
+            <button 
+              type="button"
+              onClick={handleResetForm}
+              className="px-6 bg-slate-100 hover:bg-slate-200 text-slate-700 py-4 rounded-2xl font-semibold transition-all"
+            >
+              Reset Form
+            </button>
             <button 
               type="submit"
-              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200"
+              disabled={isSubmitting}
+              className="flex-1 bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Submit DOI Application
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Submitting Application...
+                </>
+              ) : 'Submit DOI Application'}
             </button>
           </div>
         </form>
@@ -714,7 +910,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
               <select 
                 required
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={selectedClientId}
+                value={selectedClientId || ''}
                 onChange={e => setSelectedClientId(e.target.value)}
               >
                 <option value="">Choose a client...</option>
@@ -731,7 +927,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
               rows={8}
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono text-xs"
               placeholder="https://example.com/article/1&#10;https://example.com/article/2"
-              value={bulkUrls}
+              value={bulkUrls || ''}
               onChange={e => setBulkUrls(e.target.value)}
             />
           </div>
@@ -741,9 +937,15 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
           <div className="pt-4">
             <button 
               type="submit"
-              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20"
+              disabled={isSubmitting}
+              className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Scan & Confirm Deposit
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Depositing...
+                </>
+              ) : 'Scan & Confirm Deposit'}
             </button>
           </div>
         </form>
@@ -761,7 +963,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
             <select 
               required
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={newPayment.clientId}
+              value={newPayment.clientId || ''}
               onChange={e => setNewPayment(prev => ({ ...prev, clientId: e.target.value }))}
             >
               <option value="">Choose a client...</option>
@@ -777,7 +979,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 required
                 type="number" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newPayment.amount}
+                value={newPayment.amount || ''}
                 onChange={e => setNewPayment(prev => ({ ...prev, amount: parseFloat(e.target.value) }))}
               />
             </div>
@@ -787,7 +989,7 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
                 required
                 type="date" 
                 className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                value={newPayment.date}
+                value={newPayment.date || ''}
                 onChange={e => setNewPayment(prev => ({ ...prev, date: e.target.value }))}
               />
             </div>
@@ -825,19 +1027,185 @@ export const DOIManagement: React.FC<DOIManagementProps> = ({ currentUser }) => 
             <textarea 
               rows={3}
               className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              value={newPayment.notes}
+              value={newPayment.notes || ''}
               onChange={e => setNewPayment(prev => ({ ...prev, notes: e.target.value }))}
             />
           </div>
           <div className="pt-4">
             <button 
               type="submit"
-              className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20"
+              disabled={isSubmitting}
+              className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              Record Payment
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Recording...
+                </>
+              ) : 'Record Payment'}
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* View Details Modal */}
+      <Modal
+        isOpen={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedDoi(null);
+        }}
+        title="DOI Application Details"
+        maxWidth="3xl"
+      >
+        {selectedDoi && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-slate-100">
+              {/* Application Details Block */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-1.5">
+                  <FileText size={14} />
+                  Main Details
+                </h4>
+                <div className="space-y-2 text-sm text-slate-600">
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Journal:</span>
+                    <span className="font-medium text-slate-800">
+                      {journals.find(j => j.id === selectedDoi.journalId)?.title || 'Unknown Journal'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Prefix:</span>
+                    <span className="font-mono text-slate-800 font-medium">{selectedDoi.doiPrefix}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Linked Domain:</span>
+                    <span className="text-slate-800 font-medium">{selectedDoi.domainName}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Role:</span>
+                    <span className="text-slate-800 font-medium">{selectedDoi.role}</span>
+                  </div>
+                  {selectedDoi.password && (
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="font-semibold text-slate-400">Password:</span>
+                      <span className="text-slate-800 font-mono font-medium">{selectedDoi.password}</span>
+                    </div>
+                  )}
+                  {selectedDoi.ticketNo && (
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="font-semibold text-slate-400">Ticket No:</span>
+                      <span className="text-slate-800 font-medium">{selectedDoi.ticketNo}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Status:</span>
+                    <span className={cn(
+                      "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider",
+                      selectedDoi.status === 'activated' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
+                    )}>
+                      {selectedDoi.status}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sponsoring Org Block */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-1.5">
+                  <Building2 size={14} />
+                  Sponsoring Organization
+                </h4>
+                <div className="space-y-2 text-sm text-slate-600">
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Org Name:</span>
+                    <span className="font-medium text-slate-800">{selectedDoi.sponsoringOrgName || '-'}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Org URL:</span>
+                    <span className="text-indigo-600 font-medium truncate max-w-[180px]">
+                      {selectedDoi.sponsoringOrgUrl ? (
+                        <a href={selectedDoi.sponsoringOrgUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                          {selectedDoi.sponsoringOrgUrl} <ExternalLink size={10} />
+                        </a>
+                      ) : '-'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="font-semibold text-slate-400">Pub URL:</span>
+                    <span className="text-indigo-600 font-medium truncate max-w-[180px]">
+                      {selectedDoi.sponsoringOrgPubUrl ? (
+                        <a href={selectedDoi.sponsoringOrgPubUrl} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                          {selectedDoi.sponsoringOrgPubUrl} <ExternalLink size={10} />
+                        </a>
+                      ) : '-'}
+                    </span>
+                  </div>
+                  {selectedDoi.remarks && (
+                    <div className="space-y-1">
+                      <span className="font-semibold text-slate-400 block">Remarks:</span>
+                      <p className="p-2 bg-slate-50 rounded-lg text-xs leading-relaxed text-slate-600 border border-slate-100">
+                        {selectedDoi.remarks}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Members Section */}
+            <div className="space-y-4">
+              <h4 className="text-sm font-bold text-slate-850 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                <Users size={16} className="text-indigo-500" />
+                Associated Members
+              </h4>
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-[10px] font-bold uppercase text-slate-500 tracking-wider border-b border-slate-200">
+                      <th className="px-4 py-2.5">Name</th>
+                      <th className="px-4 py-2.5">Affiliation</th>
+                      <th className="px-4 py-2.5">Email</th>
+                      <th className="px-4 py-2.5">Phone</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {(selectedDoi.members && selectedDoi.members.length > 0
+                      ? selectedDoi.members
+                      : [{ name: selectedDoi.memberName, affiliation: '-', email: '-', phone: '-' }]
+                    ).map((member, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/40">
+                        <td className="px-4 py-3 font-semibold text-slate-800">{member.name || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{member.affiliation || '-'}</td>
+                        <td className="px-4 py-3 text-indigo-600 font-medium">
+                          {member.email && member.email !== '-' ? (
+                            <a href={`mailto:${member.email}`} className="hover:underline flex items-center gap-1">
+                              <Mail size={12} /> {member.email}
+                            </a>
+                          ) : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{member.phone || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-slate-100">
+              <button 
+                type="button" 
+                onClick={() => {
+                  setIsDetailModalOpen(false);
+                  setSelectedDoi(null);
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-bold transition-all"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
